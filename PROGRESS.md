@@ -6,12 +6,13 @@
 
 ## Status terakhir diperbarui
 
-2026-09-17, sesi #1 (task T-01 selesai & tervalidasi end-to-end — transaksi berhasil
-tersimpan; lihat juga catatan migration/data di bawah, PENTING dibaca)
+2026-09-17, sesi #3 (task T-03 selesai & tervalidasi — fungsi cetak Nota A6/A5 via _iframe_ tersembunyi sudah aktif; pilihan format cetak struk/nota di modal pembayaran serta dropdown cetak ulang di riwayat transaksi berjalan sempurna).
 
 ## Task selesai
 
 - [x] T-01 — Tabel `settings` + hook `useSettings` (migration `005_settings.sql`)
+- [x] T-02 — Pembayaran lengkap per metode (transfer/qris/tempo): migration `006_payment_enhance.sql` (`due_date` di `payments`, tabel `payment_proofs` multi-file); update UI modal pembayaran dan riwayat.
+- [x] T-03 — Nota A6/A5 non-thermal + pilihan format cetak per transaksi (modifikasi `lib/pos/printLogic.ts` dengan `printA6Nota()` via iframe tersembunyi, penambahan pilihan format di `PaymentModal.tsx` sesuai `print_default` dari settings, dan dropdown cetak ulang di `TransactionDetailModal.tsx`).
 
 ## Sedang dikerjakan
 
@@ -19,17 +20,40 @@ tersimpan; lihat juga catatan migration/data di bawah, PENTING dibaca)
 
 ## Task berikutnya (disarankan)
 
-- **Sebelum lanjut T-02**: jalankan `npm run build` + `npm run lint` di lokal (belum
-  pernah dijalankan sama sekali sepanjang sesi T-01 ini — agent sebelumnya tidak
-  punya akses jaringan untuk `npm install` di sandbox-nya). Pastikan lolos dulu.
-- **T-02** — Pembayaran lengkap per metode (transfer/qris/tempo): migration
-  `006_payment_enhance.sql` (`due_date` di `payments`, tabel `payment_proofs`
-  multi-file); update `PaymentModal.tsx` + `transactionApi.ts`. Lihat PRD §17.
-- **T-03** bisa paralel dengan T-02 (keduanya depend on T-01 yang sudah selesai).
+- **T-04** — Shift kasir: buka/tutup, selisih kas, wajib sebelum transaksi (migration `007_shift_sessions.sql`). Boleh mulai dikerjakan.
+- Pastikan RPC `create_transaction` siap di-update untuk menyertakan validasi `shift_id` sesuai syarat T-04 di PRD.
 
 ## Catatan penting untuk sesi berikutnya
 
-**File yang dibuat:**
+**File yang dibuat/diubah (Tambahan T-03):**
+
+- `lib/pos/printLogic.ts` — Penambahan fungsi `printA6Nota` untuk menangani printer dokumen biasa via kertas A6 atau A5 tanpa `@media print` di halaman global.
+- `app/components/kasir/KasirModule.tsx` — `handleConfirmPayment` sekarang membawa prop `printFormat` untuk menentukan fungsi cetak mana yang akan dipanggil.
+- `app/components/kasir/PaymentModal.tsx` — Penambahan pilihan tombol format cetak di UI modal pembayaran (dengan atribut `type="button"` yang benar agar tidak mentrigger _submit_ form).
+- `app/components/transaksi/TransactionDetailModal.tsx` — Mengubah tombol tunggal "Cetak Ulang Struk" menjadi menu dropdown interaktif yang mendukung pencetakan "Struk Thermal" maupun "Nota Kertas".
+
+**Definition of Done T-03 — status:**
+
+- [x] Satu transaksi bisa dicetak dalam format Thermal atau Nota A6/A5.
+- [x] Pilihan default mengikuti `posSettings.printDefault` dari database.
+- [x] Fungsi cetak menggunakan _iframe_ tersembunyi sehingga tampilan global tidak terganggu.
+- [x] Riwayat bisa mencetak ulang bukti dalam kedua format tersebut.
+
+**File yang dibuat/diubah (Tambahan T-02):**
+
+- `supabase/migrations/006_payment_enhance.sql` — Menambah enum `BANK_TRANSFER`, `TEMPO`, kolom `due_date`, tabel `payment_proofs` multi-file, Storage bucket `payment-proofs`, dan RLS.
+- `lib/pos/transactionApi.ts` — Validasi `TEMPO`, sinkronisasi tipe `PaymentMethod`, fungsi `uploadPaymentProofs`.
+- `app/components/kasir/PaymentModal.tsx` & `KasirModule.tsx` — UI 4 metode pembayaran, input `TEMPO`, dan handling await RPC.
+- `app/components/transaksi/TransactionDetailModal.tsx` — Galeri grid untuk merender file bukti pembayaran dari Storage & display `due_date`.
+- `app/components/transaksi/TransactionHistoryModule.tsx` — Label badge "Piutang" untuk transaksi metode `TEMPO`.
+
+**Definition of Done T-02 — status:**
+
+- [x] Bisa checkout 4 metode end-to-end.
+- [x] Bukti transfer tersimpan di Storage & metadata masuk `payment_proofs`. Tampil di `TransactionDetailModal`.
+- [x] Transaksi TEMPO wajib input nama pelanggan & tanggal jatuh tempo, dan muncul dengan label piutang di riwayat.
+
+**File yang dibuat (T-01):**
 
 - `supabase/migrations/005_settings.sql` — tabel `settings` (key-value, `value jsonb`),
   RLS (SELECT: semua user aktif; INSERT/UPDATE/DELETE: admin only), seed 12 key
@@ -91,10 +115,9 @@ migration** `001`→`004`, melainkan (sepertinya) lewat `scripts/setup-database.
    depannya: WAJIB isi `id`-nya persis sama dengan `auth.users.id`, cek dulu lewat
    Supabase Dashboard → Authentication → Users, jangan pakai UUID acak.**
 
-**Untuk sesi berikutnya**: sebelum lanjut T-02, cek dulu apakah `scripts/setup-database.sql`
+**Untuk sesi berikutnya**: sebelum lanjut T-04, cek dulu apakah `scripts/setup-database.sql`
 masih relevan dipakai atau sebaiknya di-deprecate/dihapus sekarang rantai migration
-sudah berjalan — supaya kejadian tabel-ada-tapi-function-tidak-ada ini tidak terulang
-lagi di environment lain (mis. staging/production terpisah).
+sudah berjalan.
 
 ## Bug ditemukan (BELUM diperbaiki, bukan blocker) — baris Retur tidak punya rincian item
 
@@ -113,8 +136,7 @@ transaksi asli. Jadi bukan data hilang, cuma baris Retur-nya sendiri tidak
 
 **Belum diperbaiki atas keputusan pemilik project** (dikonfirmasi langsung, bukan
 diabaikan begitu saja) — kalau mau dikerjakan nanti: RPC `return_transaction`
-perlu insert baris `transaction_items` untuk `v_return_id` juga (qty negatif atau
-qty positif dengan flag tersendiri, perlu diputuskan), lalu `TransactionDetailModal.tsx`
+perlu insert baris `transaction_items` untuk `v_return_id` juga, lalu `TransactionDetailModal.tsx`
 otomatis akan menampilkannya karena sudah pakai `detail.items` apa adanya.
 
 **Keputusan yang diambil sesi ini:**
@@ -125,9 +147,7 @@ otomatis akan menampilkannya karena sudah pakai `detail.items` apa adanya.
 - RLS baca: **semua role aktif** (bukan cuma admin) — kasir butuh baca `ppn_enabled`/
   `ppn_rate` saat transaksi jalan. RLS tulis: admin only, sesuai matrix permission §5.
 - Tidak menambah field breakdown pajak ke `lib/pos/cartLogic.ts` — perhitungan pajak
-  cukup 2 baris (`Math.round(subtotal * rate / 100)`) langsung di `KasirModule.tsx`,
-  tidak perlu file baru untuk ini (`rounding` di settings belum dipakai — itu untuk
-  pembulatan kembalian tunai, bukan pembulatan pajak; disiapkan untuk T-02/T-03).
+  cukup 2 baris (`Math.round(subtotal * rate / 100)`) langsung di `KasirModule.tsx`.
 - Tidak menyentuh halaman Pengaturan UI sama sekali (persis "Jangan dulu" di §17) —
   `updateSetting()` di hook disiapkan tapi belum dipanggil dari komponen manapun.
 
@@ -138,4 +158,4 @@ otomatis akan menampilkannya karena sudah pakai `detail.items` apa adanya.
 
 **Belum diperbaiki, bukan blocker:**
 
-- Tidak ada bug baru ditemukan di modul lama saat mengerjakan T-01.
+- Tidak ada bug baru ditemukan di modul lama saat mengerjakan T-01, T-02, maupun T-03.

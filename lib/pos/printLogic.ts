@@ -1,4 +1,3 @@
-// lib/pos/printLogic.ts
 // ── KOREKSI ── Digeneralisasi supaya bisa dipakai untuk 2 skenario:
 // 1. Cetak struk langsung setelah bayar di layar Kasir (data dari keranjang).
 // 2. Cetak ULANG struk dari Riwayat Transaksi (data dari getTransactionDetail()).
@@ -54,7 +53,8 @@ function formatMoney(amount: number): string {
 }
 
 function escapeHtml(value: string): string {
-  return value
+  if (!value) return "";
+  return String(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -202,6 +202,158 @@ export const printThermalReceipt = (data: ReceiptData) => {
     iframe.contentWindow?.focus();
     iframe.contentWindow?.print();
     // Hapus iframe setelah selesai agar tidak menumpuk di DOM
+    setTimeout(() => {
+      document.body.removeChild(iframe);
+    }, 1000);
+  }, 250);
+};
+
+// ── TAMBAHAN (T-03) ── Fungsi cetak nota A6/A5 untuk dokumen yang lebih awet.
+// Menggunakan iframe tersembunyi yang sama dengan CSS layout berbeda.
+export const printA6Nota = (data: ReceiptData, paperSize: "A6" | "A5" = "A6") => {
+  const iframe = document.createElement("iframe");
+  iframe.style.display = "none";
+  document.body.appendChild(iframe);
+
+  const iframeDoc = iframe.contentWindow?.document;
+  if (!iframeDoc) {
+    document.body.removeChild(iframe);
+    return;
+  }
+
+  const dateStr = new Date(data.createdAt ?? Date.now()).toLocaleString("id-ID", {
+    day: "numeric", month: "long", year: "numeric",
+    hour: "2-digit", minute: "2-digit"
+  });
+
+  const discount = data.discount ?? 0;
+  const tax = data.tax ?? 0;
+
+  // Setelan CSS sesuai ukuran kertas
+  const widthStr = paperSize === "A5" ? "148mm" : "105mm";
+  const heightStr = paperSize === "A5" ? "210mm" : "148mm";
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Nota ${escapeHtml(data.receiptNo)}</title>
+        <style>
+          @page { size: ${paperSize}; margin: 5mm; }
+          body {
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: ${paperSize === "A5" ? "12px" : "10px"};
+            color: #000;
+            width: ${widthStr};
+            min-height: ${heightStr};
+            margin: 0;
+            padding: 10px;
+            box-sizing: border-box;
+          }
+          .header { text-align: center; margin-bottom: 15px; border-bottom: 2px solid #000; padding-bottom: 10px; }
+          .header h1 { margin: 0; font-size: ${paperSize === "A5" ? "24px" : "18px"}; font-weight: bold; letter-spacing: 1px; }
+          .header p { margin: 3px 0 0 0; color: #333; }
+          
+          .info-table { width: 100%; margin-bottom: 15px; }
+          .info-table td { padding: 2px 5px 2px 0; vertical-align: top; }
+          .info-label { width: 80px; font-weight: bold; }
+          
+          .item-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
+          .item-table th { background: #f0f0f0; border: 1px solid #000; padding: 6px; text-align: left; }
+          .item-table th.text-right { text-align: right; }
+          .item-table td { border: 1px solid #ccc; padding: 6px; }
+          .item-table td.text-right { text-align: right; }
+          .item-table td.text-center { text-align: center; }
+          
+          .summary-table { width: 100%; max-width: 250px; margin-left: auto; border-collapse: collapse; }
+          .summary-table td { padding: 4px; }
+          .summary-table td.text-right { text-align: right; }
+          .summary-table .font-bold { font-weight: bold; }
+          .summary-table .total-row td { border-top: 1px solid #000; border-bottom: 1px solid #000; font-size: 14px; }
+          
+          .footer { text-align: center; margin-top: 30px; font-size: 10px; color: #555; border-top: 1px solid #ccc; padding-top: 10px; }
+          .reprint-badge { text-align: center; font-weight: bold; background: #eee; padding: 4px; border-radius: 4px; margin-bottom: 10px; letter-spacing: 2px;}
+        </style>
+      </head>
+      <body>
+        ${data.isReprint ? `<div class="reprint-badge">SALINAN / CETAK ULANG</div>` : ""}
+        
+        <div class="header">
+          <h1>LANGITAN.CO</h1>
+          <p>Store &amp; Merchandise</p>
+        </div>
+
+        <table class="info-table">
+          <tr>
+            <td class="info-label">No. Nota</td><td>: ${escapeHtml(data.receiptNo)}</td>
+            <td class="info-label">Kasir</td><td>: ${escapeHtml(data.cashierName ?? "-")}</td>
+          </tr>
+          <tr>
+            <td class="info-label">Tanggal</td><td>: ${dateStr}</td>
+            <td class="info-label">Metode</td><td>: ${escapeHtml(formatMethod(data.method))}</td>
+          </tr>
+          ${data.customerName ? `
+          <tr>
+            <td class="info-label">Pelanggan</td><td colspan="3">: ${escapeHtml(data.customerName)}</td>
+          </tr>` : ""}
+        </table>
+
+        <table class="item-table">
+          <thead>
+            <tr>
+              <th>Produk / Item</th>
+              <th class="text-center" style="width: 50px;">Qty</th>
+              <th class="text-right" style="width: 80px;">Harga</th>
+              <th class="text-right" style="width: 90px;">Subtotal</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.items.map(item => `
+              <tr>
+                <td>${escapeHtml(item.name)}</td>
+                <td class="text-center">${item.qty}</td>
+                <td class="text-right">${formatMoney(item.price)}</td>
+                <td class="text-right">${formatMoney(item.subtotal ?? item.qty * item.price)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+
+        <table class="summary-table">
+          <tr>
+            <td>Subtotal</td>
+            <td class="text-right">${formatMoney(data.subtotal)}</td>
+          </tr>
+          ${discount > 0 ? `<tr><td>Diskon</td><td class="text-right">-${formatMoney(discount)}</td></tr>` : ""}
+          ${tax > 0 ? `<tr><td>Pajak</td><td class="text-right">${formatMoney(tax)}</td></tr>` : ""}
+          <tr class="total-row">
+            <td class="font-bold">Total Tagihan</td>
+            <td class="text-right font-bold">${formatMoney(data.total)}</td>
+          </tr>
+          <tr>
+            <td>Bayar</td>
+            <td class="text-right">${formatMoney(data.paidAmount)}</td>
+          </tr>
+          <tr>
+            <td>Kembalian</td>
+            <td class="text-right">${formatMoney(data.changeAmount)}</td>
+          </tr>
+        </table>
+
+        <div class="footer">
+          <p>Terima kasih atas kunjungan Anda. Barang yang sudah dibeli tidak dapat ditukar/dikembalikan kecuali ada perjanjian.<br/><strong>lco-store.com</strong></p>
+        </div>
+      </body>
+    </html>
+  `;
+
+  iframeDoc.open();
+  iframeDoc.write(htmlContent);
+  iframeDoc.close();
+
+  setTimeout(() => {
+    iframe.contentWindow?.focus();
+    iframe.contentWindow?.print();
     setTimeout(() => {
       document.body.removeChild(iframe);
     }, 1000);

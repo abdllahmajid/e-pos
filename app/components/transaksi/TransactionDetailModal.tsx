@@ -20,15 +20,17 @@ import {
   User,
   Phone,
   StickyNote,
+  ChevronDown,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { useSettings } from "@/hooks/useSettings"; // ── TAMBAHAN ── Untuk mendapatkan paperNota setting
 import {
   getTransactionDetail,
   returnTransaction,
   voidTransaction,
   type TransactionDetail,
 } from "@/lib/pos/transactionApi";
-import { printThermalReceipt } from "@/lib/pos/printLogic";
+import { printThermalReceipt, printA6Nota } from "@/lib/pos/printLogic";
 import { formatRupiah } from "@/lib/pos/cartLogic";
 
 type PanelMode = "detail" | "retur" | "void";
@@ -64,6 +66,7 @@ export default function TransactionDetailModal({
 }: TransactionDetailModalProps) {
   const { user } = useAuth();
   const canManage = user?.role === "admin" || user?.role === "supervisor";
+  const { settings: posSettings } = useSettings();
 
   const [detail, setDetail] = useState<TransactionDetail | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -74,14 +77,14 @@ export default function TransactionDetailModal({
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
-  // Retur form state: qty yang mau diretur per transaction_item.id
   const [returnQtyById, setReturnQtyById] = useState<Record<string, number>>(
     {},
   );
   const [returnReason, setReturnReason] = useState("");
 
-  // Void form state
   const [voidReason, setVoidReason] = useState("");
+
+  const [isPrintDropdownOpen, setIsPrintDropdownOpen] = useState(false);
 
   const isOpen = Boolean(transactionId);
 
@@ -98,6 +101,7 @@ export default function TransactionDetailModal({
     setReturnQtyById({});
     setReturnReason("");
     setVoidReason("");
+    setIsPrintDropdownOpen(false);
 
     getTransactionDetail(transactionId)
       .then((data) => {
@@ -124,12 +128,13 @@ export default function TransactionDetailModal({
   const remainingQty = (itemId: string, qty: number, returned: number) =>
     qty - returned;
 
-  function handleReprint() {
+  function handleReprint(format: "thermal" | "nota") {
     if (!detail) return;
+    setIsPrintDropdownOpen(false);
 
     const primaryPayment = detail.payments[0];
 
-    printThermalReceipt({
+    const printData = {
       receiptNo: detail.receipt_no,
       createdAt: detail.created_at,
       cashierName: detail.cashier_name,
@@ -151,7 +156,13 @@ export default function TransactionDetailModal({
         detail.total,
       changeAmount: primaryPayment?.change_amount ?? 0,
       isReprint: true,
-    });
+    };
+
+    if (format === "nota") {
+      printA6Nota(printData, (posSettings.paperNota as "A6" | "A5") ?? "A6");
+    } else {
+      printThermalReceipt(printData);
+    }
   }
 
   async function handleSubmitReturn() {
@@ -185,7 +196,6 @@ export default function TransactionDetailModal({
       );
       onChanged();
 
-      // Muat ulang detail supaya returned_qty & status ter-update di modal ini juga.
       const refreshed = await getTransactionDetail(detail.id);
       setDetail(refreshed);
       setMode("detail");
@@ -269,7 +279,6 @@ export default function TransactionDetailModal({
 
           {detail && !isLoading && (
             <div className="space-y-5">
-              {/* Info umum */}
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
                   <p className="text-zinc-400 uppercase tracking-wider text-[10px] font-semibold mb-1">
@@ -323,7 +332,6 @@ export default function TransactionDetailModal({
                 </div>
               )}
 
-              {/* Item */}
               <div className="border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden">
                 <table className="w-full text-xs">
                   <thead className="bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
@@ -399,7 +407,6 @@ export default function TransactionDetailModal({
                 </table>
               </div>
 
-              {/* Ringkasan pembayaran */}
               <div className="space-y-1.5 text-sm border-t border-zinc-200 dark:border-zinc-800 pt-4">
                 <div className="flex justify-between text-zinc-500 text-xs">
                   <span>Subtotal</span>
@@ -432,12 +439,55 @@ export default function TransactionDetailModal({
                 {detail.payments.map((payment) => (
                   <div
                     key={payment.id}
-                    className="flex justify-between text-zinc-500 text-xs pt-1"
+                    className="pt-2 flex flex-col gap-2 border-t border-zinc-100 dark:border-zinc-800/50 mt-2 first:border-0 first:mt-0"
                   >
-                    <span>{methodLabel(payment.method)}</span>
-                    <span className="font-mono tabular-nums">
-                      {formatRupiah(payment.amount)}
-                    </span>
+                    <div className="flex justify-between text-zinc-500 text-xs">
+                      <span>{methodLabel(payment.method)}</span>
+                      <span className="font-mono tabular-nums text-zinc-900 dark:text-zinc-100">
+                        {formatRupiah(payment.amount)}
+                      </span>
+                    </div>
+                    {payment.method === "TEMPO" && payment.due_date && (
+                      <div className="flex justify-between text-zinc-500 text-xs">
+                        <span>Jatuh Tempo</span>
+                        <span className="font-mono tabular-nums text-lco-coral font-medium">
+                          {formatDate(payment.due_date).split(" ")[0]}
+                        </span>
+                      </div>
+                    )}
+                    {payment.proofs && payment.proofs.length > 0 && (
+                      <div className="mt-1">
+                        <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-400 mb-1.5 block">
+                          Bukti Pembayaran:
+                        </span>
+                        <div className="grid grid-cols-3 gap-2">
+                          {payment.proofs.map((proof) => (
+                            <a
+                              key={proof.id}
+                              href={proof.file_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block aspect-square rounded-md border border-zinc-200 dark:border-zinc-800 overflow-hidden hover:border-lco-teal transition-colors"
+                            >
+                              {proof.file_url.match(
+                                /\.(jpeg|jpg|gif|png)$/i,
+                              ) ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={proof.file_url}
+                                  alt="Bukti"
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center bg-zinc-50 dark:bg-zinc-900 text-[9px] text-zinc-400 p-1 text-center break-all">
+                                  {proof.file_name || "File"}
+                                </div>
+                              )}
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -454,7 +504,6 @@ export default function TransactionDetailModal({
                 </div>
               )}
 
-              {/* Panel Retur */}
               {mode === "retur" && (
                 <div className="space-y-3 rounded-xl border border-lco-mustard/40 bg-lco-mustard/10 p-4">
                   <label className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
@@ -489,7 +538,6 @@ export default function TransactionDetailModal({
                 </div>
               )}
 
-              {/* Panel Void */}
               {mode === "void" && (
                 <div className="space-y-3 rounded-xl border border-lco-coral/40 bg-lco-coral/10 p-4">
                   <label className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
@@ -533,13 +581,36 @@ export default function TransactionDetailModal({
 
         {detail && mode === "detail" && (
           <div className="p-5 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 shrink-0 flex flex-wrap gap-3">
-            <button
-              onClick={handleReprint}
-              className="flex-1 min-w-32 flex items-center justify-center gap-2 py-2.5 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-700 dark:text-zinc-300 hover:border-lco-teal hover:text-lco-teal text-xs font-semibold transition-colors duration-150"
-            >
-              <Printer className="w-4 h-4" />
-              Cetak Ulang Struk
-            </button>
+            {/* Dropdown Cetak Ulang yang Mendukung Thermal dan Nota */}
+            <div className="relative flex-1 min-w-32">
+              <button
+                onClick={() => setIsPrintDropdownOpen(!isPrintDropdownOpen)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-700 dark:text-zinc-300 hover:border-lco-teal hover:text-lco-teal text-xs font-semibold transition-colors duration-150"
+              >
+                <Printer className="w-4 h-4" />
+                Cetak Ulang
+                <ChevronDown
+                  className={`w-3.5 h-3.5 transition-transform ${isPrintDropdownOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+
+              {isPrintDropdownOpen && (
+                <div className="absolute bottom-full left-0 w-full mb-2 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-md shadow-lg overflow-hidden z-10">
+                  <button
+                    onClick={() => handleReprint("thermal")}
+                    className="w-full text-left px-4 py-2.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900 font-medium transition-colors"
+                  >
+                    Struk Thermal
+                  </button>
+                  <button
+                    onClick={() => handleReprint("nota")}
+                    className="w-full text-left px-4 py-2.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-900 font-medium border-t border-zinc-100 dark:border-zinc-800 transition-colors"
+                  >
+                    Nota Kertas
+                  </button>
+                </div>
+              )}
+            </div>
 
             {canManage && canStillAct && (
               <>
@@ -548,6 +619,7 @@ export default function TransactionDetailModal({
                     setActionError(null);
                     setActionSuccess(null);
                     setMode("retur");
+                    setIsPrintDropdownOpen(false);
                   }}
                   className="flex-1 min-w-32 flex items-center justify-center gap-2 py-2.5 rounded-md border border-lco-mustard/50 bg-white dark:bg-zinc-950 text-lco-mustard hover:bg-lco-mustard/10 text-xs font-semibold transition-colors duration-150"
                 >
@@ -559,6 +631,7 @@ export default function TransactionDetailModal({
                     setActionError(null);
                     setActionSuccess(null);
                     setMode("void");
+                    setIsPrintDropdownOpen(false);
                   }}
                   className="flex-1 min-w-32 flex items-center justify-center gap-2 py-2.5 rounded-md border border-lco-coral/50 bg-white dark:bg-zinc-950 text-lco-coral hover:bg-lco-coral/10 text-xs font-semibold transition-colors duration-150"
                 >

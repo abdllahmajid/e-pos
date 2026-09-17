@@ -278,14 +278,22 @@ export default function TransactionHistoryModule() {
                       </span>
                     </td>
                     <td className="px-5 py-4">
-                      <span
-                        className={`text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 ${statusColorClass(group)}`}
-                      >
+                      {/* ── TAMBAHAN (T-02) ──  Label badge "Piutang" */}
+                      <div className="flex flex-col items-start gap-1.5">
                         <span
-                          className={`w-1.5 h-1.5 rounded-full ${statusDotClass(group)}`}
-                        />
-                        {statusLabel(group)}
-                      </span>
+                          className={`text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 ${statusColorClass(group)}`}
+                        >
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${statusDotClass(group)}`}
+                          />
+                          {statusLabel(group)}
+                        </span>
+                        {trx.payments?.some((p) => p.method === "TEMPO") && (
+                          <span className="text-[9px] font-semibold uppercase tracking-wider bg-lco-mustard/10 text-lco-mustard border border-lco-mustard/30 px-1.5 py-0.5 rounded-md">
+                            Piutang
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-5 py-4 text-right">
                       <button

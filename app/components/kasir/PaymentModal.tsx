@@ -1,27 +1,5 @@
 "use client";
 
-// ── KOREKSI ── Bug kritis: versi sebelumnya menampilkan layar "Pembayaran Berhasil!"
-// via setTimeout PALSU sebelum transaksi benar-benar disimpan ke server (onSuccess dipanggil
-// tanpa di-await, lalu modal langsung ditutup). Kalau createTransaction() gagal (mis. stok
-// tidak cukup — PRD AC4). Sekarang:
-// - Prop diganti jadi onConfirmPayment: async, HARUS throw kalau gagal.
-// - Modal menunggu (await) hasil asli sebelum menampilkan layar sukses.
-// - Kalau gagal, modal TETAP TERBUKA dengan pesan error, user bisa coba lagi.
-// - Modal sendiri yang memanggil onClose() setelah animasi sukses selesai (bukan parent
-//   yang menutup modal duluan), supaya layar sukses sempat terlihat.
-//
-// ── TAMBAHAN (T-02, PRD §17) ── 4 metode pembayaran lengkap:
-// - Tunai: tidak berubah dari sebelumnya (uang diterima + kembalian).
-// - Transfer Bank / QRIS: paidAmount = total (tanpa kembalian), bisa lampirkan bukti
-//   (multi-file, dikompresi lalu diunggah ke Storage bucket "payment-proofs" SETELAH
-//   transaksi tersimpan — lihat lib/pos/transactionApi.ts `uploadPaymentProofs`).
-// - Tempo/Piutang: wajib nama pelanggan + tanggal jatuh tempo (divalidasi di sini untuk
-//   UX, divalidasi ULANG di RPC create_transaction supaya tidak bisa dilewati).
-// Method sekarang memakai konvensi kanonik yang sama persis dengan DB/RPC
-// ("CASH" | "BANK_TRANSFER" | "QRIS" | "TEMPO") — menghapus lapisan terjemahan
-// "tunai"/"transfer" yang sebelumnya ada di KasirModule.tsx supaya tidak ada 2 kosakata
-// metode pembayaran yang harus disinkronkan manual.
-
 import { useState, useEffect, useRef } from "react";
 import {
   X,
@@ -36,6 +14,7 @@ import {
   Paperclip,
   Trash2,
   User,
+  Printer,
 } from "lucide-react";
 import type { PaymentMethod } from "@/lib/pos/transactionApi";
 import { uploadPaymentProofs } from "@/lib/pos/transactionApi";
@@ -43,22 +22,20 @@ import { uploadPaymentProofs } from "@/lib/pos/transactionApi";
 type PaymentModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  /** Subtotal sebelum pajak (PRD §17 T-01) — dipakai untuk baris breakdown di atas Total Tagihan. */
   subtotal: number;
-  /** 0 kalau settings.ppn_enabled = false — baris "Pajak (PPN)" otomatis disembunyikan. */
   tax: number;
   total: number;
-  /**
-   * Wajib async dan HARUS throw Error kalau transaksi gagal disimpan.
-   * Modal menunggu promise ini sebelum menampilkan layar sukses.
-   * Mengembalikan `paymentId` supaya modal bisa lanjut upload bukti pembayaran
-   * (Transfer/QRIS) langsung setelah transaksi tersimpan.
-   */
+  /** Format cetak default dari pengaturan toko */
+  defaultPrintFormat: "thermal" | "nota";
   onConfirmPayment: (
     method: PaymentMethod,
     paidAmount: number,
     change: number,
-    extra?: { customerName?: string; dueDate?: string },
+    extra?: {
+      customerName?: string;
+      dueDate?: string;
+      printFormat?: "thermal" | "nota";
+    },
   ) => Promise<{ paymentId: string }>;
 };
 
@@ -73,7 +50,6 @@ const METHODS: {
   { value: "TEMPO", label: "Tempo / Piutang", icon: CalendarClock },
 ];
 
-/** Tanggal jatuh tempo default: 7 hari dari sekarang, format "YYYY-MM-DD" untuk <input type="date">. */
 function defaultDueDate(): string {
   const d = new Date();
   d.setDate(d.getDate() + 7);
@@ -86,18 +62,22 @@ export default function PaymentModal({
   subtotal,
   tax,
   total,
+  defaultPrintFormat,
   onConfirmPayment,
 }: PaymentModalProps) {
   const [method, setMethod] = useState<PaymentMethod>("CASH");
   const [paidAmount, setPaidAmount] = useState<number>(0);
 
-  // ── TAMBAHAN (T-02) ── State khusus Tempo
   const [customerName, setCustomerName] = useState("");
   const [dueDate, setDueDate] = useState(defaultDueDate());
 
-  // ── TAMBAHAN (T-02) ── State khusus Transfer/QRIS (bukti pembayaran, opsional)
   const [proofFiles, setProofFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // State untuk pilihan format cetak
+  const [printFormat, setPrintFormat] = useState<"thermal" | "nota">(
+    defaultPrintFormat,
+  );
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploadingProof, setIsUploadingProof] = useState(false);
@@ -112,13 +92,14 @@ export default function PaymentModal({
       setCustomerName("");
       setDueDate(defaultDueDate());
       setProofFiles([]);
+      setPrintFormat(defaultPrintFormat);
       setIsProcessing(false);
       setIsUploadingProof(false);
       setIsSuccess(false);
       setProofWarning(null);
       setLocalError(null);
     }
-  }, [isOpen]);
+  }, [isOpen, defaultPrintFormat]);
 
   if (!isOpen) return null;
 
@@ -131,9 +112,6 @@ export default function PaymentModal({
   };
 
   const changeAmount = paidAmount - total;
-
-  // ── TAMBAHAN (T-02) ── Validasi ringan per metode, sebelum tombol "Proses Pembayaran"
-  // aktif. Validasi berat (yang tidak bisa dilewati) tetap di RPC create_transaction.
   const isPayable =
     method === "CASH"
       ? paidAmount >= total
@@ -145,7 +123,6 @@ export default function PaymentModal({
     const picked = Array.from(e.target.files ?? []);
     if (picked.length === 0) return;
     setProofFiles((prev) => [...prev, ...picked]);
-    // Reset value supaya file yang sama bisa dipilih lagi kalau user tidak sengaja hapus.
     e.target.value = "";
   }
 
@@ -164,21 +141,19 @@ export default function PaymentModal({
       const finalPaidAmount = method === "CASH" ? paidAmount : total;
       const finalChange = method === "CASH" ? changeAmount : 0;
 
-      // Tunggu transaksi BENAR-BENAR tersimpan di server sebelum klaim sukses.
       const { paymentId } = await onConfirmPayment(
         method,
         finalPaidAmount,
         finalChange,
-        method === "TEMPO"
-          ? { customerName: customerName.trim(), dueDate }
-          : undefined,
+        {
+          customerName: method === "TEMPO" ? customerName.trim() : undefined,
+          dueDate: method === "TEMPO" ? dueDate : undefined,
+          printFormat: printFormat,
+        },
       );
 
       setIsProcessing(false);
 
-      // ── TAMBAHAN (T-02) ── Upload bukti SETELAH transaksi sukses (supaya file tidak
-      // pernah nyasar ke transaksi yang gagal). Gagal upload TIDAK membatalkan transaksi
-      // yang sudah tersimpan — cuma ditampilkan sebagai peringatan, bukan error fatal.
       let warning: string | null = null;
       if (
         (method === "BANK_TRANSFER" || method === "QRIS") &&
@@ -199,8 +174,6 @@ export default function PaymentModal({
       }
 
       setIsSuccess(true);
-
-      // Beri jeda lebih lama kalau ada peringatan upload bukti, supaya sempat terbaca.
       setTimeout(
         () => {
           setIsSuccess(false);
@@ -256,9 +229,6 @@ export default function PaymentModal({
 
         <div className="p-5 flex-1 overflow-y-auto">
           <div className="bg-zinc-50 dark:bg-zinc-900/90 p-5 rounded-xl text-center mb-6 border border-zinc-200 dark:border-zinc-800">
-            {/* ── TAMBAHAN (T-01) ── Breakdown Subtotal/Pajak sebelum Total Tagihan.
-                Baris "Pajak" cuma render kalau tax > 0, yaitu settings.ppn_enabled = true
-                di database (lihat hooks/useSettings.ts + KasirModule.tsx). */}
             {tax > 0 && (
               <div className="flex flex-col gap-1 mb-3 pb-3 border-b border-dashed border-zinc-200 dark:border-zinc-800 text-xs text-zinc-500">
                 <div className="flex justify-between">
@@ -275,7 +245,6 @@ export default function PaymentModal({
                 </div>
               </div>
             )}
-
             <p className="text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-semibold mb-2">
               Total Tagihan
             </p>
@@ -284,7 +253,6 @@ export default function PaymentModal({
             </p>
           </div>
 
-          {/* ── TAMBAHAN (T-02) ── 4 metode, bukan 2 lagi. */}
           <div className="grid grid-cols-4 gap-2 mb-6">
             {METHODS.map(({ value, label, icon: Icon }) => (
               <button
@@ -322,7 +290,6 @@ export default function PaymentModal({
                   />
                 </div>
               </div>
-
               <div className="grid grid-cols-3 gap-3">
                 <button
                   onClick={() => setPaidAmount(total)}
@@ -346,7 +313,6 @@ export default function PaymentModal({
                   100.000
                 </button>
               </div>
-
               <div className="flex justify-between items-center p-4 bg-zinc-50 dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 mt-2">
                 <span className="text-xs font-medium text-zinc-500">
                   Kembalian
@@ -360,8 +326,6 @@ export default function PaymentModal({
             </div>
           )}
 
-          {/* ── TAMBAHAN (T-02) ── Transfer Bank & QRIS: paidAmount = total (tanpa
-              kembalian), upload bukti opsional (multi-file, dikompresi otomatis). */}
           {(method === "BANK_TRANSFER" || method === "QRIS") && (
             <div className="space-y-4">
               <div className="p-4 bg-lco-mustard/10 rounded-xl border border-lco-mustard/30 text-center">
@@ -375,16 +339,13 @@ export default function PaymentModal({
                   <span className="font-mono font-semibold">
                     {formatRp(total)}
                   </span>
-                  . Lampirkan bukti {method === "QRIS" ? "QRIS" : "transfer"}{" "}
-                  (opsional, bisa lebih dari 1 foto).
+                  . Lampirkan bukti (opsional).
                 </p>
               </div>
-
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">
                   Bukti Pembayaran
                 </label>
-
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -394,17 +355,14 @@ export default function PaymentModal({
                   disabled={isProcessing}
                   className="hidden"
                 />
-
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isProcessing}
                   className="w-full flex items-center justify-center gap-2 py-3 rounded-md border border-dashed border-zinc-300 dark:border-zinc-700 text-xs font-medium text-zinc-500 hover:border-lco-teal hover:text-lco-teal transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <Upload className="w-4 h-4" />
-                  Pilih Foto Bukti
+                  <Upload className="w-4 h-4" /> Pilih Foto Bukti
                 </button>
-
                 {proofFiles.length > 0 && (
                   <ul className="mt-3 space-y-1.5">
                     {proofFiles.map((file, index) => (
@@ -432,7 +390,6 @@ export default function PaymentModal({
             </div>
           )}
 
-          {/* ── TAMBAHAN (T-02) ── Tempo/Piutang: nama pelanggan + jatuh tempo wajib. */}
           {method === "TEMPO" && (
             <div className="space-y-4">
               <div className="p-4 bg-lco-coral/10 rounded-xl border border-lco-coral/30 text-center">
@@ -442,10 +399,9 @@ export default function PaymentModal({
                   <span className="font-mono font-semibold">
                     {formatRp(total)}
                   </span>
-                  . Nama pelanggan &amp; tanggal jatuh tempo wajib diisi.
+                  . Nama &amp; jatuh tempo wajib diisi.
                 </p>
               </div>
-
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">
                   Nama Pelanggan <span className="text-lco-coral">*</span>
@@ -462,7 +418,6 @@ export default function PaymentModal({
                   />
                 </div>
               </div>
-
               <div>
                 <label className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">
                   Tanggal Jatuh Tempo <span className="text-lco-coral">*</span>
@@ -490,6 +445,42 @@ export default function PaymentModal({
           )}
         </div>
 
+        {/* Pilihan Radio Format Cetak */}
+        <div className="p-4 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 flex justify-between items-center shrink-0">
+          <div className="flex items-center gap-2">
+            <Printer className="w-4 h-4 text-zinc-400" />
+            <span className="text-[10px] uppercase font-semibold text-zinc-500">
+              Format Cetak:
+            </span>
+          </div>
+          <div className="flex bg-zinc-100 dark:bg-zinc-900 rounded-md p-0.5 border border-zinc-200 dark:border-zinc-800">
+            <button
+              type="button"
+              onClick={() => setPrintFormat("thermal")}
+              disabled={isProcessing}
+              className={`px-3 py-1.5 text-xs font-medium rounded-sm transition-colors ${
+                printFormat === "thermal"
+                  ? "bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 shadow-sm"
+                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+              }`}
+            >
+              Struk Thermal
+            </button>
+            <button
+              type="button"
+              onClick={() => setPrintFormat("nota")}
+              disabled={isProcessing}
+              className={`px-3 py-1.5 text-xs font-medium rounded-sm transition-colors ${
+                printFormat === "nota"
+                  ? "bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 shadow-sm"
+                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+              }`}
+            >
+              Nota Kertas
+            </button>
+          </div>
+        </div>
+
         <div className="p-5 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 shrink-0">
           <button
             onClick={handleProcessPayment}
@@ -508,7 +499,7 @@ export default function PaymentModal({
             ) : method === "TEMPO" && !isPayable ? (
               "Lengkapi Nama & Jatuh Tempo"
             ) : (
-              "Proses Pembayaran"
+              "Proses Pembayaran & Cetak"
             )}
           </button>
         </div>
