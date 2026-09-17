@@ -36,7 +36,9 @@ export default function LoginPage() {
         <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
           LCO POS
         </p>
-        <h1 className="text-xl font-semibold tracking-tight mb-6">Masuk</h1>
+        <h1 className="text-xl font-semibold tracking-tight mb-6 text-white">
+          Login
+        </h1>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
@@ -48,7 +50,7 @@ export default function LoginPage() {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:border-lco-teal focus:ring-2 focus:ring-lco-teal transition-colors duration-150 text-sm"
+              className="w-full px-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:border-lco-teal focus:ring-2 focus:ring-lco-teal transition-colors duration-150 text-sm text-white"
             />
           </div>
 
@@ -61,7 +63,7 @@ export default function LoginPage() {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:border-lco-teal focus:ring-2 focus:ring-lco-teal transition-colors duration-150 text-sm"
+              className="w-full px-3 py-2 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:border-lco-teal focus:ring-2 focus:ring-lco-teal transition-colors duration-150 text-sm text-white"
             />
           </div>
 

@@ -104,11 +104,19 @@ export default function KasirModule() {
   //
   // Modal (bukan fungsi ini) yang menutup dirinya sendiri setelah animasi sukses selesai —
   // makanya di sini TIDAK ada lagi setIsPaymentModalOpen(false).
+  //
+  // ── KOREKSI (T-02) ── Parameter `method` sebelumnya string bebas ("tunai"/"TRANSFER BANK"/dst)
+  // yang diterjemahkan lewat switch-case ke PaymentMethod di sini. PaymentModal.tsx sekarang
+  // SUDAH memakai nilai kanonik PaymentMethod langsung, jadi switch-case terjemahan itu dihapus
+  // — satu kosakata metode pembayaran saja, tidak ada lagi 2 yang harus disinkronkan manual.
+  // Fungsi ini juga sekarang WAJIB mengembalikan `{ paymentId }` (bukan void) supaya PaymentModal
+  // bisa lanjut upload bukti pembayaran (Transfer/QRIS) memakai payment_id yang benar.
   const handleConfirmPayment = async (
-    method: string,
+    method: PaymentMethod,
     paidAmount: number,
     change: number,
-  ) => {
+    extra?: { customerName?: string; dueDate?: string },
+  ): Promise<{ paymentId: string }> => {
     if (cart.length === 0) {
       throw new Error("Keranjang masih kosong.");
     }
@@ -117,48 +125,23 @@ export default function KasirModule() {
     setIsSavingTransaction(true);
 
     try {
-      const normalizedMethod = method.toUpperCase();
-
-      let paymentMethod: PaymentMethod;
-
-      switch (normalizedMethod) {
-        case "CASH":
-        case "TUNAI":
-          paymentMethod = "CASH";
-          break;
-
-        case "BANK_TRANSFER":
-        case "TRANSFER":
-        case "TRANSFER BANK":
-          paymentMethod = "BANK_TRANSFER";
-          break;
-
-        case "QRIS":
-          paymentMethod = "QRIS";
-          break;
-
-        case "TEMPO":
-          paymentMethod = "TEMPO";
-          break;
-
-        default:
-          throw new Error(`Metode pembayaran "${method}" belum didukung.`);
-      }
-
       const result = await createTransaction({
         items: cart,
         subtotal,
         discount,
         tax,
         total: grandTotal,
-        paymentMethod,
+        paymentMethod: method,
         paymentAmount: paidAmount,
-        receivedAmount: paymentMethod === "CASH" ? paidAmount : undefined,
+        receivedAmount: method === "CASH" ? paidAmount : undefined,
+        customerName: extra?.customerName,
+        dueDate: extra?.dueDate,
       });
 
       printThermalReceipt({
         receiptNo: result.receipt_no,
         cashierName: user?.full_name ?? user?.email ?? null,
+        customerName: extra?.customerName,
         items: cart.map((item) => ({
           name: item.product.name,
           price: item.product.sell_price,
@@ -177,7 +160,9 @@ export default function KasirModule() {
       await refetch();
 
       // Modal masih terbuka di sini secara sengaja — ia akan menampilkan layar sukses
-      // sebentar lalu menutup dirinya sendiri lewat onClose().
+      // sebentar (dan upload bukti pembayaran kalau ada) lalu menutup dirinya sendiri
+      // lewat onClose().
+      return { paymentId: result.payment_id };
     } catch (err) {
       console.error("Transaction failed:", err);
 
