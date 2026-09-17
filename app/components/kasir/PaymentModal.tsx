@@ -23,6 +23,10 @@ import {
 type PaymentModalProps = {
   isOpen: boolean;
   onClose: () => void;
+  /** Subtotal sebelum pajak (PRD §17 T-01) — dipakai untuk baris breakdown di atas Total Tagihan. */
+  subtotal: number;
+  /** 0 kalau settings.ppn_enabled = false — baris "Pajak (PPN)" otomatis disembunyikan. */
+  tax: number;
   total: number;
   /**
    * Wajib async dan HARUS throw Error kalau transaksi gagal disimpan.
@@ -38,6 +42,8 @@ type PaymentModalProps = {
 export default function PaymentModal({
   isOpen,
   onClose,
+  subtotal,
+  tax,
   total,
   onConfirmPayment,
 }: PaymentModalProps) {
@@ -134,6 +140,26 @@ export default function PaymentModal({
 
         <div className="p-5 flex-1 overflow-y-auto">
           <div className="bg-zinc-50 dark:bg-zinc-900/90 p-5 rounded-xl text-center mb-6 border border-zinc-200 dark:border-zinc-800">
+            {/* ── TAMBAHAN (T-01) ── Breakdown Subtotal/Pajak sebelum Total Tagihan.
+                Baris "Pajak" cuma render kalau tax > 0, yaitu settings.ppn_enabled = true
+                di database (lihat hooks/useSettings.ts + KasirModule.tsx). */}
+            {tax > 0 && (
+              <div className="flex flex-col gap-1 mb-3 pb-3 border-b border-dashed border-zinc-200 dark:border-zinc-800 text-xs text-zinc-500">
+                <div className="flex justify-between">
+                  <span>Subtotal</span>
+                  <span className="font-mono tabular-nums">
+                    {formatRp(subtotal)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Pajak (PPN)</span>
+                  <span className="font-mono tabular-nums">
+                    {formatRp(tax)}
+                  </span>
+                </div>
+              </div>
+            )}
+
             <p className="text-[10px] uppercase tracking-[0.12em] text-zinc-500 font-semibold mb-2">
               Total Tagihan
             </p>

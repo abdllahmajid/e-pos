@@ -30,11 +30,16 @@ import {
 } from "@/lib/pos/cartLogic";
 import { createTransaction, PaymentMethod } from "@/lib/pos/transactionApi";
 import { useAuth } from "@/hooks/useAuth";
+import { useSettings } from "@/hooks/useSettings";
 
 export default function KasirModule() {
   const { products, isLoading, error, refetch } = useProducts();
   const { categories } = useCategories();
   const { user } = useAuth();
+  // ── TAMBAHAN (T-01) ── settings.ppnEnabled/ppnRate dipakai untuk hitung `tax` di bawah,
+  // supaya baris pajak muncul/hilang di ringkasan keranjang, PaymentModal, dan struk
+  // begitu admin mengubah `ppn_enabled` di database (PRD §17 T-01, Definition of Done).
+  const { settings: posSettings } = useSettings();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(
@@ -82,7 +87,13 @@ export default function KasirModule() {
   const subtotal = useMemo(() => getCartSubtotal(cart), [cart]);
 
   const discount = 0;
-  const tax = 0;
+  // ── TAMBAHAN (T-01) ── PPN dihitung dari settings, bukan hardcode lagi.
+  // Kalau ppn_enabled = false (default), tax selalu 0 -> baris pajak otomatis
+  // hilang di PaymentModal & struk (keduanya sudah pakai `tax > 0` untuk tampil/sembunyi).
+  const tax = useMemo(() => {
+    if (!posSettings.ppnEnabled) return 0;
+    return Math.round((subtotal * posSettings.ppnRate) / 100);
+  }, [posSettings.ppnEnabled, posSettings.ppnRate, subtotal]);
   const grandTotal = subtotal - discount + tax;
 
   // ── KOREKSI ── Sebelumnya PaymentModal menampilkan layar "Berhasil" via setTimeout PALSU
@@ -442,6 +453,20 @@ export default function KasirModule() {
               </span>
             </div>
 
+            {/* ── TAMBAHAN (T-01) ── Baris pajak hanya tampil kalau tax > 0, yaitu
+                kalau settings.ppn_enabled = true di database. */}
+            {tax > 0 && (
+              <div className="flex justify-between text-zinc-500">
+                <span className="text-xs">
+                  Pajak (PPN {posSettings.ppnRate}%)
+                </span>
+
+                <span className="font-mono tabular-nums">
+                  {formatRupiah(tax)}
+                </span>
+              </div>
+            )}
+
             <div className="flex justify-between font-semibold text-lg pt-3 border-t border-zinc-200 dark:border-zinc-800 mt-3 text-zinc-900 dark:text-zinc-100">
               <span>Total</span>
 
@@ -494,6 +519,8 @@ export default function KasirModule() {
             setIsPaymentModalOpen(false);
           }
         }}
+        subtotal={subtotal}
+        tax={tax}
         total={grandTotal}
         onConfirmPayment={handleConfirmPayment}
       />
