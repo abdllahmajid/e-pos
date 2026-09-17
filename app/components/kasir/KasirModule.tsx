@@ -11,6 +11,8 @@ import {
   Clock,
   Loader2,
   AlertTriangle,
+  Lock,
+  Unlock,
 } from "lucide-react";
 import PaymentModal from "./PaymentModal";
 import { printThermalReceipt, printA6Nota } from "@/lib/pos/printLogic";
@@ -31,13 +33,25 @@ import {
 import { createTransaction, PaymentMethod } from "@/lib/pos/transactionApi";
 import { useAuth } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings";
+// ── TAMBAHAN (T-04) ── Layar Kasir wajib mengecek shift aktif sebelum transaksi
+// bisa dilakukan (PRD §17 T-04 DoD: "kasir tidak bisa transaksi sebelum buka shift").
+// Pengecekan SEBENARNYA (yang tidak bisa dilewati) tetap ada di RPC create_transaction
+// (migration 007) — blokir di sini murni supaya UX-nya jelas (kasir tidak perlu isi
+// keranjang dulu baru ketahuan ditolak saat bayar).
+import { useShifts } from "@/hooks/useShifts";
 
-export default function KasirModule() {
+interface KasirModuleProps {
+  /** Dipanggil saat kasir menekan tombol "Buka Shift" di layar blokir (lihat di bawah). */
+  onNavigateToShift?: () => void;
+}
+
+export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   const { products, isLoading, error, refetch } = useProducts();
   const { categories } = useCategories();
   const { user } = useAuth();
 
   const { settings: posSettings } = useSettings();
+  const { activeShift, isLoading: isShiftLoading } = useShifts();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(
@@ -153,12 +167,21 @@ export default function KasirModule() {
     }
   };
 
-  if (isLoading) {
+  // ── KOREKSI ── Sebelumnya di sini cuma cek `isLoading` (produk), sedangkan
+  // `isShiftLoading` dicek belakangan di kondisi blokir shift. Karena fetch produk
+  // & fetch status shift berjalan paralel dan seringkali produk selesai LEBIH DULU,
+  // ada jeda sepersekian detik di mana `isLoading` sudah false tapi `isShiftLoading`
+  // masih true — kondisi blokir shift (`!isShiftLoading && !activeShift`) ikut
+  // bernilai false di jeda itu, sehingga layar Kasir SEMPAT ter-render utuh (tanpa
+  // kunci) sebelum akhirnya "kedip" berubah jadi layar terkunci begitu status shift
+  // datang. Sekarang KEDUA sumber loading digabung jadi satu kondisi, supaya layar
+  // utama Kasir tidak pernah dirender sebelum status shift benar-benar diketahui.
+  if (isLoading || isShiftLoading) {
     return (
       <div className="h-full flex items-center justify-center bg-zinc-100 dark:bg-zinc-950">
         <div className="flex flex-col items-center gap-3 text-zinc-400">
           <Loader2 className="w-6 h-6 animate-spin" />
-          <span className="text-xs">Memuat produk...</span>
+          <span className="text-xs">Memuat layar Kasir...</span>
         </div>
       </div>
     );
@@ -177,6 +200,34 @@ export default function KasirModule() {
             className="px-4 py-2 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-xs font-semibold transition-colors duration-150"
           >
             Coba Lagi
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── TAMBAHAN (T-04) ── Blokir layar Kasir kalau kasir belum buka shift.
+  // Di titik ini `isShiftLoading` sudah pasti false (ditangani gabungan loading
+  // di atas), jadi cukup cek `activeShift` saja.
+  if (!activeShift) {
+    return (
+      <div className="h-full flex items-center justify-center bg-zinc-100 dark:bg-zinc-950 p-6">
+        <div className="flex flex-col items-center gap-3 text-center max-w-sm">
+          <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
+            <Lock className="w-6 h-6 text-lco-coral" />
+          </div>
+          <h3 className="text-sm font-semibold">Shift Belum Dibuka</h3>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            Buka shift dengan modal awal terlebih dahulu di menu Kas & Shift
+            sebelum bisa mulai transaksi.
+          </p>
+          <button
+            onClick={onNavigateToShift}
+            disabled={!onNavigateToShift}
+            className="flex items-center gap-2 px-4 py-2 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-xs font-semibold transition-colors duration-150 disabled:opacity-60"
+          >
+            <Unlock className="w-3.5 h-3.5" />
+            Buka Shift Sekarang
           </button>
         </div>
       </div>
