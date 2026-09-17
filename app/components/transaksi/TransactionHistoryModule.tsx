@@ -19,6 +19,7 @@ import {
   type TransactionListItem,
 } from "@/hooks/useTransactions";
 import { formatRupiah } from "@/lib/pos/cartLogic";
+import TransactionDetailModal from "./TransactionDetailModal";
 
 type StatusGroup = "selesai" | "retur" | "void" | "lainnya";
 
@@ -38,7 +39,11 @@ function normalizeStatus(rawStatus: string): StatusGroup {
   const value = rawStatus.toUpperCase();
 
   if (value === "PAID" || value === "SELESAI") return "selesai";
+  // ── KOREKSI ── Nilai asli dari database adalah 'RETURN' (lihat migration
+  // 004_return_and_void.sql), belum pernah tercocokkan di sini karena sebelum modul
+  // Retur dikerjakan, status ini tidak pernah benar-benar muncul dari RPC manapun.
   if (
+    value === "RETURN" ||
     value === "RETUR_SEBAGIAN" ||
     value === "RETUR_PENUH" ||
     value === "RETUR"
@@ -105,6 +110,9 @@ export default function TransactionHistoryModule() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<StatusGroup | "Semua">("Semua");
+  const [selectedTransactionId, setSelectedTransactionId] = useState<
+    string | null
+  >(null);
 
   const filteredTransactions = useMemo(() => {
     const keyword = searchQuery.trim().toLowerCase();
@@ -282,9 +290,9 @@ export default function TransactionHistoryModule() {
                     <td className="px-5 py-4 text-right">
                       <button
                         type="button"
-                        disabled
-                        title="Detail & cetak ulang struk (segera hadir)"
-                        className="p-1.5 text-zinc-300 dark:text-zinc-700 rounded-md inline-flex cursor-not-allowed"
+                        title="Lihat detail & cetak ulang struk"
+                        onClick={() => setSelectedTransactionId(trx.id)}
+                        className="p-1.5 text-zinc-500 hover:text-lco-teal hover:bg-lco-teal/10 rounded-md inline-flex transition-colors duration-150"
                       >
                         <Eye className="w-4 h-4" />
                       </button>
@@ -306,6 +314,12 @@ export default function TransactionHistoryModule() {
         <span className="font-mono tabular-nums">{transactions.length}</span>{" "}
         transaksi
       </div>
+
+      <TransactionDetailModal
+        transactionId={selectedTransactionId}
+        onClose={() => setSelectedTransactionId(null)}
+        onChanged={refetch}
+      />
     </div>
   );
 }

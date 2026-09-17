@@ -29,10 +29,12 @@ import {
   formatRupiah,
 } from "@/lib/pos/cartLogic";
 import { createTransaction, PaymentMethod } from "@/lib/pos/transactionApi";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function KasirModule() {
   const { products, isLoading, error, refetch } = useProducts();
   const { categories } = useCategories();
+  const { user } = useAuth();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(
@@ -143,20 +145,22 @@ export default function KasirModule() {
         receivedAmount: paymentMethod === "CASH" ? paidAmount : undefined,
       });
 
-      const transactionData = {
+      printThermalReceipt({
         receiptNo: result.receipt_no,
+        cashierName: user?.full_name ?? user?.email ?? null,
         items: cart.map((item) => ({
           name: item.product.name,
           price: item.product.sell_price,
           qty: item.qty,
         })),
+        subtotal,
+        discount,
+        tax,
         total: grandTotal,
         paidAmount,
         changeAmount: result.change_amount ?? change,
         method,
-      };
-
-      printThermalReceipt(transactionData);
+      });
 
       setCart(clearCart());
       await refetch();
