@@ -51,7 +51,9 @@ export default function LCOPOS() {
       <Sidebar activeMenu={activeMenu} onMenuChange={setActiveMenu} />
 
       <main className="flex-1 overflow-hidden">
-        {activeMenu === "dashboard" && <DashboardModule />}
+        {activeMenu === "dashboard" && (
+          <DashboardModule onNavigate={setActiveMenu} />
+        )}
         {activeMenu === "kasir" && (
           <KasirModule onNavigateToShift={goToShiftMenu} />
         )}

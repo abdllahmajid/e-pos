@@ -6,245 +6,177 @@
 
 ## Status terakhir diperbarui
 
-2026-09-17, sesi #5 (task T-05 selesai — Mutasi Stok & Opname: setiap perubahan
-stok sekarang punya jejak audit, opname/penyesuaian manual dengan alasan wajib,
-menu **Stok & Opname** tampil di sidebar).
+2026-09-17, sesi #6 (task T-06 selesai — Dashboard asli menggantikan stub:
+stat hari ini & bulan berjalan, bar omzet 7/30 hari + pie kategori terlaris
+pakai `recharts`, Action List yang bisa diklik menuju modul terkait; migration
+`007`/`008`/`009` juga sudah diverifikasi terbentuk di database production).
 
 ## Task selesai
 
 - [x] T-01 — Tabel `settings` + hook `useSettings` (migration `005_settings.sql`)
 - [x] T-02 — Pembayaran lengkap per metode (transfer/qris/tempo): migration `006_payment_enhance.sql` (`due_date` di `payments`, tabel `payment_proofs` multi-file); update UI modal pembayaran dan riwayat.
-- [x] T-03 — Nota A6/A5 non-thermal + pilihan format cetak per transaksi (modifikasi `lib/pos/printLogic.ts` dengan `printA6Nota()` via iframe tersembunyi, penambahan pilihan format di `PaymentModal.tsx` sesuai `print_default` dari settings, dan dropdown cetak ulang di `TransactionDetailModal.tsx`).
-- [x] T-04 — Shift kasir: buka/tutup, selisih kas, wajib sebelum transaksi (migration `007_shift_sessions.sql` + `008_shift_close_rpc.sql`; `hooks/useShifts.ts`; `app/components/kas/KasModule.tsx`; wiring `app/page.tsx` + blokir layar `KasirModule.tsx`).
-- [x] T-05 — Mutasi stok & opname (migration `009_stock_movements.sql`; `hooks/useStock.ts`; `app/components/stok/StokModule.tsx`; wiring `app/components/layout/Sidebar.tsx` + `app/page.tsx`).
+- [x] T-03 — Nota A6/A5 non-thermal + pilihan format cetak per transaksi (`lib/pos/printLogic.ts` dengan `printA6Nota()` via iframe tersembunyi, pilihan format di `PaymentModal.tsx`, dropdown cetak ulang di `TransactionDetailModal.tsx`).
+- [x] T-04 — Shift kasir: buka/tutup, selisih kas, wajib sebelum transaksi (migration `007_shift_sessions.sql` + `008_shift_close_rpc.sql`; `hooks/useShifts.ts`; `app/components/kas/KasModule.tsx`).
+- [x] T-05 — Mutasi stok & opname (migration `009_stock_movements.sql`; `hooks/useStock.ts`; `app/components/stok/StokModule.tsx`).
+- [x] T-06 — Dashboard asli (`hooks/useDashboard.ts` + tulis ulang `app/components/dashboard/DashboardModule.tsx`).
 
 ## Sedang dikerjakan
 
 - (tidak ada sesi aktif)
 
+## ⚠️ Yang HARUS dikonfirmasi di awal sesi berikutnya
+
+1. **`npm run build` + `npm run lint` untuk T-06 BELUM dijalankan** saat file ini
+   ditulis. Agent sesi #6 tidak punya akses jaringan di lingkungannya sehingga
+   `npm install` (dan karenanya build) tidak bisa dieksekusi — kode T-06 ditulis
+   dengan verifikasi manual terhadap tipe-tipe yang sudah ada di repo, BUKAN
+   dengan compiler. **Jalankan build dulu sebelum menambah kode baru**, supaya
+   kalau ada error TypeScript ketahuan sebagai milik T-06, bukan tercampur
+   pekerjaan T-07.
+2. **Validasi end-to-end T-06 belum dilakukan pemilik project** — dashboard belum
+   pernah dibuka dengan data asli. Yang paling perlu dilihat pertama: apakah
+   angka "Omzet Hari Ini" cocok dengan penjumlahan manual riwayat transaksi hari
+   itu (lihat keputusan soal status RETURN di bawah — itu bagian yang paling
+   mungkin memicu pertanyaan "kok angkanya beda?").
+
+✅ **Migration `007`, `008`, `009` sudah diverifikasi benar-benar terbentuk di
+database production** (dicek pemilik project via SQL Editor di sesi #6, hasil:
+tabel `shift_sessions` ada, fungsi `close_shift` ada, fungsi `adjust_stock` ada,
+RLS `stock_movements` aktif — keempatnya `true`). Sesi berikutnya **tidak perlu
+mengulang pengecekan ini**, cukup percaya catatan ini.
+
 ## Task berikutnya (disarankan)
 
-- **T-06** — Dashboard asli (menggantikan stub): `hooks/useDashboard.ts` (agregat
-  omzet hari ini/bulan, jumlah transaksi, rata-rata, bar 7/30 hari, pie kategori
-  terlaris, action list); tulis ulang `app/components/dashboard/DashboardModule.tsx`
-  mengikuti PRD §4.8 (hero tanggal-jam real-time `font-mono`, `recharts` bar + pie,
-  Action List: stok menipis, piutang jatuh tempo, shift kemarin belum tutup).
-- Dependensi PRD (T-04 + T-05 + T-02) sudah semua selesai — boleh langsung mulai.
-- Untuk agregat "stok menipis" di Action List: `useStock.ts` belum punya fungsi
-  khusus untuk itu (baru riwayat mutasi + `adjustStock`), jadi T-06 kemungkinan
-  perlu query terpisah ke `products` (`stock <= min_stock`) — bukan lewat
-  `stock_movements`.
+- **T-07** — Halaman publik `/cek-struk` (PRD §17 Fase D, §4.9): `app/cek-struk/page.tsx`
+  tanpa login; input nomor struk + tanggal; RPC `get_transaction_by_receipt`
+  (buat di migration kecil) atau view + RLS `anon` read-only; tampil rincian item
+  & status **tanpa harga modal**.
+- Dependensi T-07 (T-06) sudah selesai. Catatan: `middleware.ts` perlu dicek
+  apakah sudah mengizinkan route `/cek-struk` tanpa sesi login — PRD menulis
+  "middleware sudah mengizinkan route ini", **verifikasi dulu**, jangan percaya
+  begitu saja (PRD §15.4 pernah keliru soal `stock_movements`, lihat riwayat).
+- Keamanan yang wajib diperhatikan di T-07: jalur `anon` tidak boleh bisa
+  meng-enumerasi transaksi. Nomor struk saja tidak cukup rahasia (formatnya
+  berurutan), makanya PRD minta **nomor struk + tanggal** sebagai pasangan kunci.
+  Jangan bikin policy `anon select` polos di `transactions` — pakai RPC
+  `security definer` yang hanya mengembalikan satu baris kalau kedua input cocok.
 
 ## Catatan penting untuk sesi berikutnya
 
-**File yang dibuat/diubah (T-05 — Mutasi Stok & Opname):**
+**File yang dibuat/diubah (T-06 — Dashboard):**
 
-- `supabase/migrations/009_stock_movements.sql` — **bukan bikin tabel baru dari
-  nol**, lihat temuan penting di bawah. Isinya: hardening tabel `stock_movements`
-  (kolom, komentar), check constraint `type` (sale/return/opname/adjustment/void)
-  - alasan wajib untuk opname/adjustment (dipasang `NOT VALID` lalu divalidasi di
-    blok yang menangkap error — migration tidak gagal kalau ada baris lama yang
-    melanggar, cukup warning); index riwayat mutasi & per-produk; **RLS baru**
-    (tabel ini sebelumnya SAMA SEKALI TIDAK ada RLS-nya — lihat temuan di bawah),
-    hanya `SELECT` untuk admin/supervisor, tidak ada policy insert/update/delete
-    sama sekali (semua tulisan wajib lewat RPC `security definer`); RPC baru
-    `adjust_stock(p_product_id, p_type, p_value, p_reason)` untuk opname (p_value =
-    hasil hitung fisik) & adjustment (p_value = selisih langsung); `create_transaction`
-    di-`CREATE OR REPLACE` lagi untuk menulis mutasi `'sale'` (qty_delta negatif)
-    di transaksi DB yang sama dengan pengurangan stok; backfill idempotent untuk
-    transaksi lama yang stoknya sudah berkurang tanpa jejak mutasi.
-- `hooks/useStock.ts` — baca riwayat mutasi (filter per produk/jenis, limit
-  default 100) + `adjustStock()` yang memanggil RPC. Nama pembuat mutasi (`created_by_name`)
-  diambil lewat query terpisah ke `profiles`, BUKAN embed PostgREST — lihat alasan
-  di bagian "Keputusan yang diambil sesi ini".
-- `app/components/stok/StokModule.tsx` — kartu ringkas stok masuk/keluar (dari
-  data yang sedang tampil, bukan agregat total), filter chip per jenis mutasi,
-  tabel riwayat (waktu/produk/jenis/qty ±/alasan/oleh), modal Opname/Penyesuaian
-  (pilih jenis → cari & pilih produk → isi jumlah dengan preview stok sebelum
-  submit → alasan wajib dengan tombol alasan cepat). Layar "Akses Ditolak" untuk
-  role selain admin/supervisor (PRD §5) — lapis UX, yang mengikat tetap RLS + RPC.
-- `app/components/layout/Sidebar.tsx` — tambah entri "Stok & Opname" (ikon
-  `Boxes`) di grup "Alat Kasir", di atas "Kas & Shift".
-- `app/page.tsx` — dynamic import `StokModule` + render saat `activeMenu === "stok"`.
+- `hooks/useDashboard.ts` — **baru**. Satu hook untuk semua agregat dashboard:
+  `today`/`month` (`PeriodStats`: omzet, jumlah transaksi, item terjual,
+  rata-rata), `daily` (selalu 30 titik `DailyPoint`), `categories`
+  (`CategorySlice[]` untuk pie), `actions` (`ActionGroup[]` untuk Action List),
+  plus `isLoading`/`error`/`refetch`/`lastUpdatedAt`.
+- `app/components/dashboard/DashboardModule.tsx` — **ditulis ulang total**
+  (sebelumnya stub placeholder 457 byte). Hero tanggal + jam real-time
+  (`font-mono`, update tiap detik), 4 kartu stat hari ini + 3 kartu bulan
+  berjalan, bar chart omzet dengan toggle 7/30 hari, pie kategori terlaris
+  (legenda dibuat manual, bukan `<Legend />` bawaan), Action List 3 kelompok.
+- `app/page.tsx` — satu baris: `<DashboardModule />` menjadi
+  `<DashboardModule onNavigate={setActiveMenu} />` supaya Action List bisa
+  membawa user ke modul terkait. Prop-nya opsional, jadi komponen tetap jalan
+  kalau baris ini terlewat (bedanya cuma tombol navigasi tidak muncul).
+- **Tidak ada migration baru di T-06.** Sengaja — lihat keputusan di bawah.
 
-**Definition of Done T-05 — status:**
+**Definition of Done T-06 — status:**
 
-- [x] Setiap perubahan stok (jual/retur/opname/adjustment) punya jejak di
-      `stock_movements` dengan `created_by` — `sale` dari `create_transaction`
-      (baru T-05), `return`/`void` sudah dari migration `004` (T-05 hanya
-      mengeraskan tabel yang menampungnya), `opname`/`adjustment` dari RPC
-      `adjust_stock` baru.
-- [x] Opname manual menolak alasan kosong — 3 lapis: tombol "Simpan Mutasi"
-      nonaktif di UI kalau alasan kosong, RPC `adjust_stock` menolak dengan
-      exception, check constraint tabel `stock_movements_manual_reason_check`.
-- [~] Stok fisik di produk = akumulasi mutasi — **benar untuk PERUBAHAN stok**
-  (invariant ditegakkan: tidak ada jalur update `products.stock` di luar RPC
-  yang sekaligus menulis `stock_movements`), tapi TIDAK berlaku mutlak untuk
-  nilai absolutnya karena stok awal produk (saat produk dibuat/diimpor) tidak
-  punya baris mutasi pembuka. Rumus yang benar: `stok sekarang = stok awal +
-  SUM(qty_delta)`. Sudah dicatat sebagai komentar jujur di migration 009
-  bagian 7 (backfill) — kalau nanti butuh rekonstruksi penuh dari nol, perlu
-  mutasi `adjustment` bersaldo awal saat produk dibuat (perubahan di modul
-  Produk, di luar scope T-05).
-
-**Belum divalidasi end-to-end oleh pemilik project** (migration `009` belum
-dijalankan ke database production saat file ini ditulis) — sesi berikutnya mohon
-konfirmasi dulu migration ini sudah jalan (termasuk cek WARNING dari blok validasi
-constraint kalau database punya baris `stock_movements` lama yang melanggar)
-sebelum lanjut ke T-06.
-
-**TEMUAN PENTING — PRD §15.4 keliru soal tabel `stock_movements`:**
-
-PRD menulis "tabel `stock_movements` belum ada". Itu **tidak akurat** untuk
-database yang sedang berjalan:
-
-1. `scripts/setup-database.sql` (cara database production dibuat — lihat temuan
-   T-01 sesi sebelumnya) sudah membuat tabel ini, versi polos: `type` TEXT tanpa
-   check, **tanpa RLS sama sekali**, tanpa index.
-2. Migration `004_return_and_void.sql` punya `create table if not exists` versi
-   lebih ketat, tapi karena `if not exists`, di database production blok itu
-   DILEWATI — yang hidup adalah versi polos dari (1).
-3. RPC `return_transaction` & `void_transaction` (004) SUDAH menulis ke tabel
-   ini sejak awal (`type` = 'return'/'void'). Jadi tabelnya tidak kosong saat
-   migration 009 dijalankan.
-
-Konsekuensi keamanan yang baru ditutup sesi ini: **`stock_movements` sebelumnya
-bisa dibaca (dan berpotensi ditulis/dihapus) oleh siapa pun yang login**, karena
-tidak ada RLS di tabel itu sejak awal. Migration 009 menutup ini dengan RLS
-`select`-only untuk admin/supervisor dan tanpa policy tulis sama sekali.
+- [x] Tidak ada lagi placeholder — stub `DashboardModule.tsx` diganti seluruhnya.
+- [x] Semua angka `font-mono tabular-nums` — termasuk jam, label sumbu Y,
+      persentase legenda pie, dan angka di tombol toggle 7/30 hari.
+- [x] Grafik pakai `recharts` — sudah ada di `package.json` (`^3.10.1`), tidak
+      perlu dependensi baru.
+- [x] Action list bisa diklik menuju modul terkait — `low_stock` → menu `stok`,
+      `due_receivable` → menu `riwayat`, `open_shift` → menu `kas`.
 
 **Keputusan yang diambil sesi ini:**
 
-- Migration 009 **tidak bikin tabel baru**, tapi mengeraskan (harden) tabel yang
-  sudah ada — konsisten dengan Aturan Main #7 (idempotent), sekaligus menghindari
-  migration gagal karena tabel/data sudah ada duluan.
-- **Tidak pakai trigger** di `products` untuk auto-catat mutasi. Kalau dipasang,
-  retur/void akan tercatat DUA KALI karena RPC-nya sudah menulis sendiri. Pola
-  yang dipakai: setiap RPC yang mengubah `products.stock` WAJIB sekalian menulis
-  `stock_movements` dalam transaksi DB yang sama.
-- **Tidak ada policy INSERT/UPDATE/DELETE** untuk `stock_movements` sama sekali.
-  Semua penulisan lewat RPC `security definer` (`create_transaction`,
-  `return_transaction`, `void_transaction`, `adjust_stock`) — jejak audit tidak
-  bisa dipalsukan/dihapus dari client.
-- Satu RPC `adjust_stock` untuk dua jenis mutasi manual (opname & adjustment),
-  bukan dua RPC terpisah — jalur tulisnya identik (kunci baris produk → hitung
-  stok baru → update → catat mutasi), yang beda cuma cara menerjemahkan input
-  jadi `qty_delta`. Memecah jadi dua fungsi hanya menduplikasi validasi.
-- Opname dengan selisih 0 (hitungan fisik cocok dengan sistem) **tetap dicatat**
-  sebagai baris `qty_delta = 0` — informasi audit "produk ini sudah diopname
-  tanggal sekian dan hasilnya cocok" berharga, beda dengan "tidak pernah diopname".
-- `useStock.ts` mengambil `created_by_name` lewat query terpisah ke `profiles`,
-  bukan embed PostgREST (`creator:profiles(...)`), karena FK `created_by` beda
-  target tergantung jalur pembuatan tabel (`profiles` di setup-database.sql vs
-  `auth.users` di migration 004) — embed akan patah di salah satu jalur.
-- Penyembunyian menu "Stok & Opname" untuk role kasir **sengaja belum
-  dikerjakan** di Sidebar — itu bagian permission matrix PRD §5 yang scope-nya
-  T-10. Kasir tetap melihat menunya tapi diblokir layar "Akses Ditolak" di
-  `StokModule.tsx` (lapis UX), sementara yang benar-benar mengikat tetap RLS +
-  cek role di RPC `adjust_stock`.
-- Produk nonaktif (`is_active = false`) tetap muncul di daftar pilihan produk
-  saat opname (`useProducts({ includeInactive: true })`) — barang nonaktif tetap
-  ada fisiknya di rak dan tetap perlu diopname. Beda dengan layar Kasir yang
-  hanya boleh menjual produk aktif.
-- Produk jasa (`is_service` / `type = 'JASA'`) dikeluarkan total dari alur T-05
-  — tidak muncul di daftar pilihan opname, dan RPC `adjust_stock` menolaknya
-  dengan pesan jelas kalau tetap dicoba (mis. lewat panggilan langsung).
+- **Omzet dihitung dari status `PAID` DAN `RETURN`, bukan `PAID` saja.** Ini
+  keputusan paling penting di T-06 dan paling mudah "diperbaiki" secara keliru
+  oleh agent berikutnya, jadi baca alasannya: RPC `return_transaction`
+  (migration 004) melakukan dua hal — membuat baris transaksi BARU berstatus
+  `RETURN` dengan `total` NEGATIF, **dan** mengubah status transaksi ASLI dari
+  `PAID` menjadi `RETURN`, bahkan untuk retur SEBAGIAN. Kalau difilter `PAID`
+  saja, satu retur sebagian akan menghapus SELURUH omzet transaksi aslinya dari
+  dashboard. Karena baris retur bernilai negatif, menjumlahkan kedua status
+  justru menghasilkan omzet BERSIH yang benar. `VOID` tetap dibuang penuh
+  (transaksinya dibatalkan total dan stoknya sudah dikembalikan).
+- **Jumlah transaksi hanya menghitung baris penjualan**, dibedakan lewat
+  `related_transaction_id` (NULL = penjualan, terisi = baris retur). Kalau baris
+  retur ikut dihitung, satu penjualan yang diretur tampil sebagai 2 transaksi.
+- **Agregasi dilakukan di client, tidak pakai RPC/view agregat.** Alasannya:
+  volume satu toko dalam 30 hari masih kecil; menghindari objek DB baru yang
+  harus diurus RLS-nya untuk sesuatu yang sifatnya murni tampilan; dan Aturan
+  Main #5 PRD (logika uang server-side) berlaku untuk uang yang DITULIS/DIKUNCI
+  — mis. `expected_cash` di `close_shift` yang bisa dipalsukan kasir — bukan
+  untuk ringkasan read-only yang tidak jadi dasar transaksi apa pun. Bentuk
+  return hook sengaja dibuat datar supaya kalau nanti datanya membengkak,
+  agregasi bisa dipindah ke RPC **tanpa menyentuh komponen sama sekali**.
+- **Toggle 7/30 hari tidak memanggil ulang database.** Hook selalu mengirim 30
+  titik; komponen memotong array. Ganti rentang jadi instan.
+- **Semua pengelompokan tanggal pakai waktu LOKAL, bukan UTC.**
+  `toISOString().slice(0,10)` SALAH untuk kita — di WIB (UTC+7) transaksi jam
+  00:00–07:00 akan masuk ke tanggal kemarin versi UTC. Ada helper `dateKey()`
+  di hook yang memakai komponen tanggal lokal; pakai itu, jangan `toISOString`.
+- **Nilai kategori di pie dihitung ulang dari `unit_price × (qty - returned_qty)`,
+  bukan dari kolom `subtotal`.** `subtotal` masih memuat qty penuh sebelum retur,
+  jadi kalau dipakai langsung, barang yang sudah diretur tetap terhitung penuh.
+- **Join `products`/`profiles`/`categories` pakai query terpisah, bukan embed
+  PostgREST.** Alasan sama seperti `useStock.ts` sesi #5: bentuk FK di database
+  ini tidak seragam antara jalur `scripts/setup-database.sql` dan rantai
+  migration, sehingga embed berisiko patah diam-diam di salah satu jalur.
+- **Kelompok Action List yang kosong tidak dikirim ke UI sama sekali** (bukan
+  dikirim dengan `count: 0`). Jadi kalau daftar kosong, artinya benar-benar tidak
+  ada yang perlu ditindak — bukan gagal memuat.
+- **Kegagalan query Action List tidak mematikan dashboard.** Tiap kelompok
+  ditarik dalam fungsi sendiri yang `console.error` lalu mengembalikan `null`
+  kalau gagal. Konsekuensi yang perlu diketahui: kalau mis. tabel `shift_sessions`
+  belum ada, kelompoknya hilang diam-diam dari UI dan hanya muncul di console.
+- **Hex warna grafik ditulis sebagai konstanta `CHART_COLORS` di komponen.**
+  Recharts tidak bisa menerima class Tailwind, hanya string warna. Ini
+  satu-satunya pengecualian yang disengaja terhadap larangan hardcode hex
+  (§16.2) — nilainya HARUS sama persis dengan `app/globals.css`. Kalau tema
+  berubah, ubah di dua tempat.
+- **Bar hari dengan omzet negatif diwarnai coral, tidak dipaksa nol.** Omzet
+  harian bisa minus kalau nilai retur di hari itu melebihi penjualan; itu kondisi
+  nyata yang justru perlu kelihatan.
+- **Dashboard boleh dilihat SEMUA role** (PRD §5 baris `dashboard`: kasir ✔).
+  Tidak ada layar blokir di sini, beda dengan `StokModule.tsx`. Isi Action List
+  otomatis menyesuaikan role lewat RLS — kasir hanya melihat shift miliknya
+  sendiri karena RLS `shift_sessions` (migration 007), tanpa cek role di client.
+
+**Utang teknis yang DIKETAHUI di T-06 (bukan bug, sudah dipertimbangkan):**
+
+- **Piutang: semua pembayaran `TEMPO` dianggap belum lunas.** Memang belum ada
+  kolom/tabel penanda pelunasan di skema — itu scope T-08 (sub-tab Piutang/Tempo).
+  Begitu T-08 menambahkannya, tambahkan filternya di fungsi `loadReceivables()`
+  di `hooks/useDashboard.ts`; lokasinya sudah ditandai komentar.
+- **`returned_qty` menempel pada item transaksi ASLI**, sehingga retur yang
+  terjadi HARI INI atas transaksi KEMARIN akan mengurangi angka "item terjual"
+  di tanggal KEMARIN, bukan hari ini. Untuk ringkasan harian ini masih wajar.
+  Kalau T-08 butuh pemisahan per tanggal retur, sumbernya `stock_movements`
+  (`type = 'return'`), bukan `transaction_items`.
+- **Filter "stok menipis" hanya mengambil produk dengan `min_stock > 0`.**
+  PostgREST tidak bisa membandingkan dua kolom (`stock <= min_stock`) lewat
+  filter biasa, jadi penyaringan akhir dilakukan di client dan jumlah baris
+  yang ditarik ditekan dengan syarat ini. Produk tanpa ambang batas memang tidak
+  pernah bisa dinyatakan "menipis" — kalau pemilik project mengharapkan produk
+  ber-`min_stock` 0 ikut muncul saat stoknya habis, itu perubahan aturan bisnis,
+  bukan perbaikan bug.
 
 **File yang SENGAJA belum dibuat dan alasannya:**
 
-- Tidak ada UI "Stok Menipis" (PRD §4.1, menu terpisah dari §4.3) — bukan bagian
-  T-05, kemungkinan masuk T-06 (Dashboard Action List) atau modul sendiri nanti.
-- Tidak ada opname massal/import Excel untuk banyak produk sekaligus — PRD §17
-  T-05 Definition of Done hanya minta "form opname/penyesuaian dengan alasan
-  wajib" per produk; bulk opname tidak diminta eksplisit.
-- Tidak ada perubahan permission matrix (sembunyikan menu per role di Sidebar)
-  — eksplisit scope T-10, lihat catatan di atas.
-
-## Catatan penting sesi sebelumnya (T-04 — Shift Kasir, diciutkan referensinya)
-
-**File yang dibuat/diubah (T-04 — Shift Kasir):**
-
-- `supabase/migrations/007_shift_sessions.sql` — tabel `shift_sessions`
-  (`cashier_id`, `opening_cash`, `closed_at`, `expected_cash`, `actual_cash`,
-  `difference`, `status` OPEN/CLOSED); **unique partial index** `cashier_id WHERE
-status = 'OPEN'` supaya satu shift aktif per kasir ditegakkan DI DATABASE (bukan
-  cuma UI); RLS (kasir baca/tulis shift sendiri, admin/supervisor baca semua +
-  update semua untuk force-close); FK `transactions.shift_id -> shift_sessions.id`
-  (kolom `shift_id` sendiri sudah ada dari migration 001, sekarang baru diberi FK);
-  `create_transaction` di-`CREATE OR REPLACE` lagi — cari shift `OPEN` milik
-  `auth.uid()`, **tolak transaksi kalau tidak ada** (pesan jelas ke kasir), isi
-  `shift_id` ke transaksi.
-- `supabase/migrations/008_shift_close_rpc.sql` — RPC `close_shift(p_shift_id,
-p_actual_cash)`. Sengaja RPC terpisah (bukan `UPDATE` langsung dari client)
-  karena `expected_cash` = agregasi `opening_cash + SUM(payments.amount WHERE
-method='CASH' AND transactions.status='PAID')` — logika uang wajib dihitung
-  server-side (Aturan Main #5 PRD), supaya kasir tidak bisa kirim `expected_cash`
-  palsu untuk menutupi selisih kas. Kasir cuma kirim `actual_cash` (hasil hitung
-  fisik pecahan). RPC mengunci `expected_cash`/`difference`/`closed_at`/`status`.
-  Buka shift (`opening_cash`) TIDAK pakai RPC — insert langsung dari client sudah
-  cukup aman (dijaga RLS insert + unique index).
-- `hooks/useShifts.ts` — baca `activeShift` (shift `OPEN` milik user login) +
-  `history` (30 shift `CLOSED` terakhir); `openShift(openingCash)` insert langsung
-  (menerjemahkan error `unique_violation` Postgres jadi pesan Indonesia); `closeShift
-(actualCash)` panggil RPC `close_shift`, hasil (`expected_cash`/`cash_sales`/
-  `difference`) dikembalikan apa adanya dari server.
-- `app/components/kas/KasModule.tsx` — kartu status shift (buka/aktif), modal Buka
-  Shift (input modal awal, default dari `settings.shiftDefaultCash`), modal Tutup
-  Shift (input jumlah lembar per pecahan Rupiah 100rb→100 perak → total kas fisik
-  dihitung live → submit ke `closeShift` → tampil ringkasan kas seharusnya vs kas
-  fisik vs selisih, warna teal/coral/mustard mengikuti pola "status = teks
-  berwarna" tema LCO Flat), tabel riwayat shift.
-- `app/page.tsx` — tambah grup menu sidebar "Alat Kasir" berisi "Kas & Shift"
-  (render `KasModule`); `KasirModule` sekarang menerima prop `onNavigateToShift`
-  untuk pindah ke menu itu dari layar blokir.
-- `app/components/kasir/KasirModule.tsx` — tambah pengecekan `useShifts().activeShift`;
-  kalau belum ada shift aktif (dan tidak sedang loading), SELURUH layar Kasir
-  diganti layar blokir "Shift Belum Dibuka" + tombol "Buka Shift Sekarang". Ini
-  cuma lapis UX — validasi yang tidak bisa dilewati tetap di RPC (lihat 007).
-
-**Definition of Done T-04 — status:**
-
-- [x] Kasir tidak bisa transaksi sebelum buka shift — diblokir 2 lapis: UI
-      (`KasirModule.tsx` tidak render layar transaksi) dan RPC
-      (`create_transaction` menolak dengan exception kalau tidak ada shift `OPEN`).
-- [x] Tutup shift menghitung selisih dari pecahan — `CloseShiftModal` di
-      `KasModule.tsx` (input pecahan → total kas fisik) dikirim ke RPC
-      `close_shift`, selisih dihitung & dikunci di server.
-- [x] `shift_id` terisi di transaksi — RPC `create_transaction` sekarang
-      meng-insert `shift_id` hasil pencarian shift aktif kasir.
-- [x] Hanya 1 shift aktif per kasir — ditolak DI DATABASE lewat unique partial
-      index `shift_sessions_one_open_per_cashier`, bukan cuma dicek di UI/hook.
-
-**Belum divalidasi end-to-end oleh pemilik project** (migration `007` & `008`
-belum dijalankan ke database production saat file ini ditulis) — sesi berikutnya
-mohon konfirmasi dulu bahwa kedua migration sudah dieksekusi sebelum lanjut ke
-T-05, supaya kalau ada error runtime dari T-04 (mis. FK `transactions_shift_id_fkey`
-bentrok dengan data lama yang shift_id-nya sudah terisi tapi tidak valid) bisa
-ketahuan lebih awal, bukan tercampur dengan pekerjaan T-05.
-
-**Keputusan yang diambil sesi ini:**
-
-- `status` di `shift_sessions` pakai `text + check` (bukan enum Postgres baru),
-  konsisten dengan pola `transactions.status` yang juga `text`.
-- RLS `shift_sessions`: admin/supervisor bisa SELECT + UPDATE semua shift (bukan
-  cuma milik sendiri) — disiapkan untuk force-close shift yang lupa ditutup dan
-  untuk fitur monitoring admin di §4.6, walau UI monitoring-nya sendiri belum
-  dibuat (itu bagian dashboard/laporan, T-06/T-08).
-- Setoran ke bank (`cash_movements`) **sengaja tidak dikerjakan** — eksplisit
-  "Jangan dulu" di PRD §17 T-04. Tabel `cash_movements` dari skema §6 belum ada
-  sama sekali, menyusul kalau task setoran dikerjakan.
-- Cetak laporan shift A6/PDF (disebut di §4.6) **sengaja tidak dikerjakan** — di
-  luar Definition of Done T-04. Kalau dikerjakan nanti, reuse pola
-  `printA6Nota()` di `lib/pos/printLogic.ts` (sudah ada dari T-03).
-- Monitoring realtime semua shift kasir lain oleh admin **sengaja tidak
-  dikerjakan** — eksplisit fase 1.1 di PRD §17 T-04 "Jangan dulu".
-
-**File yang SENGAJA belum dibuat dan alasannya:**
-
-- Tidak ada tabel `cash_movements` — scope setoran kas, "Jangan dulu" di T-04.
-- Tidak ada UI admin untuk melihat/force-close shift kasir lain — RLS-nya sudah
-  disiapkan (lihat di atas), tapi komponennya menyusul di Laporan (T-08) atau
-  Dashboard (T-06), bukan scope KasModule.tsx.
+- Tidak ada migration baru — semua data dashboard dibaca dari tabel yang sudah
+  ada. Lihat keputusan "agregasi di client" di atas.
+- Tidak ada notifikasi push FCM untuk isi Action List — "Jangan dulu" eksplisit
+  di PRD §17 T-06, itu T-12.
+- Tidak ada filter tanggal custom / export di dashboard — itu modul Laporan (T-08).
+- Tidak ada penyembunyian kartu per role — permission matrix §5 adalah scope T-10,
+  dan dashboard sendiri memang boleh dilihat semua role.
+- Tidak ada Supabase Realtime untuk auto-refresh angka (§4.10) — fase 1.1.
+  Sementara ini refresh manual lewat tombol "Muat Ulang".
 
 ## Bug ditemukan (BELUM diperbaiki, bukan blocker) — baris Retur tidak punya rincian item
 
@@ -267,14 +199,50 @@ perlu insert baris `transaction_items` untuk `v_return_id` juga, lalu
 `TransactionDetailModal.tsx` otomatis akan menampilkannya karena sudah pakai
 `detail.items` apa adanya.
 
+**⚠️ Kaitannya dengan T-06:** kalau bug ini nanti diperbaiki dengan cara menambah
+baris `transaction_items` untuk transaksi retur, **`hooks/useDashboard.ts` WAJIB
+ikut disesuaikan**. Saat ini hook sengaja hanya menarik item dari transaksi
+penjualan (`related_transaction_id IS NULL`) karena baris retur dipastikan tidak
+punya item. Begitu baris retur punya item, "item terjual" berisiko terhitung
+ganda kalau filter itu tidak diubah.
+
 **Belum diperbaiki, bukan blocker:**
 
-- Tidak ada bug baru ditemukan di modul lama saat mengerjakan T-04.
+- Tidak ada bug baru ditemukan di modul lama saat mengerjakan T-06.
 
 ---
 
 <details>
-<summary>Riwayat sesi sebelumnya (T-01 s/d T-03) — diciutkan, lihat histori git kalau butuh detail lengkap</summary>
+<summary>Riwayat sesi sebelumnya (T-01 s/d T-05) — diciutkan, lihat histori git kalau butuh detail lengkap</summary>
+
+**T-05 (selesai):** Mutasi stok & opname. Migration `009_stock_movements.sql`
+**bukan bikin tabel baru** — mengeraskan tabel `stock_movements` yang ternyata
+sudah ada dari `scripts/setup-database.sql` dalam versi polos (tanpa RLS sama
+sekali — celah keamanan yang baru ditutup sesi itu). Isinya: check constraint
+`type`, alasan wajib untuk opname/adjustment, index, RLS `select`-only untuk
+admin/supervisor **tanpa policy insert/update/delete sama sekali** (semua tulisan
+wajib lewat RPC `security definer`), RPC baru `adjust_stock`, dan
+`create_transaction` di-`CREATE OR REPLACE` supaya menulis mutasi `'sale'`.
+Keputusan kunci: **tidak pakai trigger** di `products` (retur/void akan tercatat
+dua kali karena RPC-nya sudah menulis sendiri); polanya "setiap RPC yang mengubah
+`products.stock` WAJIB sekalian menulis `stock_movements` dalam transaksi DB yang
+sama". Catatan jujur: stok absolut ≠ akumulasi mutasi, karena stok awal produk
+tidak punya baris mutasi pembuka (rumus benar: `stok awal + SUM(qty_delta)`).
+
+**⚠️ TEMUAN T-05 yang masih relevan:** PRD §15.4 menulis "tabel `stock_movements`
+belum ada" — **itu tidak akurat**. Pelajaran umumnya: **jangan percaya §15 PRD
+begitu saja, verifikasi ke database dulu.**
+
+**T-04 (selesai):** Shift kasir. Migration `007_shift_sessions.sql` (unique
+partial index supaya satu shift aktif per kasir ditegakkan DI DATABASE, bukan
+cuma UI) + `008_shift_close_rpc.sql` (RPC `close_shift`; `expected_cash` dihitung
+server-side supaya kasir tidak bisa mengirim angka palsu untuk menutupi selisih
+kas — kasir hanya mengirim `actual_cash` hasil hitung pecahan). Buka shift TIDAK
+pakai RPC (insert langsung sudah aman, dijaga RLS + unique index).
+RLS `shift_sessions`: admin/supervisor bisa SELECT + UPDATE semua shift,
+disiapkan untuk force-close, walau UI-nya belum dibuat.
+Sengaja tidak dikerjakan: setoran ke bank (`cash_movements` belum ada tabelnya),
+cetak laporan shift A6/PDF, monitoring realtime antar-kasir.
 
 **T-03 (selesai):** Nota A6/A5 via iframe tersembunyi, pilihan format cetak di
 modal pembayaran, dropdown cetak ulang di riwayat transaksi.
@@ -295,6 +263,6 @@ baru ditambahkan manual ke `profiles`, WAJIB isi `id` persis sama dengan
 `auth.users.id` dari Supabase Dashboard → Authentication → Users.
 
 **Belum diputuskan**: apakah `scripts/setup-database.sql` masih relevan dipakai
-atau sebaiknya di-deprecate sekarang rantai migration sudah berjalan sampai `008`.
+atau sebaiknya di-deprecate sekarang rantai migration sudah berjalan sampai `009`.
 
 </details>
