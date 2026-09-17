@@ -16,6 +16,7 @@ import {
   ReceiptText,
   Package,
   Wallet,
+  Boxes,
   type LucideIcon,
 } from "lucide-react";
 
@@ -45,7 +46,15 @@ const MENU_GROUPS: SidebarMenuGroup[] = [
   },
   {
     label: "Alat Kasir",
-    items: [{ key: "kas", label: "Kas & Shift", icon: Wallet }],
+    items: [
+      // ── TAMBAHAN (T-05) ── Menu Stok & Opname. Ditaruh di grup "Alat Kasir"
+      // mengikuti PRD §4.1 (di sana Produk & Stok memang satu grup dengan Kas).
+      // "Produk" sendiri sengaja dibiarkan di grup Utama seperti sebelumnya —
+      // memindahkannya bukan bagian task ini dan bisa membingungkan kasir yang
+      // sudah hafal posisi menu.
+      { key: "stok", label: "Stok & Opname", icon: Boxes },
+      { key: "kas", label: "Kas & Shift", icon: Wallet },
+    ],
   },
 ];
 

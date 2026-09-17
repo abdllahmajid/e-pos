@@ -32,6 +32,11 @@ const KasModule = dynamic(() => import("./components/kas/KasModule"), {
   ssr: false,
 });
 
+// ── TAMBAHAN (T-05) ── Modul Stok & Opname (riwayat mutasi + opname manual).
+const StokModule = dynamic(() => import("./components/stok/StokModule"), {
+  ssr: false,
+});
+
 export default function LCOPOS() {
   const [activeMenu, setActiveMenu] = useState("kasir");
 
@@ -52,6 +57,7 @@ export default function LCOPOS() {
         )}
         {activeMenu === "produk" && <ProdukModule />}
         {activeMenu === "riwayat" && <TransactionHistoryModule />}
+        {activeMenu === "stok" && <StokModule />}
         {activeMenu === "kas" && <KasModule />}
       </main>
     </div>
