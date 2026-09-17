@@ -1,26 +1,32 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  /* --- WARNA UTAMA LCO (BRAND) --- */
+  --color-lco-teal: #49bfb4;
+  --color-lco-green: #124540;
+  --color-lco-green-hover: #0d332f;
+
+  /* --- WARNA KOMBINASI / AKSEN TAMBAHAN --- */
+  --color-lco-coral: #f4435e;
+  --color-lco-mustard: #e4e596;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* 
+  Aturan dasar untuk body 
+*/
+@layer base {
+  body {
+    @apply bg-zinc-100 text-zinc-900;
+  }
+  
+  /* Mode Gelap otomatis mengikuti sistem atau class */
+  .dark body {
+    @apply bg-zinc-950 text-zinc-100;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
+/* 
+  CATATAN PENTING DARI PRD:
+  Tidak boleh ada @media print global di sini karena struk akan 
+  dicetak via iframe tersembunyi.
+*/

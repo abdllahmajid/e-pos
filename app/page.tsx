@@ -1,68 +1,111 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useState } from "react";
+import dynamic from "next/dynamic";
+import {
+  LayoutDashboard,
+  ShoppingCart,
+  ReceiptText,
+  Package,
+} from "lucide-react";
+
+// Dynamic Imports
+const KasirModule = dynamic(() => import("./components/kasir/KasirModule"), {
+  ssr: false,
+});
+
+const DashboardModule = dynamic(
+  () => import("./components/dashboard/DashboardModule"),
+  {
+    ssr: false,
+  },
+);
+
+const TransactionHistoryModule = dynamic(
+  () => import("./components/transaksi/TransactionHistoryModule"),
+  {
+    ssr: false,
+  },
+);
+
+const ProdukModule = dynamic(() => import("./components/produk/ProdukModule"), {
+  ssr: false,
+});
+
+export default function LCOPOS() {
+  const [activeMenu, setActiveMenu] = useState("kasir");
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
+    <div className="flex h-screen bg-zinc-100 font-sans text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+      <aside className="hidden w-64 border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 md:flex md:flex-col">
+        <div className="border-b border-zinc-200 p-5 dark:border-zinc-800">
+          <h1 className="rounded-xl text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+            LCO POS
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+        </div>
+
+        <div className="p-3">
+          <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+            Utama
           </p>
+
+          <nav className="flex flex-col gap-1">
+            <button
+              onClick={() => setActiveMenu("dashboard")}
+              className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-150 ${
+                activeMenu === "dashboard"
+                  ? "bg-zinc-100 text-lco-teal dark:bg-zinc-900"
+                  : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+              }`}
+            >
+              <LayoutDashboard className="h-4 w-4" />
+              Dashboard
+            </button>
+
+            <button
+              onClick={() => setActiveMenu("kasir")}
+              className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-150 ${
+                activeMenu === "kasir"
+                  ? "bg-zinc-100 text-lco-teal dark:bg-zinc-900"
+                  : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+              }`}
+            >
+              <ShoppingCart className="h-4 w-4" />
+              Kasir (POS)
+            </button>
+
+            <button
+              onClick={() => setActiveMenu("produk")}
+              className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-150 ${
+                activeMenu === "produk"
+                  ? "bg-zinc-100 text-lco-teal dark:bg-zinc-900"
+                  : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+              }`}
+            >
+              <Package className="h-4 w-4" />
+              Produk
+            </button>
+
+            <button
+              onClick={() => setActiveMenu("riwayat")}
+              className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-150 ${
+                activeMenu === "riwayat"
+                  ? "bg-zinc-100 text-lco-teal dark:bg-zinc-900"
+                  : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+              }`}
+            >
+              <ReceiptText className="h-4 w-4" />
+              Riwayat Transaksi
+            </button>
+          </nav>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+      </aside>
+
+      <main className="flex-1 overflow-hidden">
+        {activeMenu === "dashboard" && <DashboardModule />}
+        {activeMenu === "kasir" && <KasirModule />}
+        {activeMenu === "produk" && <ProdukModule />}
+        {activeMenu === "riwayat" && <TransactionHistoryModule />}
       </main>
     </div>
   );
