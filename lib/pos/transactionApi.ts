@@ -32,6 +32,16 @@ export interface CreateTransactionParams {
    * lihat migration 006_payment_enhance.sql, sesuai Aturan Main #5).
    */
   dueDate?: string;
+
+  /**
+   * ── TAMBAHAN (013) ── Nomor HP pelanggan, opsional untuk SEMUA metode bayar
+   * (PRD §4.2 "Identitas pelanggan (opsional per transaksi): nama + no. HP"),
+   * bukan hanya TEMPO. Dipakai fitur "Kirim WA" di layar sukses Kasir
+   * (lib/pos/printLogic.ts → shareReceiptViaWhatsApp()). Disimpan apa adanya,
+   * tanpa normalisasi format — sanitasi ke format wa.me terjadi saat KIRIM,
+   * bukan saat SIMPAN (lihat komentar migration 013).
+   */
+  customerPhone?: string;
 }
 
 export interface CreateTransactionResult {
@@ -111,6 +121,10 @@ export async function createTransaction(
     p_payment_amount: params.paymentAmount,
     p_received_amount: params.receivedAmount ?? null,
     p_due_date: params.dueDate ?? null,
+    // ── TAMBAHAN (013) ── lihat komentar CreateTransactionParams.customerPhone
+    // di atas. Named parameter, jadi ditambahkan di akhir daftar RPC di sini
+    // tidak bergantung urutan parameter di definisi SQL-nya.
+    p_customer_phone: params.customerPhone?.trim() || null,
   });
 
   if (error) {

@@ -14,7 +14,10 @@ import {
   Paperclip,
   Trash2,
   User,
+  Phone,
   Printer,
+  MessageCircle,
+  ArrowRight,
 } from "lucide-react";
 import type { PaymentMethod } from "@/lib/pos/transactionApi";
 import { uploadPaymentProofs } from "@/lib/pos/transactionApi";
@@ -33,10 +36,22 @@ type PaymentModalProps = {
     change: number,
     extra?: {
       customerName?: string;
+      /** ── TAMBAHAN (013) ── Nomor HP pelanggan, opsional untuk semua metode. */
+      customerPhone?: string;
       dueDate?: string;
       printFormat?: "thermal" | "nota";
     },
   ) => Promise<{ paymentId: string }>;
+  /**
+   * ── TAMBAHAN (013) ── Kirim struk digital ke WhatsApp pelanggan (PRD §4.2
+   * "kirim struk via WhatsApp", §4.7). Dipanggil dari tombol di layar sukses,
+   * SETELAH transaksi tersimpan (parent — KasirModule — yang tahu data
+   * lengkap struk & memanggil shareReceiptViaWhatsApp() dari printLogic.ts;
+   * PaymentModal sengaja tidak import printLogic sendiri supaya modal ini
+   * tetap murni UI pembayaran, tidak perlu tahu bentuk ReceiptData).
+   * Opsional — kalau tidak dikirim parent, tombol "Kirim WA" disembunyikan.
+   */
+  onSendWhatsApp?: () => Promise<{ method: "web-share" | "download-fallback" }>;
 };
 
 const METHODS: {
@@ -64,11 +79,13 @@ export default function PaymentModal({
   total,
   defaultPrintFormat,
   onConfirmPayment,
+  onSendWhatsApp,
 }: PaymentModalProps) {
   const [method, setMethod] = useState<PaymentMethod>("CASH");
   const [paidAmount, setPaidAmount] = useState<number>(0);
 
   const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
   const [dueDate, setDueDate] = useState(defaultDueDate());
 
   const [proofFiles, setProofFiles] = useState<File[]>([]);
@@ -85,11 +102,24 @@ export default function PaymentModal({
   const [proofWarning, setProofWarning] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
 
+  // ── TAMBAHAN (013) ── Status tombol "Kirim WA" di layar sukses. Terpisah dari
+  // isProcessing/isUploadingProof karena aksi ini terjadi SETELAH transaksi
+  // sudah tersimpan — gagal di sini tidak boleh terlihat seperti transaksi
+  // gagal (uang & stok sudah benar, cuma pengiriman gambar struk yang gagal).
+  const [waStatus, setWaStatus] = useState<
+    "idle" | "sending" | "sent" | "error"
+  >("idle");
+  const [waMethod, setWaMethod] = useState<
+    "web-share" | "download-fallback" | null
+  >(null);
+  const [waError, setWaError] = useState<string | null>(null);
+
   useEffect(() => {
     if (isOpen) {
       setMethod("CASH");
       setPaidAmount(0);
       setCustomerName("");
+      setCustomerPhone("");
       setDueDate(defaultDueDate());
       setProofFiles([]);
       setPrintFormat(defaultPrintFormat);
@@ -98,6 +128,9 @@ export default function PaymentModal({
       setIsSuccess(false);
       setProofWarning(null);
       setLocalError(null);
+      setWaStatus("idle");
+      setWaMethod(null);
+      setWaError(null);
     }
   }, [isOpen, defaultPrintFormat]);
 
@@ -141,12 +174,18 @@ export default function PaymentModal({
       const finalPaidAmount = method === "CASH" ? paidAmount : total;
       const finalChange = method === "CASH" ? changeAmount : 0;
 
+      // ── TAMBAHAN (013) ── customerPhone dikirim untuk SEMUA metode (opsional,
+      // PRD §4.2), bukan hanya TEMPO seperti customerName. trim() -> undefined
+      // kalau kosong, konsisten dengan pola customerName di TEMPO.
+      const trimmedPhone = customerPhone.trim();
+
       const { paymentId } = await onConfirmPayment(
         method,
         finalPaidAmount,
         finalChange,
         {
           customerName: method === "TEMPO" ? customerName.trim() : undefined,
+          customerPhone: trimmedPhone || undefined,
           dueDate: method === "TEMPO" ? dueDate : undefined,
           printFormat: printFormat,
         },
@@ -173,14 +212,17 @@ export default function PaymentModal({
         }
       }
 
+      // ── KOREKSI (013) ── Sebelumnya di sini ada setTimeout yang otomatis
+      // menutup modal (900ms, atau 2500ms kalau ada proofWarning) — TIDAK
+      // cukup waktu untuk kasir sempat menekan tombol apa pun, apalagi PRD
+      // §4.2 secara eksplisit minta layar sukses menawarkan "kirim struk via
+      // WhatsApp" DAN "opsi transaksi baru" sebagai dua aksi terpisah, bukan
+      // sesuatu yang lewat begitu saja dalam waktu kurang dari 1 detik.
+      // Sekarang layar sukses tetap terbuka sampai kasir menekan salah satu
+      // tombol (lihat blok isSuccess di bawah) — struk tetap otomatis
+      // tercetak/tersimpan seperti sebelumnya (dipanggil parent sebelum
+      // Promise ini resolve), hanya PENUTUPAN modal yang sekarang manual.
       setIsSuccess(true);
-      setTimeout(
-        () => {
-          setIsSuccess(false);
-          onClose();
-        },
-        warning ? 2500 : 900,
-      );
     } catch (err) {
       setIsProcessing(false);
       setIsUploadingProof(false);
@@ -190,22 +232,100 @@ export default function PaymentModal({
     }
   }
 
+  // ── TAMBAHAN (013) ── Tombol "Kirim WA" di layar sukses. Status ditangani
+  // di sini (bukan langsung di JSX) supaya pesan error dari shareReceiptViaWhatsApp
+  // (mis. browser tidak izinkan popup wa.me) bisa ditampilkan tanpa membuat
+  // kasir mengira TRANSAKSINYA yang gagal.
+  async function handleSendWhatsApp() {
+    if (!onSendWhatsApp || waStatus === "sending") return;
+    setWaStatus("sending");
+    setWaError(null);
+    try {
+      const result = await onSendWhatsApp();
+      setWaMethod(result.method);
+      setWaStatus("sent");
+    } catch (err) {
+      setWaStatus("error");
+      setWaError(
+        err instanceof Error
+          ? err.message
+          : "Gagal mengirim struk ke WhatsApp.",
+      );
+    }
+  }
+
+  function handleFinishTransaction() {
+    setIsSuccess(false);
+    onClose();
+  }
+
   if (isSuccess) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/30 p-4">
-        <div className="bg-white dark:bg-zinc-950 rounded-xl p-8 max-w-sm w-full flex flex-col items-center justify-center text-center border border-zinc-200 dark:border-zinc-800">
+        <div className="bg-white dark:bg-zinc-950 rounded-xl p-8 max-w-sm w-full flex flex-col items-center text-center border border-zinc-200 dark:border-zinc-800">
           <CheckCircle2 className="w-16 h-16 text-lco-green mb-4" />
           <h2 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100 mb-2">
             Pembayaran Berhasil!
           </h2>
-          <p className="text-zinc-500 text-xs">
-            Mencetak struk & menyiapkan transaksi baru...
+          <p className="text-zinc-500 text-xs mb-6">
+            Struk sudah dicetak. Kirim struk digital ke pelanggan atau lanjut ke
+            transaksi berikutnya.
           </p>
+
           {proofWarning && (
-            <p className="mt-3 text-[11px] text-lco-mustard border border-lco-mustard/40 bg-lco-mustard/10 rounded-md px-3 py-2">
+            <p className="mb-4 w-full text-[11px] text-lco-mustard border border-lco-mustard/40 bg-lco-mustard/10 rounded-md px-3 py-2">
               {proofWarning}
             </p>
           )}
+
+          {onSendWhatsApp && (
+            <div className="w-full mb-3">
+              <button
+                type="button"
+                onClick={handleSendWhatsApp}
+                disabled={waStatus === "sending" || waStatus === "sent"}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-md border border-lco-green/40 text-lco-green hover:bg-lco-green/10 text-sm font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {waStatus === "sending" ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Menyiapkan
+                    Gambar Struk...
+                  </>
+                ) : waStatus === "sent" ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    {waMethod === "web-share"
+                      ? "Terkirim ke Sheet Share"
+                      : "Gambar Terunduh, WhatsApp Terbuka"}
+                  </>
+                ) : (
+                  <>
+                    <MessageCircle className="w-4 h-4" /> Kirim Struk via
+                    WhatsApp
+                  </>
+                )}
+              </button>
+              {waStatus === "sent" && waMethod === "download-fallback" && (
+                <p className="mt-2 text-[11px] text-zinc-500 text-left">
+                  Lampirkan gambar struk yang baru terunduh ke chat WhatsApp
+                  secara manual.
+                </p>
+              )}
+              {waStatus === "error" && waError && (
+                <p className="mt-2 text-[11px] text-lco-coral text-left">
+                  {waError}
+                </p>
+              )}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={handleFinishTransaction}
+            className="w-full flex items-center justify-center gap-2 py-3 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-sm font-semibold transition-colors duration-150"
+          >
+            Transaksi Baru <ArrowRight className="w-4 h-4" />
+          </button>
         </div>
       </div>
     );
@@ -268,6 +388,53 @@ export default function PaymentModal({
               </button>
             ))}
           </div>
+
+          {/* ── TAMBAHAN (013) ── Identitas pelanggan opsional (PRD §4.2), khusus
+              di sini untuk metode SELAIN TEMPO — TEMPO sudah punya field Nama
+              wajib + field HP opsional sendiri di bloknya masing-masing di
+              bawah, jadi tidak perlu field nama dobel. */}
+          {method !== "TEMPO" && (
+            <div className="grid grid-cols-2 gap-3 mb-5">
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">
+                  Nama Pelanggan{" "}
+                  <span className="normal-case font-normal text-zinc-400">
+                    (opsional)
+                  </span>
+                </label>
+                <div className="relative">
+                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                  <input
+                    type="text"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    disabled={isProcessing}
+                    placeholder="Nama"
+                    className="w-full pl-10 pr-3 py-2.5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 text-sm text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">
+                  No. HP{" "}
+                  <span className="normal-case font-normal text-zinc-400">
+                    (opsional)
+                  </span>
+                </label>
+                <div className="relative">
+                  <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                  <input
+                    type="tel"
+                    value={customerPhone}
+                    onChange={(e) => setCustomerPhone(e.target.value)}
+                    disabled={isProcessing}
+                    placeholder="08xxxxxxxxxx"
+                    className="w-full pl-10 pr-3 py-2.5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 font-mono text-sm text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {method === "CASH" && (
             <div className="space-y-5">
@@ -430,6 +597,25 @@ export default function PaymentModal({
                   min={new Date().toISOString().slice(0, 10)}
                   className="w-full px-4 py-3 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 font-mono text-sm text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                 />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">
+                  No. HP{" "}
+                  <span className="normal-case font-normal text-zinc-400">
+                    (opsional, untuk kirim struk &amp; tagih WA)
+                  </span>
+                </label>
+                <div className="relative">
+                  <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                  <input
+                    type="tel"
+                    value={customerPhone}
+                    onChange={(e) => setCustomerPhone(e.target.value)}
+                    disabled={isProcessing}
+                    placeholder="08xxxxxxxxxx"
+                    className="w-full pl-11 pr-4 py-3 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 font-mono text-sm text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
+                  />
+                </div>
               </div>
             </div>
           )}

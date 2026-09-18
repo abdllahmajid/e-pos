@@ -15,7 +15,12 @@ import {
   Unlock,
 } from "lucide-react";
 import PaymentModal from "./PaymentModal";
-import { printThermalReceipt, printA6Nota } from "@/lib/pos/printLogic";
+import {
+  printThermalReceipt,
+  printA6Nota,
+  shareReceiptViaWhatsApp,
+  type ReceiptData,
+} from "@/lib/pos/printLogic";
 import { useProducts, ProductWithCategory } from "@/hooks/useProducts";
 import { useCategories } from "@/hooks/useCategories";
 import { CartItem } from "@/lib/pos/types";
@@ -62,6 +67,16 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   const [isSavingTransaction, setIsSavingTransaction] = useState(false);
   const [transactionError, setTransactionError] = useState<string | null>(null);
 
+  // ── TAMBAHAN (013) ── Struk transaksi TERAKHIR yang berhasil dibayar + no.
+  // HP pelanggan yang diisi kasir di PaymentModal, disimpan di sini (bukan di
+  // PaymentModal) supaya tetap tersedia untuk handleSendWhatsApp() bahkan
+  // kalau PaymentModal sempat re-render (mis. reset form saat isOpen berubah).
+  // null selama belum pernah ada transaksi sukses di sesi Kasir ini.
+  const [lastReceipt, setLastReceipt] = useState<ReceiptData | null>(null);
+  const [lastCustomerPhone, setLastCustomerPhone] = useState<string | null>(
+    null,
+  );
+
   const filteredProducts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return products.filter((product) => {
@@ -103,6 +118,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     change: number,
     extra?: {
       customerName?: string;
+      customerPhone?: string;
       dueDate?: string;
       printFormat?: "thermal" | "nota";
     },
@@ -122,10 +138,11 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         paymentAmount: paidAmount,
         receivedAmount: method === "CASH" ? paidAmount : undefined,
         customerName: extra?.customerName,
+        customerPhone: extra?.customerPhone,
         dueDate: extra?.dueDate,
       });
 
-      const receiptData = {
+      const receiptData: ReceiptData = {
         receiptNo: result.receipt_no,
         cashierName: user?.full_name ?? user?.email ?? null,
         customerName: extra?.customerName,
@@ -153,6 +170,12 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         printThermalReceipt(receiptData);
       }
 
+      // ── TAMBAHAN (013) ── Simpan struk + no. HP transaksi ini supaya tombol
+      // "Kirim WA" di layar sukses PaymentModal (dipanggil lewat onSendWhatsApp
+      // di bawah) tahu struk MANA yang harus dibagikan.
+      setLastReceipt(receiptData);
+      setLastCustomerPhone(extra?.customerPhone ?? null);
+
       setCart(clearCart());
       await refetch();
       return { paymentId: result.payment_id };
@@ -165,6 +188,21 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     } finally {
       setIsSavingTransaction(false);
     }
+  };
+
+  // ── TAMBAHAN (013) ── Dipanggil PaymentModal saat kasir menekan "Kirim
+  // Struk via WhatsApp" di layar sukses. Pakai lastReceipt/lastCustomerPhone
+  // dari state (bukan closure atas parameter handleConfirmPayment) karena
+  // tombolnya baru bisa diklik SETELAH createTransaction() di atas selesai —
+  // urutannya selalu: handleConfirmPayment selesai -> state ini terisi ->
+  // PaymentModal masuk isSuccess -> baru mungkin tombol ini ditekan.
+  const handleSendWhatsApp = async () => {
+    if (!lastReceipt) {
+      throw new Error(
+        "Data struk tidak ditemukan. Muat ulang halaman lalu coba lagi.",
+      );
+    }
+    return shareReceiptViaWhatsApp(lastReceipt, lastCustomerPhone);
   };
 
   // ── KOREKSI ── Sebelumnya di sini cuma cek `isLoading` (produk), sedangkan
@@ -502,6 +540,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
           (posSettings.printDefault as "thermal" | "nota") ?? "thermal"
         }
         onConfirmPayment={handleConfirmPayment}
+        onSendWhatsApp={handleSendWhatsApp}
       />
     </div>
   );

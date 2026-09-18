@@ -6,6 +6,89 @@
 
 ## Status terakhir diperbarui
 
+2026-09-18, sesi #9. **Menuntaskan poin 10 dari sesi #8**: tombol "Kirim WA"
+di layar Kasir setelah bayar (PRD §4.2/§4.7), yang sebelumnya sengaja TIDAK
+dikerjakan setengah-setengah karena butuh field nomor HP pelanggan dulu.
+Dengan ini **T-08 (Laporan) sekarang 100% selesai**, tiga checkbox-nya
+tercentang penuh — lihat "Task selesai" di bawah. Narasi detail sesi #8
+(termasuk 9 poin lain yang sudah lebih dulu selesai) diciutkan ke
+`<details>` di bawah, sama seperti pola T-07 di histori file ini.
+
+⚠️ **Sesi ini dikerjakan oleh agent TANPA akses ke database Supabase
+production maupun browser sungguhan** (lingkungan sandbox, sama seperti
+kendala sesi-sesi sebelumnya untuk pengujian browser). Artinya:
+migration baru **BARU FILE, BELUM DIEKSEKUSI** ke production, dan alur
+field HP + tombol Kirim WA **BELUM PERNAH DICOBA di browser sama sekali**
+oleh siapa pun (agent maupun pemilik project). Jangan anggap task ini
+benar-benar "selesai" dalam arti operasional sebelum kedua hal itu
+dilakukan — lihat "Yang HARUS dikonfirmasi" poin 7 & 8.
+
+Yang dikerjakan sesi ini:
+
+1. **`supabase/migrations/013_transaction_customer_phone.sql` — baru.**
+   `CREATE OR REPLACE FUNCTION create_transaction(...)` menambah parameter
+   `p_customer_phone text default null`, ditambahkan di **akhir** daftar
+   parameter (aman untuk `create or replace function` — tidak mengubah
+   urutan/tipe parameter lama, tidak mem-break pemanggil yang belum kirim
+   nilainya). Kolom `transactions.customer_phone` **sudah ada** sejak
+   migration `001` (dan sudah dibaca `getTransactionDetail()` untuk Riwayat
+   Transaksi) — migration ini murni menyambungkan RPC-nya, **tidak ada
+   perubahan skema tabel apa pun**. Isi logika lain di fungsi disalin persis
+   dari migration `009` (tidak ada perubahan logika lain yang tidak
+   disengaja). **BELUM DIEKSEKUSI ke production** — lihat peringatan di atas.
+2. **`lib/pos/transactionApi.ts`** — `CreateTransactionParams` dapat field
+   baru `customerPhone?: string` (opsional untuk SEMUA metode bayar, bukan
+   cuma TEMPO — sesuai PRD §4.2). `createTransaction()` mengirim
+   `p_customer_phone: params.customerPhone?.trim() || null` ke RPC.
+3. **`app/components/kasir/PaymentModal.tsx`**:
+   - Field baru "No. HP" (opsional): untuk CASH/TRANSFER/QRIS muncul sebagai
+     blok "Nama + No. HP" opsional (field Nama di sini BARU — sebelumnya
+     `customerName` cuma dikumpulkan untuk TEMPO); untuk TEMPO ditambahkan
+     sebagai field HP opsional di samping Nama (wajib) & Jatuh Tempo (wajib)
+     yang sudah ada.
+   - `onConfirmPayment` sekarang mengirim `customerPhone` ke parent lewat
+     parameter `extra`.
+   - **Layar sukses dirombak**: sebelumnya auto-tutup lewat `setTimeout`
+     (900ms, atau 2500ms kalau ada `proofWarning`) — **dihapus total**,
+     terlalu cepat untuk kasir sempat menekan apa pun, dan tidak sesuai PRD
+     §4.2 yang minta "kirim struk via WhatsApp" DAN "opsi transaksi baru"
+     sebagai dua aksi eksplisit. Sekarang layar sukses tetap terbuka sampai
+     kasir menekan salah satu dari 2 tombol baru: **"Kirim Struk via
+     WhatsApp"** (tampil hanya kalau parent memberi prop baru
+     `onSendWhatsApp`, dengan state sending/sent/error sendiri — gagal di
+     sini TIDAK ditampilkan seperti transaksi gagal, karena uang & stok
+     sudah tersimpan benar) dan **"Transaksi Baru"** (efeknya sama seperti
+     `onClose` lama).
+   - Modal ini **sengaja TIDAK** import `printLogic.ts` sendiri — parent
+     (KasirModule) yang tahu bentuk `ReceiptData` lengkap dan memanggil
+     `shareReceiptViaWhatsApp()`; PaymentModal cuma urus UI status tombol.
+4. **`app/components/kasir/KasirModule.tsx`**:
+   - Import `shareReceiptViaWhatsApp` + tipe `ReceiptData` dari
+     `printLogic.ts`.
+   - State baru `lastReceipt`/`lastCustomerPhone` — menyimpan struk
+     transaksi TERAKHIR yang sukses dibayar, karena tombol Kirim WA baru bisa
+     ditekan SETELAH `handleConfirmPayment` selesai (bukan closure atas
+     parameter fungsi itu).
+   - `handleConfirmPayment` meneruskan `customerPhone` ke `createTransaction()`
+     dan mengisi state di atas.
+   - Handler baru `handleSendWhatsApp()` — dipanggil `PaymentModal` lewat
+     `onSendWhatsApp`, memanggil `shareReceiptViaWhatsApp(lastReceipt,
+lastCustomerPhone)`.
+5. **Verifikasi kode** (bukan di database/browser — lihat peringatan di
+   atas): `npm install` (jaringan tersedia sesi ini), `tsc --noEmit` **penuh
+   satu project, bersih** untuk ke-4 file yang diubah (satu error pra-eksisting
+   tidak terkait, `app/layout.tsx:20` `LayoutProps` — butuh `next build`/`next
+dev` untuk generate types Next.js, tidak tersentuh sesi ini). `eslint`
+   khusus tiap file yang diubah: `transactionApi.ts` & `KasirModule.tsx`
+   bersih total (0 error/warning); `PaymentModal.tsx` ada 1 error,
+   **pra-eksisting** (`react-hooks/set-state-in-effect` di `useEffect` reset
+   form saat `isOpen` berubah — sudah tercatat di histori sesi #8 sebagai
+   bagian dari 13 error lint lama, cuma baris nomornya bergeser karena state
+   baru ditambah di atasnya).
+
+<details>
+<summary>Detail sesi #8 (T-08 Laporan, RLS <code>011</code>/<code>012</code> dikonfirmasi jalan) — diciutkan, T-08 sudah 100% selesai per sesi #9</summary>
+
 2026-09-18, sesi #8. **Sesi ini melanjutkan pekerjaan sesi sebelumnya yang
 terputus di tengah jalan** — saat sesi #8 mulai, kode `hooks/useReports.ts`,
 `app/components/laporan/LaporanModule.tsx`, migration `011_transactions_rls.sql`
@@ -93,23 +176,19 @@ build` (`next build`) **gagal, tapi HANYA karena sandbox agent sesi ini
    ~107, **pra-eksisting** — sudah tercatat juga di poin 4/"Yang HARUS
    dikonfirmasi" #2 sebagai bagian dari 13 error lama, tidak disentuh sesi
    ini).
-10. **BELUM disambungkan: tombol "Kirim WA" langsung di layar Kasir setelah
-    bayar** (PRD §4.2 "Setelah bayar: ... kirim struk via WhatsApp", §4.7).
-    Ini **BUKAN cuma soal nge-import fungsi** — dicek langsung ke
-    `PaymentModal.tsx`/`KasirModule.tsx`/`transactionApi.ts`: **tidak ada
-    input nomor HP pelanggan sama sekali di form pembayaran manapun**
-    (`customerName` cuma dikumpulkan untuk metode TEMPO, tidak ada field
-    telepon). Kolom `customer_phone` MEMANG sudah ada di tabel `transactions`
-    (migration `001`) dan sudah dibaca `getTransactionDetail()` — itu
-    sebabnya poin 9 di atas bisa langsung jalan untuk Riwayat Transaksi — tapi
-    `create_transaction` RPC dan `CreateTransactionParams`
-    (`transactionApi.ts`) **tidak pernah mengirim nilainya**, jadi kolom itu
-    SELALU `null` untuk transaksi baru. Menambah tombol "Kirim WA" di layar
-    sukses bayar tanpa nomor HP pelanggan cuma akan selalu jatuh ke fallback
-    "buka wa.me tanpa nomor" — teknisnya bisa, tapi tidak sesuai maksud PRD
-    ("kirim ke WhatsApp **pelanggan**"). Diputuskan TIDAK dikerjakan
-    setengah-setengah di sesi ini — lihat "Task berikutnya" untuk urutan yang
-    disarankan (field HP dulu, baru tombolnya).
+10. **Saat itu BELUM disambungkan: tombol "Kirim WA" langsung di layar Kasir
+    setelah bayar** (PRD §4.2 "Setelah bayar: ... kirim struk via WhatsApp",
+    §4.7). Alasan saat itu: **tidak ada input nomor HP pelanggan sama sekali
+    di form pembayaran manapun** (`customerName` cuma dikumpulkan untuk
+    metode TEMPO, tidak ada field telepon) — kolom `customer_phone` MEMANG
+    sudah ada di tabel `transactions` (migration `001`) dan sudah dibaca
+    `getTransactionDetail()`, tapi `create_transaction` RPC dan
+    `CreateTransactionParams` (`transactionApi.ts`) tidak pernah mengirim
+    nilainya. **✅ SUDAH DISELESAIKAN di sesi #9** — lihat entri sesi #9 di
+    atas (migration `013`, field HP di `PaymentModal.tsx`, tombol Kirim WA di
+    layar sukses `KasirModule.tsx`).
+
+</details>
 
 ## Task selesai
 
@@ -125,8 +204,11 @@ build` (`next build`) **gagal, tapi HANYA karena sandbox agent sesi ini
       semua user login aktif, tanpa policy insert/update langsung (semua
       tulisan tetap wajib lewat RPC). **Sudah dijalankan ke production.**
       Lihat "Yang HARUS dikonfirmasi" untuk status pengujian end-to-end-nya.
-- [~] **T-08 — Laporan** (PRD §17 Fase E, §4.5, §4.7) — **sebagian besar
-  selesai, TAPI belum 100%**, jangan dicentang penuh:
+- [x] **T-08 — Laporan** (PRD §17 Fase E, §4.5, §4.7) — **100% selesai
+      secara kode per sesi #9.** ⚠️ Beberapa bagian **belum pernah diuji di
+      browser sungguhan oleh siapa pun** (lihat "Yang HARUS dikonfirmasi" poin
+      6, 7, 8) — jangan baca centang ini sebagai "sudah terverifikasi jalan",
+      cuma "sudah lengkap ditulis & lolos type-check/lint":
   - [x] Sub-tab Harian/Bulanan, Per Shift, Piutang/Tempo (`hooks/useReports.ts`,
         `app/components/laporan/LaporanModule.tsx`), filter tanggal preset +
         custom, tandai lunas piutang lewat RPC `settle_receivable` (migration
@@ -140,11 +222,18 @@ build` (`next build`) **gagal, tapi HANYA karena sandbox agent sesi ini
         di `TransactionDetailModal.tsx` (Riwayat Transaksi). **Belum dicoba di
         browser sungguhan** (Web Share API maupun fallback `wa.me`) — lihat
         "Yang HARUS dikonfirmasi".
-  - [ ] **BELUM: tombol "Kirim WA" di layar Kasir setelah bayar** (PRD §4.2/§4.7).
-        Butuh field nomor HP pelanggan di `PaymentModal.tsx` dulu — kolom
-        `customer_phone` di database SELALU `null` untuk transaksi baru saat
-        ini karena `create_transaction` RPC tidak pernah menerima nilainya.
-        Detail lengkap di poin 10, bagian "Yang dikerjakan sesi ini" di atas.
+  - [x] **Tombol "Kirim WA" di layar Kasir setelah bayar** (PRD §4.2/§4.7) —
+        **selesai di sesi #9**. Field nomor HP pelanggan (opsional, semua
+        metode bayar) di `PaymentModal.tsx`, dialirkan lewat
+        `createTransaction()` → RPC `create_transaction` (migration
+        `013_transaction_customer_phone.sql`, parameter baru
+        `p_customer_phone`) → kolom `transactions.customer_phone`. Layar
+        sukses `PaymentModal.tsx` dirombak (auto-close dihapus) supaya ada
+        tombol eksplisit "Kirim Struk via WhatsApp" & "Transaksi Baru".
+        **Migration `013` BARU FILE, BELUM dieksekusi ke production — dan
+        alur ini belum pernah dicoba di browser sama sekali** — lihat "Yang
+        HARUS dikonfirmasi" poin 7 & 8, WAJIB dilakukan sebelum menganggap
+        fitur ini benar-benar jalan.
 
 ## Sedang dikerjakan
 
@@ -225,31 +314,76 @@ install`+`npm run lint` berhasil jalan penuh (sesi-sesi sebelumnya sering
      `null` (semua transaksi baru saat ini — lihat poin 10 di atas), pastikan
      fallback `wa.me` **tanpa** nomor (`https://wa.me/?text=...`) benar-benar
      membuka layar pilih kontak WhatsApp, bukan error/blank.
+7. **Jalankan migration `013_transaction_customer_phone.sql` ke Supabase
+   production** — sampai ini dijalankan, `create_transaction` RPC di
+   production masih versi lama (tanpa parameter `p_customer_phone`), dan
+   **transaksi baru dari layar Kasir akan GAGAL total** kalau frontend sesi
+   #9 di-deploy duluan tanpa migration ini (RPC lama tidak kenal parameter
+   `p_customer_phone` yang sekarang selalu dikirim `transactionApi.ts` —
+   Postgres/PostgREST akan menolak pemanggilan dengan parameter tak
+   dikenal). **Migration ini WAJIB dijalankan SEBELUM/BERSAMAAN deploy
+   frontend sesi #9**, bukan setelahnya.
+8. **Uji field No. HP + tombol "Kirim WA" di layar Kasir end-to-end di
+   browser sungguhan — BELUM PERNAH sama sekali** (sesi #9 dikerjakan tanpa
+   akses browser/database, lihat catatan di awal entri sesi #9):
+   - Isi No. HP pelanggan (opsional) untuk masing-masing dari 4 metode bayar,
+     selesaikan transaksi, pastikan kolom `customer_phone` di database
+     benar-benar terisi (bukan `null`) untuk transaksi BARU (beda dari
+     sebelumnya yang selalu `null`).
+   - Di layar sukses: coba tombol "Kirim Struk via WhatsApp" dari **HP**
+     (harus langsung masuk jalur Web Share) dan dari **desktop** (harus
+     jalur fallback unduh + buka tab `wa.me` dengan nomor pelanggan yang
+     baru diisi — bukan `wa.me/` kosong seperti kasus lama).
+   - Coba juga TANPA isi No. HP sama sekali — pastikan tombol tetap
+     berfungsi (fallback ke `wa.me/` tanpa nomor tujuan, sama seperti
+     perilaku tombol "Kirim WA" di Riwayat Transaksi yang sudah ada).
+   - Pastikan "Transaksi Baru" tetap menutup modal & mereset form seperti
+     perilaku lama (efeknya seharusnya sama, cuma sekarang dipicu klik
+     eksplisit, bukan `setTimeout`).
 
 ## Task berikutnya (disarankan)
 
 - **Jalankan checklist "Yang HARUS dikonfirmasi" di atas dulu** (build asli,
   end-to-end `/cek-struk` + Kasir/Riwayat/Dashboard + Laporan + Export/Kirim
-  WA yang baru) — sebaiknya sebelum menambah task baru lagi, supaya utang
-  verifikasi tidak menumpuk. Export & Kirim WA KHUSUSNYA belum pernah dicoba
-  sama sekali di browser sungguhan.
-- **Baru kalau mau menuntaskan T-08 100%** (bukan wajib fase 1, PRD §4.2/§4.7
-  menyebutnya tapi tidak eksplisit jadi Acceptance Criteria Kasir): tambah
-  field nomor HP pelanggan di `PaymentModal.tsx` (opsional, semua metode
-  bayar — bukan cuma TEMPO), alirkan ke `createTransaction()`
-  (`transactionApi.ts`) → `create_transaction` RPC (migration baru, tambah
-  parameter `p_customer_phone`) → kolom `customer_phone` yang sudah ada di
-  tabel `transactions`. Baru setelah itu tombol "Kirim WA" di layar sukses
-  bayar (`KasirModule.tsx`) benar-benar berguna — reuse
-  `shareReceiptViaWhatsApp()` yang sudah ada, sama seperti di
-  `TransactionDetailModal.tsx`.
-- Beres-beres lint pra-eksisting (13 error, salah satunya di
+  WA + field HP & Kirim WA di Kasir yang baru dari sesi #9, **DAN migration
+  `013` yang belum dieksekusi**) — sebaiknya sebelum menambah task baru lagi,
+  supaya utang verifikasi tidak menumpuk. **Poin 7 (jalankan migration 013)
+  KHUSUSNYA prioritas tertinggi** — tanpa itu, layar Kasir akan mulai gagal
+  transaksi begitu kode sesi #9 di-deploy.
+- **T-08 (Laporan) sekarang sudah 100% selesai secara kode** (lihat "Task
+  selesai") — task besar berikutnya sesuai urutan PRD §17 adalah **T-09
+  (Sampah + Log Aktivitas, Fase F)**: soft-delete/restore untuk
+  produk/kategori (kolom `deleted_at` sudah dipakai di beberapa tabel, lihat
+  `products` — cek dulu tabel mana saja yang sudah punya kolom ini sebelum
+  asumsi perlu migration baru) + halaman Sampah untuk restore, dan
+  Log Aktivitas mencatat aksi-aksi sensitif (void, retur, opname stok, ubah
+  harga, dll — PRD tidak merinci daftar lengkap aksi yang wajib dicatat,
+  perlu ditentukan/dikonfirmasi dulu sebelum implementasi). Setelah T-09,
+  urutan PRD §17 lanjut ke **T-10 (Pengaturan Admin: user/role/permission +
+  UI Pengaturan)**.
+- Beres-beres lint pra-eksisting (13 error dari sesi #8, salah satunya di
   `TransactionDetailModal.tsx` — sudah tercatat sejak poin 4/"Yang HARUS
-  dikonfirmasi" #2, TIDAK bertambah karena perubahan poin 9 di atas) — bukan
-  blocker, tapi bikin `npm run lint` tidak bisa dipakai sebagai sinyal "ada
-  regresi baru" selama masih penuh dengan error lama yang bercampur.
+  dikonfirmasi" #2 di histori sesi #8, TIDAK bertambah karena perubahan sesi
+  #9; 1 error TAMBAHAN pra-eksisting juga ada di `PaymentModal.tsx` per
+  sesi #9 — lihat poin 5 di entri sesi #9) — bukan blocker, tapi bikin
+  `npm run lint` tidak bisa dipakai sebagai sinyal "ada regresi baru" selama
+  masih penuh dengan error lama yang bercampur.
 
 ## Catatan penting untuk sesi berikutnya
+
+**File yang dibuat/diubah sesi #9:**
+
+- `supabase/migrations/013_transaction_customer_phone.sql` — **baru**.
+  Parameter `p_customer_phone` di RPC `create_transaction` (lihat poin 1,
+  entri sesi #9 di atas). **BELUM DIEKSEKUSI ke production.**
+- `lib/pos/transactionApi.ts` — `CreateTransactionParams.customerPhone` +
+  dikirim sebagai `p_customer_phone` ke RPC (lihat poin 2).
+- `app/components/kasir/PaymentModal.tsx` — field No. HP opsional (semua
+  metode), layar sukses dirombak dengan tombol "Kirim Struk via WhatsApp" +
+  "Transaksi Baru" menggantikan auto-close `setTimeout` (lihat poin 3).
+- `app/components/kasir/KasirModule.tsx` — state `lastReceipt`/
+  `lastCustomerPhone`, handler `handleSendWhatsApp()`, prop `onSendWhatsApp`
+  ke `PaymentModal` (lihat poin 4).
 
 **File yang dibuat/diubah sesi #8:**
 
