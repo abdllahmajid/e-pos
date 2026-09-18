@@ -6,6 +6,78 @@
 
 ## Status terakhir diperbarui
 
+2026-09-18, sesi #11. **Bug fix: halaman Log Aktivitas tampil kosong untuk
+akun supervisor walau void/retur sudah kejadian dan tersimpan di database.**
+Root cause: **file migration `015` yang menurut catatan sesi #10 "sudah
+dibuat" ternyata TIDAK ADA di repo/zip yang diserahkan ke sesi ini** — cuma
+disebut di `PROGRESS.md`, isinya sendiri hilang (kemungkinan tidak sempat
+di-commit/di-export sebelum sesi #10 terputus). Akibatnya RLS
+`activity_logs` di database production **masih versi migration `014`
+(select admin-only)**, padahal `LogAktivitasModule.tsx` (juga dibuat sesi
+#10) sudah mengizinkan **admin+supervisor** membuka halamannya di sisi
+frontend. Kombinasi ini membuat: akun supervisor bisa MEMBUKA halaman
+(gate frontend lolos), tapi query `activity_logs` pulang 0 baris (RLS
+database menolak diam-diam, sesuai desain `useActivityLogs.ts` yang memang
+"kalau non-admin, hasilnya array kosong, bukan bocor error") — makanya
+gejalanya "kosong tanpa pesan error", bukan crash.
+
+Dikonfirmasi lewat data: transaksi void yang dicoba pemilik project
+**sudah tercatat benar** di `activity_logs` sejak awal (dicek pemilik
+project langsung via SQL Editor, RLS Supabase SQL Editor bypass RLS) — jadi
+RPC `void_transaction` (migration 014) sama sekali tidak bermasalah, murni
+soal siapa yang boleh MEMBACA baris yang sudah benar tersimpan itu.
+
+**Perbaikan:** file migration `015_trash_supervisor_access.sql` dibuat
+ulang (isi disusun ulang dari deskripsi di `PROGRESS.md` sesi #10 — RLS
+`activity_logs` select admin+supervisor, plus 4 RPC Sampah
+`soft_delete_product`/`restore_product`/`soft_delete_transaction`/
+`restore_transaction` role check dilonggarkan dari `<> 'admin'` menjadi
+`not in ('admin', 'supervisor')`, isi lain disalin persis dari migration
+014). **Sudah dijalankan ke production oleh pemilik project sendiri langsung
+dari SQL Editor** (bukan cuma file lagi kali ini) — **dikonfirmasi lewat
+pengujian langsung di browser**: akun supervisor buka halaman Log
+Aktivitas, entri `void_transaction` yang tadi kosong sekarang muncul.
+
+⚠️ Sesi ini **tetap dikerjakan tanpa akses langsung ke database/browser** di
+sisi agent (sandbox) — semua verifikasi "migration sudah jalan" dan "UI
+sudah benar" di atas didapat dari **pemilik project yang menjalankan sendiri
+query & pengujian**, bukan dari agent. Polanya sama seperti sesi-sesi
+sebelumnya, dicatat di sini supaya jelas siapa yang sudah memverifikasi apa.
+
+**Masih belum diketahui: status migration `013`** (field No. HP kasir, dari
+sesi #9) — sudah dibuatkan query pengecekan
+(`scripts/check_migrations_013_014_015.sql`, ikut dibuat sesi ini) tapi
+pemilik project baru share hasil untuk bagian `activity_logs`-nya saja,
+belum hasil kolom `status` untuk ketiga migration termasuk 013. **JANGAN
+anggap migration 013 sudah jalan hanya karena 014/015 terbukti jalan** —
+cek dulu pakai script itu di awal sesi berikutnya, lihat "Yang HARUS
+dikonfirmasi" poin 7 (masih berlaku, belum tertutup).
+
+Yang dikerjakan sesi ini:
+
+1. **`supabase/migrations/015_trash_supervisor_access.sql` — dibuat ulang**
+   (file hilang dari repo, lihat root cause di atas). Isi: `drop
+policy`/`create policy activity_logs_select_admin_supervisor` (select
+   admin+supervisor, menggantikan `activity_logs_select_admin` dari migration
+   014), dan `create or replace function` untuk 4 RPC Sampah dengan baris
+   cek role diubah jadi `not in ('admin', 'supervisor')`, isi lain identik
+   migration 014. **Sudah dieksekusi ke production** (dikonfirmasi pemilik
+   project) dan **sudah diverifikasi lewat pengujian browser** (lihat di
+   atas) — beda dari kebanyakan migration sesi-sesi sebelumnya yang biasanya
+   berhenti di "baru file, belum dieksekusi".
+2. **`scripts/check_migrations_013_014_015.sql` — baru.** Query read-only
+   untuk SQL Editor: cek apakah migration 013/014/015 sudah benar-benar
+   berlaku di database (bukan cuma ada sebagai file), plus tampilkan isi
+   `activity_logs` terbaru sebagai bukti data tersimpan. Berguna untuk
+   sesi-sesi berikutnya supaya tidak perlu tebak-tebak status migration
+   lagi — tinggal jalankan.
+3. Tidak ada perubahan kode frontend sesi ini — `LogAktivitasModule.tsx`,
+   `Sidebar.tsx`, `page.tsx` dari sesi #10 semuanya sudah benar dari awal,
+   murni migration database yang menyusul.
+
+<details>
+<summary>Detail sesi #10 (keputusan akses Sampah/Log Aktivitas admin+supervisor; migration <code>015</code> awal, filenya sempat hilang — lihat root cause sesi #11 di atas) — diciutkan</summary>
+
 2026-09-18, sesi #10. **Menuntaskan keputusan akses Sampah/Log Aktivitas**
 yang sempat menggantung dari sesi sebelumnya (sesi ini melanjutkan
 percakapan yang terputus tepat di titik menunggu konfirmasi pemilik
@@ -23,6 +95,11 @@ maupun browser sungguhan** (sandbox, sama seperti sesi #9). Migration `015`
 besar **JUGA MASIH BELUM DIEKSEKUSI** (tidak ada indikasi lain di riwayat
 project), jadi ada 2 migration menumpuk yang wajib dijalankan sebelum deploy
 frontend terbaru. Lihat "Yang HARUS dikonfirmasi" poin 7 & 9.
+
+⚠️ **Catatan tambahan dari sesi #11**: migration `015` yang disebut "baru
+file" di paragraf di atas ternyata **filenya hilang sebelum sempat sampai
+ke sesi #11** — cuma deskripsinya yang tersisa di catatan sesi ini. Sudah
+dibuat ulang & dieksekusi di sesi #11, lihat entri sesi #11 di atas.
 
 Yang dikerjakan sesi ini:
 
