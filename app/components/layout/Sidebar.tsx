@@ -19,6 +19,7 @@ import {
   Boxes,
   TrendingUp,
   Trash2,
+  ClipboardList,
   type LucideIcon,
 } from "lucide-react";
 
@@ -71,16 +72,21 @@ const MENU_GROUPS: SidebarMenuGroup[] = [
   },
   {
     // ── TAMBAHAN (T-09) ── Grup "Lainnya" sesuai penamaan persis di PRD §4.1
-    // & §298 (bukan "Administrasi"/dsb.). Baru berisi "Sampah" — "Log
-    // Aktivitas" (item lain di grup yang sama menurut PRD) menyusul begitu
-    // modulnya jadi, BUKAN ditambah di sini lebih dulu (lihat komentar
-    // header file: jangan render menu ke modul kosong).
+    // & §298 (bukan "Administrasi"/dsb.). "Log Aktivitas" ditambahkan
+    // menyusul setelah LogAktivitasModule.tsx jadi (lihat komentar header
+    // file: jangan render menu ke modul kosong — sebelumnya cuma "Sampah").
     //
-    // Sampah admin-only (PRD §5 baris `trash`) — mengikuti pola menu
-    // "Laporan": menu tetap tampil ke semua role, yang menahan akses justru
-    // layar blokir di dalam SampahModule.tsx sendiri.
+    // Kedua menu di grup ini admin+supervisor (bukan admin-only seperti PRD
+    // §5 asli — keputusan sadar pemilik project, migration 015; lihat
+    // komentar header migration itu). Menu tetap tampil ke semua role,
+    // sama seperti pola grup "Laporan" — yang menahan akses justru layar
+    // blokir di dalam masing-masing modul (SampahModule.tsx /
+    // LogAktivitasModule.tsx sendiri).
     label: "Lainnya",
-    items: [{ key: "sampah", label: "Sampah", icon: Trash2 }],
+    items: [
+      { key: "sampah", label: "Sampah", icon: Trash2 },
+      { key: "log-aktivitas", label: "Log Aktivitas", icon: ClipboardList },
+    ],
   },
 ];
 
