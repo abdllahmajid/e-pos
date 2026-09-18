@@ -2,12 +2,16 @@
 
 // app/components/sampah/SampahModule.tsx
 // ── TAMBAHAN ── Modul Sampah (PRD §17 T-09, §4.1 menu LAINNYA → "Sampah").
-// Admin only (PRD §5 baris `trash`: view/delete cuma ✔ di kolom Admin) — halaman
-// ini SENGAJA tidak menyembunyikan diri sendiri kalau bukan admin (itu tanggung
-// jawab routing di app/page.tsx & Sidebar, sama seperti modul lain di project
-// ini), tapi setiap aksi Pulihkan tetap aman kalau nekat diakses non-admin:
-// RPC `restore_product`/`restore_transaction` (migration 014) menolak dari sisi
-// database, errornya ditampilkan apa adanya lewat state `actionError` di bawah.
+// Admin+supervisor (PRD §5 baris `trash` aslinya cuma ✔ di kolom Admin —
+// dilonggarkan ke supervisor lewat keputusan sadar pemilik project, migration
+// 015; lihat komentar header migration itu untuk alasan & konsekuensinya)
+// — halaman ini SENGAJA tidak menyembunyikan diri sendiri kalau bukan
+// admin/supervisor (itu tanggung jawab routing di app/page.tsx & Sidebar,
+// sama seperti modul lain di project ini), tapi setiap aksi Pulihkan tetap
+// aman kalau nekat diakses role lain: RPC `restore_product`/
+// `restore_transaction` (migration 014, diperbarui migration 015) menolak
+// dari sisi database, errornya ditampilkan apa adanya lewat state
+// `actionError` di bawah.
 //
 // Tab "Produk" & "Transaksi" — pola sama dengan tab internal di
 // ProdukModule.tsx (Daftar Produk/Kategori) & TransactionHistoryModule.tsx
@@ -49,7 +53,10 @@ const STATUS_LABEL: Record<TrashedTransaction["status"], string> = {
 
 export default function SampahModule() {
   const { user, isLoading: isAuthLoading } = useAuth();
-  const isAdmin = user?.role === "admin";
+  // ── PERUBAHAN (migration 015) ── admin+supervisor, sebelumnya admin only.
+  // Keputusan sadar pemilik project, menyimpang dari matriks PRD §5 asli —
+  // lihat komentar header migration 015 untuk detail & konsekuensinya.
+  const canAccessTrash = user?.role === "admin" || user?.role === "supervisor";
 
   const {
     products,
@@ -114,7 +121,7 @@ export default function SampahModule() {
   // Rules of Hooks.
   //
   // ── PERBAIKAN ── Selama `isAuthLoading` masih true, dulu kode ini jatuh
-  // ke `return` konten utama di bawah (kondisi `!isAuthLoading && !isAdmin`
+  // ke `return` konten utama di bawah (kondisi `!isAuthLoading && !canAccessTrash`
   // otomatis false saat isAuthLoading true) — jadi header+tab+tabel sempat
   // dirender dulu, baru begitu auth selesai dimuat & ternyata bukan admin,
   // seluruh halaman diganti jadi layar blokir. Itu penyebab "kedipan" yang
@@ -131,7 +138,7 @@ export default function SampahModule() {
     );
   }
 
-  if (!isAdmin) {
+  if (!canAccessTrash) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-zinc-100 p-6 text-center dark:bg-zinc-950">
         <div className="mb-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
@@ -139,8 +146,8 @@ export default function SampahModule() {
         </div>
         <h3 className="text-sm font-semibold">Akses Ditolak</h3>
         <p className="mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-          Modul Sampah hanya untuk admin. Hubungi admin kalau ada produk atau
-          transaksi yang perlu dipulihkan.
+          Modul Sampah hanya untuk admin dan supervisor. Hubungi admin kalau ada
+          produk atau transaksi yang perlu dipulihkan.
         </p>
       </div>
     );

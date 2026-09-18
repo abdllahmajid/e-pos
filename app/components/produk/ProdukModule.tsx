@@ -65,10 +65,15 @@ function parseNumber(value: string) {
 }
 
 export default function ProdukModule() {
-  // Tombol Hapus (T-09) hanya untuk admin — sesuai matriks permission PRD §5
-  // (baris `produk`: delete cuma ✔ di kolom Admin, Supervisor cuma view/edit).
+  // Tombol Hapus (T-09) untuk admin+supervisor — PRD §5 asli menulis delete
+  // cuma ✔ di kolom Admin, tapi dilonggarkan ke supervisor lewat keputusan
+  // sadar pemilik project (migration 015, konsisten dengan RPC
+  // `soft_delete_product` yang juga sudah dilonggarkan di sana — tombol ini
+  // disamakan supaya tidak ada tombol yang sengaja disembunyikan padahal
+  // backend-nya sudah mengizinkan).
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const canDeleteProduct =
+    user?.role === "admin" || user?.role === "supervisor";
 
   const { products, isLoading, error, refetch } = useProducts();
 
@@ -521,8 +526,8 @@ export default function ProdukModule() {
                                   Edit
                                 </button>
 
-                                {/* Hapus (T-09): admin only, sesuai PRD §5 baris `produk` — Supervisor cuma view/edit. */}
-                                {isAdmin && (
+                                {/* Hapus (T-09): admin+supervisor sejak migration 015 (lihat komentar di atas). */}
+                                {canDeleteProduct && (
                                   <button
                                     type="button"
                                     onClick={() => openDeleteConfirm(product)}

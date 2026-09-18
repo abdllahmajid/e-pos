@@ -6,6 +6,67 @@
 
 ## Status terakhir diperbarui
 
+2026-09-18, sesi #10. **Menuntaskan keputusan akses Sampah/Log Aktivitas**
+yang sempat menggantung dari sesi sebelumnya (sesi ini melanjutkan
+percakapan yang terputus tepat di titik menunggu konfirmasi pemilik
+project). Keputusan **final, dikonfirmasi langsung pemilik project**: menu
+Sampah & (nanti) Log Aktivitas dibuka untuk **admin+supervisor**, bukan
+admin-only seperti tertulis di PRD §5 asli — sengaja menyimpang, alasan &
+konsekuensi keamanannya dicatat di komentar header migration `015` (RPC
+`soft_delete_product`/`restore_product`/`soft_delete_transaction`/
+`restore_transaction` satu fungsi dipakai untuk hapus DAN pulih, jadi
+melonggarkan restore otomatis melonggarkan delete juga).
+
+⚠️ **Sesi ini JUGA dikerjakan TANPA akses ke database Supabase production
+maupun browser sungguhan** (sandbox, sama seperti sesi #9). Migration `015`
+**BARU FILE, BELUM DIEKSEKUSI** — dan migration `013` dari sesi #9 kemungkinan
+besar **JUGA MASIH BELUM DIEKSEKUSI** (tidak ada indikasi lain di riwayat
+project), jadi ada 2 migration menumpuk yang wajib dijalankan sebelum deploy
+frontend terbaru. Lihat "Yang HARUS dikonfirmasi" poin 7 & 9.
+
+Yang dikerjakan sesi ini:
+
+1. **`supabase/migrations/015_trash_supervisor_access.sql` — baru.**
+   `CREATE OR REPLACE FUNCTION` untuk ke-4 RPC migration `014`, isi lain
+   disalin persis, HANYA baris cek role yang berubah dari `<> 'admin'`
+   menjadi `not in ('admin', 'supervisor')`. Ditambah RLS `activity_logs`:
+   drop policy `activity_logs_select_admin`, buat
+   `activity_logs_select_admin_supervisor` (select admin+supervisor). Insert/
+   update/delete `activity_logs` TETAP tanpa policy sama sekali (tidak
+   berubah dari migration 014) — semua tulisan tetap wajib lewat RPC
+   `security definer`. RPC `void_transaction`/`return_transaction`/
+   `adjust_stock` TIDAK disentuh (sudah admin+supervisor sejak awal).
+2. **`app/components/sampah/SampahModule.tsx`** — `isAdmin` diganti
+   `canAccessTrash` (`admin || supervisor`), dipakai di gate layar blokir.
+   Pesan "Akses Ditolak" & komentar header disesuaikan.
+3. **`app/components/produk/ProdukModule.tsx`** — tombol "Hapus" produk:
+   `isAdmin` diganti `canDeleteProduct` (`admin || supervisor`), konsisten
+   dengan RPC `soft_delete_product` yang sudah dilonggarkan di poin 1
+   (supaya tidak ada tombol yang sengaja disembunyikan padahal backend sudah
+   mengizinkan).
+4. Verifikasi kode (bukan di database/browser — lihat peringatan di atas):
+   `npm install` (jaringan tersedia), `tsc --noEmit` **penuh satu project,
+   bersih** untuk ke-2 file yang diubah (satu error pra-eksisting tidak
+   terkait, sama seperti sesi #8/#9: `app/layout.tsx:20` `LayoutProps`).
+   `eslint` khusus 2 file yang diubah: **0 error**, 2 warning
+   `no-img-element` (satu di antaranya, `SampahModule.tsx:270`, BARU
+   ketahuan sesi ini karena file ini belum ada saat lint penuh terakhir di
+   sesi #8 — bukan disebabkan perubahan role sesi ini, letaknya di elemen
+   `<img>` foto produk di daftar Sampah, tidak tersentuh sesi ini sama
+   sekali; warning satunya di `ProdukModule.tsx:441` sudah pra-eksisting
+   sejak sesi #8).
+5. **Belum dikerjakan (di luar scope keputusan yang diminta sesi ini)**:
+   UI Log Aktivitas (`LogAktivitasModule.tsx`) sendiri belum dibuat — baru
+   RLS-nya yang disiapkan (poin 1) supaya sudah konsisten begitu modulnya
+   dibangun. Perbaikan blink `LaporanModule.tsx` (`!isAuthLoading &&
+!canViewReports` tanpa layar Memuat terpisah, pola sama seperti bug yang
+   diperbaiki di `SampahModule.tsx` sesi sebelumnya) **juga belum
+   dikerjakan** — sempat ditawarkan agent sebelum sesi ini terputus, belum
+   dikonfirmasi pemilik project, jangan dikerjakan asal tanpa tanya dulu.
+
+<details>
+<summary>Detail sesi #9 (T-08 100% selesai — field No. HP + Kirim WA Kasir) — diciutkan</summary>
+
 2026-09-18, sesi #9. **Menuntaskan poin 10 dari sesi #8**: tombol "Kirim WA"
 di layar Kasir setelah bayar (PRD §4.2/§4.7), yang sebelumnya sengaja TIDAK
 dikerjakan setengah-setengah karena butuh field nomor HP pelanggan dulu.
