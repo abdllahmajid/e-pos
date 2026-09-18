@@ -21,6 +21,7 @@ import {
   Phone,
   StickyNote,
   ChevronDown,
+  MessageCircle,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings"; // ── TAMBAHAN ── Untuk mendapatkan paperNota setting
@@ -30,7 +31,12 @@ import {
   voidTransaction,
   type TransactionDetail,
 } from "@/lib/pos/transactionApi";
-import { printThermalReceipt, printA6Nota } from "@/lib/pos/printLogic";
+import {
+  printThermalReceipt,
+  printA6Nota,
+  shareReceiptViaWhatsApp,
+  type ReceiptData,
+} from "@/lib/pos/printLogic";
 import { formatRupiah } from "@/lib/pos/cartLogic";
 
 type PanelMode = "detail" | "retur" | "void";
@@ -86,6 +92,12 @@ export default function TransactionDetailModal({
 
   const [isPrintDropdownOpen, setIsPrintDropdownOpen] = useState(false);
 
+  // ── TAMBAHAN (T-08 lanjutan) ── Kirim struk digital ke WhatsApp pelanggan.
+  // State terpisah dari `isSubmitting` (dipakai retur/void) — supaya klik
+  // "Kirim WA" tidak ikut menonaktifkan tombol Retur/Void atau sebaliknya,
+  // keduanya independen.
+  const [isSharingWa, setIsSharingWa] = useState(false);
+
   const isOpen = Boolean(transactionId);
 
   useEffect(() => {
@@ -128,40 +140,91 @@ export default function TransactionDetailModal({
   const remainingQty = (itemId: string, qty: number, returned: number) =>
     qty - returned;
 
-  function handleReprint(format: "thermal" | "nota") {
-    if (!detail) return;
-    setIsPrintDropdownOpen(false);
+  // ── KOREKSI (T-08 lanjutan) ── Dipisah dari handleReprint() supaya bisa
+  // dipakai ulang oleh handleShareWhatsApp() — sebelumnya object ini dibangun
+  // inline di dalam handleReprint, sekarang jadi satu sumber kebenaran untuk
+  // "apa isi struk transaksi ini", dipakai baik untuk cetak ulang maupun
+  // kirim gambar ke WhatsApp.
+  function buildReceiptData(txDetail: TransactionDetail): ReceiptData {
+    const primaryPayment = txDetail.payments[0];
 
-    const primaryPayment = detail.payments[0];
-
-    const printData = {
-      receiptNo: detail.receipt_no,
-      createdAt: detail.created_at,
-      cashierName: detail.cashier_name,
-      customerName: detail.customer_name,
-      items: detail.items.map((item) => ({
+    return {
+      receiptNo: txDetail.receipt_no,
+      createdAt: txDetail.created_at,
+      cashierName: txDetail.cashier_name,
+      customerName: txDetail.customer_name,
+      items: txDetail.items.map((item) => ({
         name: item.product_name,
         qty: item.qty,
         price: item.unit_price,
         subtotal: item.subtotal,
       })),
-      subtotal: detail.subtotal,
-      discount: detail.discount,
-      tax: detail.tax,
-      total: detail.total,
+      subtotal: txDetail.subtotal,
+      discount: txDetail.discount,
+      tax: txDetail.tax,
+      total: txDetail.total,
       method: primaryPayment?.method ?? "-",
       paidAmount:
         primaryPayment?.received_amount ??
         primaryPayment?.amount ??
-        detail.total,
+        txDetail.total,
       changeAmount: primaryPayment?.change_amount ?? 0,
       isReprint: true,
     };
+  }
+
+  function handleReprint(format: "thermal" | "nota") {
+    if (!detail) return;
+    setIsPrintDropdownOpen(false);
+
+    const printData = buildReceiptData(detail);
 
     if (format === "nota") {
       printA6Nota(printData, (posSettings.paperNota as "A6" | "A5") ?? "A6");
     } else {
       printThermalReceipt(printData);
+    }
+  }
+
+  // ── TAMBAHAN (T-08 lanjutan) ── Kirim struk digital (gambar JPEG) ke
+  // WhatsApp pelanggan, reuse `shareReceiptViaWhatsApp()` (lib/pos/printLogic.ts).
+  // `detail.customer_phone` dipakai apa adanya (bisa `null` kalau pelanggan
+  // tidak isi no. HP saat transaksi) — `shareReceiptViaWhatsApp()` sendiri
+  // sudah menangani kasus itu (fallback `wa.me` TANPA nomor tujuan, membuka
+  // layar pilih kontak manual, bukan gagal total).
+  async function handleShareWhatsApp() {
+    if (!detail) return;
+    setIsPrintDropdownOpen(false);
+    setActionError(null);
+    setActionSuccess(null);
+    setIsSharingWa(true);
+
+    try {
+      const printData = buildReceiptData(detail);
+      const result = await shareReceiptViaWhatsApp(
+        printData,
+        detail.customer_phone,
+      );
+
+      setActionSuccess(
+        result.method === "web-share"
+          ? "Gambar struk dikirim — pilih WhatsApp di jendela share yang terbuka."
+          : "Gambar struk sudah diunduh & WhatsApp dibuka di tab baru — lampirkan gambarnya secara manual (browser ini tidak mendukung lampiran otomatis).",
+      );
+    } catch (err) {
+      // `navigator.share()` melempar `AbortError` kalau pengguna membatalkan
+      // sheet share (mis. tekan "Batal") — itu BUKAN kegagalan, jangan
+      // ditampilkan sebagai error supaya kasir tidak salah kira ada masalah.
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : "Gagal membuat/mengirim gambar struk.",
+      );
+    } finally {
+      setIsSharingWa(false);
     }
   }
 
@@ -611,6 +674,22 @@ export default function TransactionDetailModal({
                 </div>
               )}
             </div>
+
+            {/* ── TAMBAHAN (T-08 lanjutan) ── Kirim struk digital ke WhatsApp.
+                Tombol tetap aktif walau `detail.customer_phone` kosong —
+                lihat catatan di handleShareWhatsApp(). */}
+            <button
+              onClick={handleShareWhatsApp}
+              disabled={isSharingWa}
+              className="flex-1 min-w-32 flex items-center justify-center gap-2 py-2.5 rounded-md border border-lco-teal/50 bg-white dark:bg-zinc-950 text-lco-teal hover:bg-lco-teal/10 text-xs font-semibold transition-colors duration-150 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isSharingWa ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <MessageCircle className="w-4 h-4" />
+              )}
+              Kirim WA
+            </button>
 
             {canManage && canStillAct && (
               <>

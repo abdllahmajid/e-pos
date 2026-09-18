@@ -63,6 +63,53 @@ build` (`next build`) **gagal, tapi HANYA karena sandbox agent sesi ini
    error baru ke 13 error lint pra-eksisting yang sudah dicatat di poin 4.
    **Belum dicoba di browser sungguhan** (unduh Excel/PDF asli belum
    diverifikasi manual oleh siapa pun) — lihat "Yang HARUS dikonfirmasi".
+8. **`lib/pos/printLogic.ts` — ditambah `generateReceiptImage()` dan
+   `shareReceiptViaWhatsApp()`.** Pola sama seperti `exportReportToPdf()` di
+   poin 5 (snapshot elemen DOM lewat `html-to-image`, elemen ditempel
+   off-screen — `position: fixed; left: -9999px`, BUKAN `display: none`,
+   supaya tetap punya ukuran layout untuk di-snapshot — bukan dibuat
+   `display: none`), tapi outputnya JPEG (bukan PNG) dari template struk baru
+   yang dibangun manual (bukan reuse `printThermalReceipt`/`printA6Nota` —
+   dua fungsi itu menulis ke iframe lalu `window.print()`, hasilnya kertas
+   fisik bukan file). `shareReceiptViaWhatsApp()` coba **Web Share API**
+   (`navigator.share` dengan `files`) dulu supaya gambar terlampir langsung
+   di HP; kalau tidak didukung (umumnya desktop), **fallback**: unduh JPEG
+   otomatis + buka `wa.me` dengan teks siap-kirim (nomor pelanggan disanitasi
+   ke format `62xxx`) — kasir lampirkan gambarnya manual, karena `wa.me`
+   TIDAK punya parameter attachment file (keterbatasan resmi WhatsApp, bukan
+   bug). `tsc --noEmit` & `npx eslint` khusus file ini bersih.
+9. **`app/components/transaksi/TransactionDetailModal.tsx` — tombol "Kirim
+   WA" baru**, ditaruh sebelah dropdown "Cetak Ulang" di footer modal detail
+   transaksi (Riwayat Transaksi). Manggil `shareReceiptViaWhatsApp()` dari
+   poin 8, pakai `detail.customer_phone` yang SUDAH ada dari
+   `getTransactionDetail()` (`transactionApi.ts`, tidak perlu perubahan
+   backend). Tombol tetap aktif walau `customer_phone` kosong (transaksi lama
+   yang pelanggannya tidak isi no. HP) — fallback `wa.me` tanpa nomor tujuan
+   membuka layar pilih kontak manual, bukan gagal/disembunyikan.
+   `handleReprint()` di-refactor sedikit (object struk dipisah ke
+   `buildReceiptData()`) supaya dipakai ulang oleh handler WA baru, tanpa
+   duplikasi. `tsc --noEmit` & `npx eslint` khusus file ini bersih (1 error
+   lint yang muncul, `react-hooks/set-state-in-effect` di `useEffect` baris
+   ~107, **pra-eksisting** — sudah tercatat juga di poin 4/"Yang HARUS
+   dikonfirmasi" #2 sebagai bagian dari 13 error lama, tidak disentuh sesi
+   ini).
+10. **BELUM disambungkan: tombol "Kirim WA" langsung di layar Kasir setelah
+    bayar** (PRD §4.2 "Setelah bayar: ... kirim struk via WhatsApp", §4.7).
+    Ini **BUKAN cuma soal nge-import fungsi** — dicek langsung ke
+    `PaymentModal.tsx`/`KasirModule.tsx`/`transactionApi.ts`: **tidak ada
+    input nomor HP pelanggan sama sekali di form pembayaran manapun**
+    (`customerName` cuma dikumpulkan untuk metode TEMPO, tidak ada field
+    telepon). Kolom `customer_phone` MEMANG sudah ada di tabel `transactions`
+    (migration `001`) dan sudah dibaca `getTransactionDetail()` — itu
+    sebabnya poin 9 di atas bisa langsung jalan untuk Riwayat Transaksi — tapi
+    `create_transaction` RPC dan `CreateTransactionParams`
+    (`transactionApi.ts`) **tidak pernah mengirim nilainya**, jadi kolom itu
+    SELALU `null` untuk transaksi baru. Menambah tombol "Kirim WA" di layar
+    sukses bayar tanpa nomor HP pelanggan cuma akan selalu jatuh ke fallback
+    "buka wa.me tanpa nomor" — teknisnya bisa, tapi tidak sesuai maksud PRD
+    ("kirim ke WhatsApp **pelanggan**"). Diputuskan TIDAK dikerjakan
+    setengah-setengah di sesi ini — lihat "Task berikutnya" untuk urutan yang
+    disarankan (field HP dulu, baru tombolnya).
 
 ## Task selesai
 
@@ -84,13 +131,20 @@ build` (`next build`) **gagal, tapi HANYA karena sandbox agent sesi ini
         `app/components/laporan/LaporanModule.tsx`), filter tanggal preset +
         custom, tandai lunas piutang lewat RPC `settle_receivable` (migration
         `012_receivables_settlement.sql`), menu Sidebar + routing `page.tsx`.
-  - [ ] **Export Excel & PDF — BELUM dikerjakan.** Tombol "Export" di
-        `LaporanModule.tsx` sengaja `disabled` (placeholder), file
-        `lib/pos/reportExport.ts` yang disebut di komentar header
-        `LaporanModule.tsx` **belum ada sama sekali**. Dependensi (`xlsx`,
-        `jspdf`, `html-to-image`) sudah ada di `package.json`.
-  - [ ] **`generateReceiptImage()` untuk share WA — BELUM dikerjakan.** Tidak
-        ada di `lib/pos/printLogic.ts` saat ini.
+  - [x] **Export Excel & PDF** — `lib/pos/reportExport.ts` (`exportReportToExcel`/
+        `exportReportToPdf`) sudah dibuat dan tersambung ke dropdown "Export"
+        di `LaporanModule.tsx`. **Belum dicoba di browser sungguhan** (lihat
+        "Yang HARUS dikonfirmasi").
+  - [x] **`generateReceiptImage()` + `shareReceiptViaWhatsApp()`** — sudah ada
+        di `lib/pos/printLogic.ts`, dan sudah tersambung ke tombol "Kirim WA"
+        di `TransactionDetailModal.tsx` (Riwayat Transaksi). **Belum dicoba di
+        browser sungguhan** (Web Share API maupun fallback `wa.me`) — lihat
+        "Yang HARUS dikonfirmasi".
+  - [ ] **BELUM: tombol "Kirim WA" di layar Kasir setelah bayar** (PRD §4.2/§4.7).
+        Butuh field nomor HP pelanggan di `PaymentModal.tsx` dulu — kolom
+        `customer_phone` di database SELALU `null` untuk transaksi baru saat
+        ini karena `create_transaction` RPC tidak pernah menerima nilainya.
+        Detail lengkap di poin 10, bagian "Yang dikerjakan sesi ini" di atas.
 
 ## Sedang dikerjakan
 
@@ -155,18 +209,45 @@ install`+`npm run lint` berhasil jalan penuh (sesi-sesi sebelumnya sering
    Bulanan, Per Shift, Piutang/Tempo), coba tandai satu piutang TEMPO lunas
    (RPC `settle_receivable`), dan pastikan filter preset/custom tanggal
    berfungsi.
+6. **Uji Export Excel/PDF (`reportExport.ts`) & tombol "Kirim WA"
+   (`printLogic.ts`/`TransactionDetailModal.tsx`) di browser sungguhan —
+   BELUM PERNAH sama sekali**, baik oleh agent (sandbox tidak punya UI
+   browser) maupun pemilik project:
+   - Export Excel: unduh beneran, buka file-nya, cek 4 sheet & nominal masih
+     `number` (bisa di-SUM), bukan teks.
+   - Export PDF: unduh beneran, cek potongan halaman kalau tabel Piutang
+     panjang (harus lanjut ke halaman berikutnya, bukan diperkecil sampai
+     tidak kebaca).
+   - Kirim WA: coba dari **HP** (jalur `navigator.share` — harusnya langsung
+     buka sheet share OS dengan gambar terlampir, pilih WhatsApp) DAN dari
+     **browser desktop** (jalur fallback — harusnya JPEG otomatis terunduh +
+     tab `wa.me` baru terbuka). Untuk transaksi yang `customer_phone`-nya
+     `null` (semua transaksi baru saat ini — lihat poin 10 di atas), pastikan
+     fallback `wa.me` **tanpa** nomor (`https://wa.me/?text=...`) benar-benar
+     membuka layar pilih kontak WhatsApp, bukan error/blank.
 
 ## Task berikutnya (disarankan)
 
-- **Selesaikan sisa T-08**: `lib/pos/reportExport.ts` (export Excel via
-  `xlsx`, PDF via `jspdf`+`html-to-image`) dan `generateReceiptImage()` di
-  `printLogic.ts` untuk share WA.
-- **Jalankan checklist "Yang HARUS dikonfirmasi" di atas** (build asli,
-  end-to-end `/cek-struk` + Kasir/Riwayat/Dashboard + Laporan) — sebaiknya
-  sebelum menambah task baru lagi, supaya utang verifikasi tidak menumpuk.
-- Beres-beres lint pra-eksisting (13 error) — bukan blocker, tapi bikin
-  `npm run lint` tidak bisa dipakai sebagai sinyal "ada regresi baru" selama
-  masih penuh dengan error lama yang bercampur.
+- **Jalankan checklist "Yang HARUS dikonfirmasi" di atas dulu** (build asli,
+  end-to-end `/cek-struk` + Kasir/Riwayat/Dashboard + Laporan + Export/Kirim
+  WA yang baru) — sebaiknya sebelum menambah task baru lagi, supaya utang
+  verifikasi tidak menumpuk. Export & Kirim WA KHUSUSNYA belum pernah dicoba
+  sama sekali di browser sungguhan.
+- **Baru kalau mau menuntaskan T-08 100%** (bukan wajib fase 1, PRD §4.2/§4.7
+  menyebutnya tapi tidak eksplisit jadi Acceptance Criteria Kasir): tambah
+  field nomor HP pelanggan di `PaymentModal.tsx` (opsional, semua metode
+  bayar — bukan cuma TEMPO), alirkan ke `createTransaction()`
+  (`transactionApi.ts`) → `create_transaction` RPC (migration baru, tambah
+  parameter `p_customer_phone`) → kolom `customer_phone` yang sudah ada di
+  tabel `transactions`. Baru setelah itu tombol "Kirim WA" di layar sukses
+  bayar (`KasirModule.tsx`) benar-benar berguna — reuse
+  `shareReceiptViaWhatsApp()` yang sudah ada, sama seperti di
+  `TransactionDetailModal.tsx`.
+- Beres-beres lint pra-eksisting (13 error, salah satunya di
+  `TransactionDetailModal.tsx` — sudah tercatat sejak poin 4/"Yang HARUS
+  dikonfirmasi" #2, TIDAK bertambah karena perubahan poin 9 di atas) — bukan
+  blocker, tapi bikin `npm run lint` tidak bisa dipakai sebagai sinyal "ada
+  regresi baru" selama masih penuh dengan error lama yang bercampur.
 
 ## Catatan penting untuk sesi berikutnya
 
@@ -176,6 +257,16 @@ install`+`npm run lint` berhasil jalan penuh (sesi-sesi sebelumnya sering
   "Laporan", key `laporan`).
 - `app/page.tsx` — dynamic import `LaporanModule` + render
   `activeMenu === "laporan"`.
+- `lib/pos/reportExport.ts` — **baru**. `exportReportToExcel()` +
+  `exportReportToPdf()` (lihat poin 5).
+- `app/components/laporan/LaporanModule.tsx` — tombol Export disambungkan ke
+  `reportExport.ts` (lihat poin 6).
+- `lib/pos/printLogic.ts` — ditambah `generateReceiptImage()` +
+  `shareReceiptViaWhatsApp()` (lihat poin 8). Fungsi lama
+  (`printThermalReceipt`/`printA6Nota`) TIDAK diubah.
+- `app/components/transaksi/TransactionDetailModal.tsx` — tombol "Kirim WA"
+  baru + `handleReprint()` di-refactor jadi pakai `buildReceiptData()` (lihat
+  poin 9).
 - Tidak ada migration baru sesi ini — `011` dan `012` sudah ada sebagai file
   dari sesi sebelumnya, sesi ini hanya mengonfirmasi keduanya sudah dieksekusi
   ke production.

@@ -359,3 +359,223 @@ export const printA6Nota = (data: ReceiptData, paperSize: "A6" | "A5" = "A6") =>
     }, 1000);
   }, 250);
 };
+
+// ── TAMBAHAN (T-08 lanjutan) ── generateReceiptImage() + share ke WhatsApp.
+// PRD §4.7: "Versi digital: PDF + kirim gambar struk/nota via WhatsApp (pola
+// ShareTicket/wa-messages)" dan "Kirim struk digital: gambar struk (JPEG via
+// html-to-image) → share ke WhatsApp pelanggan."
+//
+// BEDA dari printThermalReceipt/printA6Nota di atas: dua fungsi itu menulis
+// dokumen HTML ke iframe tersembunyi lalu memanggil window.print() — hasil
+// akhirnya kertas fisik, BUKAN file. Fungsi di bawah ini sebaliknya merender
+// template HTML yang mirip (proporsi beda — lebar tetap untuk dibaca di layar
+// HP, bukan lebar kertas 58mm/A6) ke sebuah <div> yang ditempel SEMENTARA ke
+// `document.body` di posisi off-screen (`position: fixed; left: -9999px`,
+// BUKAN `display: none` — sama seperti dicatat di reportExport.ts,
+// `html-to-image` tidak bisa merender elemen yang tidak punya ukuran layout),
+// lalu di-snapshot ke JPEG lewat `html-to-image` (`toJpeg`), dan elemen itu
+// dibuang lagi begitu snapshot selesai — kasir tidak pernah melihatnya.
+//
+// `html-to-image` di-import dinamis (`await import(...)`) di dalam fungsi,
+// bukan di top-level file ini seperti di reportExport.ts — supaya
+// printThermalReceipt()/printA6Nota() (dipanggil jauh lebih sering, tiap
+// transaksi) tidak ikut menarik bundel `html-to-image` kalau fitur share WA
+// ini ternyata tidak dipakai di sesi kasir tertentu.
+
+/**
+ * Render `data` jadi 1 gambar JPEG (Blob) — struk digital siap dibagikan.
+ * Lebar elemen sumber sengaja tetap 380px (bukan mengikuti lebar layar kasir)
+ * supaya hasil JPEG konsisten dibaca di WhatsApp berapa pun device kasirnya;
+ * WhatsApp sendiri yang menyesuaikan ukuran preview di jendela chat.
+ */
+export async function generateReceiptImage(data: ReceiptData): Promise<Blob> {
+  if (typeof document === "undefined") {
+    throw new Error("generateReceiptImage() hanya bisa dipanggil di browser.");
+  }
+
+  const { toJpeg } = await import("html-to-image");
+
+  const container = buildShareReceiptElement(data);
+  document.body.appendChild(container);
+
+  try {
+    // Beri browser 2 frame untuk selesai layout sebelum di-snapshot — pola
+    // senada dengan delay sebelum window.print() di dua fungsi cetak di atas,
+    // supaya elemen yang baru saja ditempel ke DOM (termasuk font) sudah
+    // pasti selesai di-render saat `toJpeg()` membaca ukurannya.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+
+    const dataUrl = await toJpeg(container, {
+      backgroundColor: "#ffffff",
+      pixelRatio: 2,
+      quality: 0.92,
+      cacheBust: true,
+    });
+
+    const response = await fetch(dataUrl);
+    return await response.blob();
+  } finally {
+    document.body.removeChild(container);
+  }
+}
+
+/** Bangun elemen off-screen untuk di-snapshot `generateReceiptImage()`. */
+function buildShareReceiptElement(data: ReceiptData): HTMLDivElement {
+  const dateStr = new Date(data.createdAt ?? Date.now()).toLocaleString("id-ID", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const discount = data.discount ?? 0;
+  const tax = data.tax ?? 0;
+
+  const itemsHtml = data.items
+    .map(
+      (item) => `
+      <tr>
+        <td colspan="3" style="padding-top:6px;font-weight:600;">${escapeHtml(item.name)}</td>
+      </tr>
+      <tr>
+        <td style="padding:0 0 6px;color:#52525b;">${item.qty} x ${formatMoney(item.price)}</td>
+        <td></td>
+        <td style="padding:0 0 6px;text-align:right;">${formatMoney(item.subtotal ?? item.qty * item.price)}</td>
+      </tr>`,
+    )
+    .join("");
+
+  const container = document.createElement("div");
+  // Off-screen, BUKAN display:none — lihat catatan di atas fungsi ini.
+  container.style.cssText =
+    "position:fixed;top:0;left:-9999px;width:380px;background:#ffffff;";
+  container.innerHTML = `
+    <div style="width:380px;padding:24px;font-family:'Courier New',Courier,monospace;color:#18181b;box-sizing:border-box;">
+      ${
+        data.isReprint
+          ? `<div style="text-align:center;font-weight:bold;border:1px dashed #18181b;padding:4px 0;margin-bottom:10px;">*** CETAK ULANG ***</div>`
+          : ""
+      }
+      <div style="text-align:center;font-weight:bold;font-size:20px;letter-spacing:0.5px;">LANGITAN.CO</div>
+      <div style="text-align:center;font-size:12px;color:#52525b;margin-bottom:14px;">Store &amp; Merchandise</div>
+      <div style="border-top:1px dashed #a1a1aa;margin:10px 0;"></div>
+      <table style="width:100%;font-size:13px;border-collapse:collapse;">
+        <tr><td style="padding:2px 0;">No. Struk</td><td style="text-align:right;">${escapeHtml(data.receiptNo)}</td></tr>
+        <tr><td style="padding:2px 0;">Waktu</td><td style="text-align:right;">${dateStr}</td></tr>
+        <tr><td style="padding:2px 0;">Kasir</td><td style="text-align:right;">${escapeHtml(data.cashierName ?? "-")}</td></tr>
+        ${
+          data.customerName
+            ? `<tr><td style="padding:2px 0;">Pelanggan</td><td style="text-align:right;">${escapeHtml(data.customerName)}</td></tr>`
+            : ""
+        }
+        <tr><td style="padding:2px 0;">Metode</td><td style="text-align:right;">${escapeHtml(formatMethod(data.method))}</td></tr>
+      </table>
+      <div style="border-top:1px dashed #a1a1aa;margin:10px 0;"></div>
+      <table style="width:100%;font-size:13px;border-collapse:collapse;">${itemsHtml}</table>
+      <div style="border-top:1px dashed #a1a1aa;margin:10px 0;"></div>
+      <table style="width:100%;font-size:13px;border-collapse:collapse;">
+        <tr><td style="padding:2px 0;">Subtotal</td><td style="text-align:right;">${formatMoney(data.subtotal)}</td></tr>
+        ${discount > 0 ? `<tr><td style="padding:2px 0;">Diskon</td><td style="text-align:right;">-${formatMoney(discount)}</td></tr>` : ""}
+        ${tax > 0 ? `<tr><td style="padding:2px 0;">Pajak</td><td style="text-align:right;">${formatMoney(tax)}</td></tr>` : ""}
+        <tr><td style="padding:6px 0 2px;font-weight:bold;">Total</td><td style="padding:6px 0 2px;text-align:right;font-weight:bold;">${formatMoney(data.total)}</td></tr>
+        <tr><td style="padding:2px 0;">Bayar</td><td style="text-align:right;">${formatMoney(data.paidAmount)}</td></tr>
+        <tr><td style="padding:2px 0;">Kembali</td><td style="text-align:right;">${formatMoney(data.changeAmount)}</td></tr>
+      </table>
+      <div style="border-top:1px dashed #a1a1aa;margin:10px 0;"></div>
+      <div style="text-align:center;font-size:12px;color:#52525b;">Terima kasih atas kunjungan Anda</div>
+      <div style="text-align:center;font-size:12px;font-weight:bold;">lco-store.com</div>
+    </div>
+  `;
+
+  return container;
+}
+
+/** Hasil `shareReceiptViaWhatsApp()` — dipakai UI pemanggil untuk pesan status. */
+export interface ShareReceiptResult {
+  /**
+   * "web-share" = berhasil lewat Web Share API (`navigator.share`) dengan
+   * file gambar terlampir langsung — pengguna tinggal pilih WhatsApp di
+   * sheet share bawaan OS/browser. Umumnya tersedia di HP (Android/iOS
+   * Chrome/Safari), termasuk device kasir kalau pakai tablet/HP.
+   *
+   * "download-fallback" = Web Share API dengan file TIDAK tersedia (paling
+   * umum: browser desktop). Gambar diunduh otomatis ke device, lalu tab
+   * WhatsApp Web/`wa.me` dibuka dengan teks siap-kirim — kasir WAJIB
+   * melampirkan file yang baru terunduh secara manual. Ini keterbatasan
+   * `wa.me` sendiri (URL scheme resminya cuma menerima parameter teks,
+   * tidak ada parameter attachment file) — bukan bug di fungsi ini.
+   */
+  method: "web-share" | "download-fallback";
+}
+
+/**
+ * Ubah nomor HP Indonesia ke format yang diterima `wa.me` (`62xxxxxxxxxx`,
+ * tanpa `+`/spasi/strip). "0812..." → "62812...", "+62812..."/"62812..." →
+ * dipakai apa adanya (setelah dibuang karakter non-digit).
+ */
+function sanitizeIndonesianWaNumber(rawPhone: string): string {
+  const digitsOnly = rawPhone.replace(/\D/g, "");
+  if (digitsOnly.startsWith("62")) return digitsOnly;
+  if (digitsOnly.startsWith("0")) return `62${digitsOnly.slice(1)}`;
+  return digitsOnly;
+}
+
+/**
+ * Alur lengkap "kirim struk digital ke WhatsApp pelanggan" (PRD §4.7): buat
+ * gambar struk lewat `generateReceiptImage()`, lalu coba Web Share API dulu
+ * (device mendukung lampiran file langsung ke WhatsApp), kalau tidak bisa
+ * fallback unduh gambar + buka `wa.me` dengan pesan siap-kirim.
+ *
+ * `customerPhone` opsional — kalau kosong (pelanggan tidak isi no. HP saat
+ * transaksi), fallback tetap jalan tapi `wa.me` dibuka TANPA nomor tujuan
+ * (`https://wa.me/`), yang membuka WhatsApp ke layar pilih kontak manual,
+ * bukan gagal total.
+ */
+export async function shareReceiptViaWhatsApp(
+  data: ReceiptData,
+  customerPhone?: string | null,
+): Promise<ShareReceiptResult> {
+  const blob = await generateReceiptImage(data);
+  const safeReceiptNo = data.receiptNo.replace(/[\\/:*?"<>|]/g, "-");
+  const fileName = `Struk-${safeReceiptNo}.jpg`;
+  const file = new File([blob], fileName, { type: "image/jpeg" });
+  const caption = `Struk pembelian Langitan.co No. ${data.receiptNo}. Terima kasih atas kunjungan Anda!`;
+
+  // `canShare`/`share` dengan dukungan `files` belum ada di semua lib.dom.d.ts
+  // versi TS lama — dicek via optional chaining + type guard tipis di sini,
+  // bukan lewat `@ts-expect-error`, supaya tetap type-safe kalau TS/lib.dom
+  // proyek ini nanti di-upgrade dan sudah menyertakan tipenya sendiri.
+  const nav = navigator as Navigator & {
+    canShare?: (shareData?: { files?: File[] }) => boolean;
+    share?: (shareData: { files?: File[]; text?: string; title?: string }) => Promise<void>;
+  };
+
+  if (nav.canShare && nav.share && nav.canShare({ files: [file] })) {
+    await nav.share({ files: [file], text: caption, title: `Struk ${data.receiptNo}` });
+    return { method: "web-share" };
+  }
+
+  // Fallback: unduh JPEG dulu lewat <a download> sementara (pola sama seperti
+  // XLSX.writeFile/jsPDF.save di reportExport.ts, tapi manual karena sumbernya
+  // Blob polos, bukan library yang sudah punya method .save()/.writeFile()).
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  // Revoke ditunda, bukan langsung — beberapa browser masih memproses
+  // download dari blob URL walau elemen <a>-nya sudah dibuang dari DOM.
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
+
+  const phoneDigits = customerPhone ? sanitizeIndonesianWaNumber(customerPhone) : "";
+  const waBase = phoneDigits ? `https://wa.me/${phoneDigits}` : "https://wa.me/";
+  const waCaption = `${caption} (gambar struk sudah terunduh ke perangkat ini, mohon dilampirkan manual)`;
+  window.open(`${waBase}?text=${encodeURIComponent(waCaption)}`, "_blank", "noopener,noreferrer");
+
+  return { method: "download-fallback" };
+}
