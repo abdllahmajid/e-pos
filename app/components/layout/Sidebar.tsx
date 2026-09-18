@@ -18,6 +18,7 @@ import {
   Wallet,
   Boxes,
   TrendingUp,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 
@@ -67,6 +68,19 @@ const MENU_GROUPS: SidebarMenuGroup[] = [
     // LaporanModule.tsx (pola sama seperti menu "stok").
     label: "Laporan",
     items: [{ key: "laporan", label: "Laporan", icon: TrendingUp }],
+  },
+  {
+    // ── TAMBAHAN (T-09) ── Grup "Lainnya" sesuai penamaan persis di PRD §4.1
+    // & §298 (bukan "Administrasi"/dsb.). Baru berisi "Sampah" — "Log
+    // Aktivitas" (item lain di grup yang sama menurut PRD) menyusul begitu
+    // modulnya jadi, BUKAN ditambah di sini lebih dulu (lihat komentar
+    // header file: jangan render menu ke modul kosong).
+    //
+    // Sampah admin-only (PRD §5 baris `trash`) — mengikuti pola menu
+    // "Laporan": menu tetap tampil ke semua role, yang menahan akses justru
+    // layar blokir di dalam SampahModule.tsx sendiri.
+    label: "Lainnya",
+    items: [{ key: "sampah", label: "Sampah", icon: Trash2 }],
   },
 ];
 

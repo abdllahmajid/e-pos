@@ -15,15 +15,19 @@
 import { useMemo, useState } from "react";
 import {
   AlertCircle,
+  Loader2,
   Package,
   Pencil,
   Plus,
   RefreshCw,
   Search,
+  Trash2,
 } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
 import { useProducts, type ProductWithCategory } from "@/hooks/useProducts";
 import {
   createProduct,
+  deleteProduct,
   updateProduct,
   type CreateProductInput,
 } from "@/lib/pos/productLogic";
@@ -61,6 +65,11 @@ function parseNumber(value: string) {
 }
 
 export default function ProdukModule() {
+  // Tombol Hapus (T-09) hanya untuk admin — sesuai matriks permission PRD §5
+  // (baris `produk`: delete cuma ✔ di kolom Admin, Supervisor cuma view/edit).
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
   const { products, isLoading, error, refetch } = useProducts();
 
   const [activeTab, setActiveTab] = useState<ProdukTab>("produk");
@@ -70,6 +79,16 @@ export default function ProdukModule() {
   const [showForm, setShowForm] = useState(false);
   const [editingProduct, setEditingProduct] =
     useState<ProductWithCategory | null>(null);
+
+  // ── TAMBAHAN (T-09) ── Konfirmasi hapus (soft-delete) produk. Dipisah dari
+  // `showForm`/`editingProduct` di atas supaya klik "Hapus" tidak ikut
+  // membuka form edit — dua alur berbeda walau sama-sama dipicu dari baris
+  // tabel yang sama.
+  const [deletingProduct, setDeletingProduct] =
+    useState<ProductWithCategory | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const filteredProducts = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -154,6 +173,48 @@ export default function ProdukModule() {
 
     // Produk baru/ubahan tersimpan di Supabase — refetch dari hook agar katalog Kasir
     // (yang memakai hook yang sama) ikut konsisten begitu tab-nya dibuka.
+    refetch();
+  }
+
+  // ── TAMBAHAN (T-09) ── Hapus (soft-delete) produk lewat RPC
+  // `soft_delete_product` (migration 014, dipanggil via `deleteProduct()` di
+  // productLogic.ts). Produk yang dihapus pindah ke halaman Sampah (belum
+  // dibuat di file ini — menyusul), bukan hilang permanen.
+  function openDeleteConfirm(product: ProductWithCategory) {
+    setDeleteError(null);
+    setDeleteReason("");
+    setDeletingProduct(product);
+  }
+
+  function closeDeleteConfirm() {
+    if (isDeleting) {
+      return;
+    }
+
+    setDeletingProduct(null);
+    setDeleteReason("");
+    setDeleteError(null);
+  }
+
+  async function handleConfirmDelete() {
+    if (!deletingProduct) {
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeleteError(null);
+
+    const result = await deleteProduct(deletingProduct.id, deleteReason);
+
+    if (!result.success) {
+      setDeleteError(result.error);
+      setIsDeleting(false);
+      return;
+    }
+
+    setIsDeleting(false);
+    setDeletingProduct(null);
+    setDeleteReason("");
     refetch();
   }
 
@@ -449,15 +510,30 @@ export default function ProdukModule() {
                             </td>
 
                             <td className="px-4 py-3 text-right">
-                              <button
-                                type="button"
-                                onClick={() => openEditForm(product)}
-                                title="Edit produk"
-                                className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                                Edit
-                              </button>
+                              <div className="inline-flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => openEditForm(product)}
+                                  title="Edit produk"
+                                  className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                  Edit
+                                </button>
+
+                                {/* Hapus (T-09): admin only, sesuai PRD §5 baris `produk` — Supervisor cuma view/edit. */}
+                                {isAdmin && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openDeleteConfirm(product)}
+                                    title="Hapus produk (pindah ke Sampah)"
+                                    className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-lco-coral transition-colors duration-150 hover:bg-lco-coral/10 dark:border-zinc-700"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                    Hapus
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -507,6 +583,75 @@ export default function ProdukModule() {
               : undefined
           }
         />
+      )}
+
+      {/* ── TAMBAHAN (T-09) ── Konfirmasi hapus produk. Overlay & radius
+          disamakan dengan ProdukForm.tsx (bg-zinc-950/30, rounded-xl) supaya
+          konsisten sebagai satu keluarga modal, walau ukurannya jauh lebih
+          kecil (bukan form). */}
+      {deletingProduct && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/30 p-4">
+          <div className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="mb-3 flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-lco-coral/10 text-lco-coral">
+                <Trash2 className="h-4 w-4" />
+              </div>
+
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold">Hapus produk?</h3>
+
+                <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                    {deletingProduct.name}
+                  </span>{" "}
+                  akan dipindah ke Sampah, bukan dihapus permanen — bisa
+                  dipulihkan kembali kapan saja lewat menu Sampah.
+                </p>
+              </div>
+            </div>
+
+            <label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+              Alasan (opsional)
+            </label>
+
+            <textarea
+              value={deleteReason}
+              onChange={(event) => setDeleteReason(event.target.value)}
+              disabled={isDeleting}
+              rows={2}
+              placeholder="Mis. produk sudah tidak dijual lagi"
+              className="mb-3 w-full resize-none rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm outline-none transition-colors duration-150 placeholder:text-zinc-400 focus:border-lco-teal focus:ring-1 focus:ring-lco-teal disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-950"
+            />
+
+            {deleteError && (
+              <div className="mb-3 flex items-start gap-2 border border-lco-coral/30 bg-white p-3 text-xs text-lco-coral dark:bg-zinc-950">
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <p className="break-all">{deleteError}</p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeDeleteConfirm}
+                disabled={isDeleting}
+                className="rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+              >
+                Batal
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                className="inline-flex items-center gap-2 rounded-md bg-lco-coral px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-coral/90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isDeleting && <Loader2 className="h-4 w-4 animate-spin" />}
+                Ya, Hapus
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );

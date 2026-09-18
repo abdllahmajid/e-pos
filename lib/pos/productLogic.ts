@@ -234,3 +234,64 @@ export async function updateProduct(
     },
   };
 }
+// ── TAMBAHAN (T-09) ── Soft-delete & restore produk, lewat RPC
+// `soft_delete_product` / `restore_product` (migration 014). SENGAJA tidak
+// pakai `supabase.from("products").update({ deleted_at: ... })` langsung —
+// permission admin-only (PRD §5, baris `produk` delete cuma ✔ di kolom
+// Admin) ditegakkan DI DALAM RPC, bukan cuma di UI. Kalau ditulis langsung
+// dari client, non-admin yang tahu bentuk request-nya bisa lolos, karena
+// tabel `products` tidak punya RLS write policy sama sekali untuk mencegah
+// itu (pola yang sama seperti `stock_movements`/`transactions` — semua
+// tulisan wajib lewat RPC security definer).
+
+export type DeleteProductResult =
+  | { success: true }
+  | { success: false; error: string };
+
+/** Pindahkan produk ke Sampah (isi `deleted_at`). Alasan opsional. */
+export async function deleteProduct(
+  productId: string,
+  reason?: string,
+): Promise<DeleteProductResult> {
+  const { data, error } = await supabase.rpc("soft_delete_product", {
+    p_product_id: productId,
+    p_reason: reason?.trim() || null,
+  });
+
+  if (error) {
+    console.error("soft_delete_product RPC error:", error);
+    return {
+      success: false,
+      error: error.message || "Gagal menghapus produk.",
+    };
+  }
+
+  if (!data?.success) {
+    return { success: false, error: "Produk gagal dihapus." };
+  }
+
+  return { success: true };
+}
+
+/** Pulihkan produk dari Sampah (kosongkan `deleted_at`). */
+export async function restoreProduct(
+  productId: string,
+): Promise<DeleteProductResult> {
+  const { data, error } = await supabase.rpc("restore_product", {
+    p_product_id: productId,
+  });
+
+  if (error) {
+    console.error("restore_product RPC error:", error);
+    return {
+      success: false,
+      error: error.message || "Gagal memulihkan produk.",
+    };
+  }
+
+  if (!data?.success) {
+    return { success: false, error: "Produk gagal dipulihkan." };
+  }
+
+  return { success: true };
+}

@@ -369,6 +369,62 @@ export async function voidTransaction(
   return { success: true, transaction_id: data.transaction_id };
 }
 
+// ── TAMBAHAN (T-09) ── Soft-delete & restore transaksi, lewat RPC
+// `soft_delete_transaction` / `restore_transaction` (migration 014).
+// Admin-only (ditegakkan di dalam RPC — lihat komentar header migration 014
+// poin 4). BERBEDA dari voidTransaction() di atas: ini TIDAK mengubah status
+// maupun mengembalikan stok, murni menyembunyikan baris dari tampilan normal
+// (Riwayat Transaksi, Dashboard, Laporan — semua query itu sudah
+// `.is("deleted_at", null)`). Dipakai halaman Sampah untuk memulihkan, dan
+// (menyusul) tombol "Hapus" di Riwayat Transaksi/TransactionDetailModal.
+
+export interface DeleteTransactionParams {
+  transactionId: string;
+  /** Opsional — beda dari void yang mewajibkan alasan. */
+  reason?: string;
+}
+
+/** Pindahkan transaksi ke Sampah (isi `deleted_at`). Admin only. */
+export async function deleteTransaction(
+  params: DeleteTransactionParams,
+): Promise<{ success: boolean; transaction_id: string }> {
+  const { data, error } = await supabase.rpc("soft_delete_transaction", {
+    p_transaction_id: params.transactionId,
+    p_reason: params.reason?.trim() || null,
+  });
+
+  if (error) {
+    console.error("soft_delete_transaction RPC error:", error);
+    throw new Error(error.message || "Gagal menghapus transaksi.");
+  }
+
+  if (!data?.success) {
+    throw new Error("Transaksi gagal dihapus.");
+  }
+
+  return { success: true, transaction_id: data.transaction_id };
+}
+
+/** Pulihkan transaksi dari Sampah (kosongkan `deleted_at`). Admin only. */
+export async function restoreTransaction(
+  transactionId: string,
+): Promise<{ success: boolean; transaction_id: string }> {
+  const { data, error } = await supabase.rpc("restore_transaction", {
+    p_transaction_id: transactionId,
+  });
+
+  if (error) {
+    console.error("restore_transaction RPC error:", error);
+    throw new Error(error.message || "Gagal memulihkan transaksi.");
+  }
+
+  if (!data?.success) {
+    throw new Error("Transaksi gagal dipulihkan.");
+  }
+
+  return { success: true, transaction_id: data.transaction_id };
+}
+
 // ── TAMBAHAN (T-02) ── Upload bukti pembayaran (transfer/QRIS) ke Storage bucket
 // "payment-proofs" (migration 006_payment_enhance.sql), lalu simpan metadatanya ke
 // tabel payment_proofs. Dipanggil dari PaymentModal.tsx SETELAH createTransaction()

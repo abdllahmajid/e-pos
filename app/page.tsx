@@ -49,6 +49,12 @@ const LaporanModule = dynamic(
   },
 );
 
+// ── TAMBAHAN (T-09) ── Modul Sampah (produk & transaksi yang di-soft-delete,
+// admin only — layar blokirnya sendiri sudah di dalam SampahModule.tsx).
+const SampahModule = dynamic(() => import("./components/sampah/SampahModule"), {
+  ssr: false,
+});
+
 export default function LCOPOS() {
   const [activeMenu, setActiveMenu] = useState("kasir");
 
@@ -74,6 +80,7 @@ export default function LCOPOS() {
         {activeMenu === "stok" && <StokModule />}
         {activeMenu === "kas" && <KasModule />}
         {activeMenu === "laporan" && <LaporanModule />}
+        {activeMenu === "sampah" && <SampahModule />}
       </main>
     </div>
   );
