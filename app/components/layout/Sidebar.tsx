@@ -17,6 +17,7 @@ import {
   Package,
   Wallet,
   Boxes,
+  TrendingUp,
   type LucideIcon,
 } from "lucide-react";
 
@@ -55,6 +56,17 @@ const MENU_GROUPS: SidebarMenuGroup[] = [
       { key: "stok", label: "Stok & Opname", icon: Boxes },
       { key: "kas", label: "Kas & Shift", icon: Wallet },
     ],
+  },
+  {
+    // ── TAMBAHAN (T-08) ── Grup terpisah dari "Alat Kasir" secara sengaja —
+    // Laporan diasumsikan khusus admin/supervisor (lihat catatan ASUMSI di
+    // LaporanModule.tsx & hooks/useReports.ts), beda konteks dari alat kerja
+    // harian kasir. Penyembunyian menu ini dari kasir sendiri belum dikerjakan
+    // di sini (itu scope T-10, permission matrix) — untuk sekarang menu tetap
+    // tampil semua role, yang menahan akses cuma layar blokir di
+    // LaporanModule.tsx (pola sama seperti menu "stok").
+    label: "Laporan",
+    items: [{ key: "laporan", label: "Laporan", icon: TrendingUp }],
   },
 ];
 

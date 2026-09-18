@@ -393,6 +393,11 @@ async function compressIfImage(file: File): Promise<File> {
 export async function uploadPaymentProof(
   paymentId: string,
   file: File,
+  // ── TAMBAHAN (T-08) ── 'payment' (default) = bukti saat checkout, tidak
+  // berubah untuk pemanggil lama (PaymentModal.tsx). 'settlement' = bukti
+  // pelunasan piutang TEMPO, dipakai LaporanModule.tsx (kolom proof_type,
+  // migration 012_receivables_settlement.sql).
+  proofType: "payment" | "settlement" = "payment",
 ): Promise<UploadPaymentProofResult> {
   if (!paymentId) {
     throw new Error("payment_id tidak valid untuk upload bukti pembayaran.");
@@ -428,6 +433,7 @@ export async function uploadPaymentProof(
       file_url: publicUrlData.publicUrl,
       file_name: file.name,
       file_size: compressed.size,
+      proof_type: proofType,
     })
     .select("id, file_url")
     .single();
@@ -450,11 +456,12 @@ export async function uploadPaymentProof(
 export async function uploadPaymentProofs(
   paymentId: string,
   files: File[],
+  proofType: "payment" | "settlement" = "payment",
 ): Promise<UploadPaymentProofResult[]> {
   const results: UploadPaymentProofResult[] = [];
 
   for (const file of files) {
-    results.push(await uploadPaymentProof(paymentId, file));
+    results.push(await uploadPaymentProof(paymentId, file, proofType));
   }
 
   return results;
