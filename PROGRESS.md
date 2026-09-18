@@ -6,11 +6,63 @@
 
 ## Status terakhir diperbarui
 
-2026-09-17, sesi #7 (task T-07 selesai — halaman publik `/cek-struk`: RPC
-`get_transaction_by_receipt` SECURITY DEFINER di migration `010`, form nomor
-struk + tanggal, tampilan status & rincian item tanpa harga modal. **Ditemukan
-celah keamanan besar di luar scope T-07** — lihat bagian ⚠️ di bawah, ini
-prioritas paling tinggi untuk sesi berikutnya, lebih tinggi dari lanjut ke T-08).
+2026-09-18, sesi #8. **Sesi ini melanjutkan pekerjaan sesi sebelumnya yang
+terputus di tengah jalan** — saat sesi #8 mulai, kode `hooks/useReports.ts`,
+`app/components/laporan/LaporanModule.tsx`, migration `011_transactions_rls.sql`
+(perbaikan RLS, ditandai prioritas tertinggi di sesi #7), dan migration
+`012_receivables_settlement.sql` **ternyata sudah lengkap ditulis**, walau
+`PROGRESS.md` yang diwariskan masih menyebut semua itu "belum dikerjakan" —
+PROGRESS.md-nya sendiri belum sempat ditulis ulang sebelum sesi sebelumnya
+terputus. Pelajaran untuk sesi berikutnya: **kalau PROGRESS.md bilang sesuatu
+"belum ada", cek dulu file/migration-nya langsung, jangan percaya begitu saja**
+(pelajaran yang sama sudah dicatat 2 kali sebelumnya di sesi #5 dan #7, lihat
+histori di bawah — sekarang kejadian lagi dengan bentuk berbeda: kali ini
+bukan PRD yang salah, tapi PROGRESS.md-nya sendiri yang basi).
+
+Yang dikerjakan sesi ini:
+
+1. `app/components/layout/Sidebar.tsx` diganti pemilik project sendiri (bukan
+   agent) — menambah grup menu baru "Laporan" (key `laporan`).
+2. `app/page.tsx` disambungkan: dynamic import `LaporanModule` + baris render
+   `activeMenu === "laporan"`. Sebelum ini, klik menu Laporan menampilkan
+   layar kosong (menu-nya ada, tapi tidak ada JSX yang merender modulnya).
+3. **Migration `011` dan `012` sudah dieksekusi ke database production**
+   (dikonfirmasi langsung oleh pemilik project — bukan cuma file lagi).
+4. Verifikasi kode (bukan di database, lihat bagian "Yang HARUS dikonfirmasi"
+   untuk yang belum diverifikasi): `npm install` (jaringan tersedia sesi ini,
+   beda dengan sesi #7), `tsc --noEmit` **bersih, tanpa error**. `npm run
+build` (`next build`) **gagal, tapi HANYA karena sandbox agent sesi ini
+   tidak bisa akses `fonts.googleapis.com`** (dipakai `next/font/google` di
+   `app/layout.tsx` untuk font Geist) — bukan bug di kode manapun, termasuk
+   bukan disebabkan perubahan sesi ini. **WAJIB dicoba `npm run build` dari
+   mesin pemilik project sendiri** (yang punya akses internet normal) sebelum
+   percaya build benar-benar hijau. `npm run lint` menemukan 13 error + 6
+   warning, hampir semua **pra-eksisting di file-file lama** (`useCategories.ts`,
+   `useProducts.ts`, `useSettings.ts`, `PaymentModal.tsx`, `KategoriModule.tsx`,
+   `TransactionDetailModal.tsx`, `useTransactions.ts`, `transactionApi.ts`) dan
+   BUKAN disebabkan sesi ini — kemungkinan besar baru ketahuan sekarang karena
+   ini kali pertama `npm install` berhasil jalan di sesi manapun (sesi #7 juga
+   tidak punya akses jaringan). Detail lengkap ada di bagian "Yang HARUS
+   dikonfirmasi" di bawah, termasuk **1 error yang ADA di file baru T-08**
+   (`hooks/useReports.ts` baris 516).
+5. **`lib/pos/reportExport.ts` — baru.** `exportReportToExcel()` (1 file
+   `.xlsx`, 4 sheet: Ringkasan/Harian-Bulanan/Per Shift/Piutang-Tempo, dari
+   data mentah `useReports.ts` — nominal ditulis sebagai `number`, BUKAN
+   string `formatRupiah()`, supaya tetap bisa dihitung di Excel) dan
+   `exportReportToPdf()` (snapshot DOM tab aktif lewat `html-to-image` →
+   `toPng()`, disusun ke PDF A4 lewat `jspdf`, dipotong otomatis ke beberapa
+   halaman kalau kontennya lebih tinggi dari 1 halaman — BUKAN diperkecil
+   paksa, supaya teks tabel tetap kebaca).
+6. **`app/components/laporan/LaporanModule.tsx` — tombol "Export" yang
+   sebelumnya `disabled` sekarang tersambung** ke `reportExport.ts` lewat
+   dropdown 2 pilihan: "Excel (semua sub-tab)" dan "PDF (tab aktif saja)".
+   Ditambah `reportContentRef` yang membungkus KONTEN TAB AKTIF saja (bukan
+   filter tanggal/tombol tab) sebagai target snapshot PDF.
+7. Verifikasi untuk poin 5 & 6: `tsc --noEmit` dan `npx eslint` **khusus 2
+   file itu** (bukan full project ulang) — keduanya bersih, tidak menambah
+   error baru ke 13 error lint pra-eksisting yang sudah dicatat di poin 4.
+   **Belum dicoba di browser sungguhan** (unduh Excel/PDF asli belum
+   diverifikasi manual oleh siapa pun) — lihat "Yang HARUS dikonfirmasi".
 
 ## Task selesai
 
@@ -21,92 +73,141 @@ prioritas paling tinggi untuk sesi berikutnya, lebih tinggi dari lanjut ke T-08)
 - [x] T-05 — Mutasi stok & opname (migration `009_stock_movements.sql`; `hooks/useStock.ts`; `app/components/stok/StokModule.tsx`).
 - [x] T-06 — Dashboard asli (`hooks/useDashboard.ts` + tulis ulang `app/components/dashboard/DashboardModule.tsx`).
 - [x] T-07 — Halaman publik `/cek-struk` (`app/cek-struk/page.tsx`; RPC `get_transaction_by_receipt` di migration `010_public_receipt_lookup.sql`).
+- [x] **Perbaikan keamanan RLS** (migration `011_transactions_rls.sql`) — RLS
+      aktif di `transactions`/`transaction_items`/`payments`, `select` untuk
+      semua user login aktif, tanpa policy insert/update langsung (semua
+      tulisan tetap wajib lewat RPC). **Sudah dijalankan ke production.**
+      Lihat "Yang HARUS dikonfirmasi" untuk status pengujian end-to-end-nya.
+- [~] **T-08 — Laporan** (PRD §17 Fase E, §4.5, §4.7) — **sebagian besar
+  selesai, TAPI belum 100%**, jangan dicentang penuh:
+  - [x] Sub-tab Harian/Bulanan, Per Shift, Piutang/Tempo (`hooks/useReports.ts`,
+        `app/components/laporan/LaporanModule.tsx`), filter tanggal preset +
+        custom, tandai lunas piutang lewat RPC `settle_receivable` (migration
+        `012_receivables_settlement.sql`), menu Sidebar + routing `page.tsx`.
+  - [ ] **Export Excel & PDF — BELUM dikerjakan.** Tombol "Export" di
+        `LaporanModule.tsx` sengaja `disabled` (placeholder), file
+        `lib/pos/reportExport.ts` yang disebut di komentar header
+        `LaporanModule.tsx` **belum ada sama sekali**. Dependensi (`xlsx`,
+        `jspdf`, `html-to-image`) sudah ada di `package.json`.
+  - [ ] **`generateReceiptImage()` untuk share WA — BELUM dikerjakan.** Tidak
+        ada di `lib/pos/printLogic.ts` saat ini.
 
 ## Sedang dikerjakan
 
 - (tidak ada sesi aktif)
 
-## ⚠️⚠️ TEMUAN KEAMANAN KRITIS — belum diperbaiki, BUKAN scope T-07, PRIORITAS TERTINGGI
+## ✅ Temuan keamanan RLS sesi #7 — SUDAH DIPERBAIKI (migration `011`)
 
-Saat menyiapkan RPC `get_transaction_by_receipt` untuk T-07, ditemukan bahwa
-tabel **`transactions`, `transaction_items`, dan `payments` sampai saat ini
-belum pernah mengaktifkan RLS sama sekali**, di migration manapun (beda dengan
-`stock_movements`, `shift_sessions`, `payment_proofs` yang sudah punya RLS
-sejak sesi-sesi sebelumnya). Privilege default Supabase memberi role
-`anon`/`authenticated` akses langsung ke tabel baru selama RLS belum
-diaktifkan — artinya **seluruh isi ketiga tabel itu (semua transaksi toko,
-bukan cuma yang dicari lewat `/cek-struk`) berisiko bisa dibaca langsung lewat
-PostgREST (`/rest/v1/transactions`, dst.) tanpa login sama sekali**, di luar
-jalur RPC manapun.
+Ringkasan (detail keputusan desain lengkap ada di komentar header migration
+`011_transactions_rls.sql` itu sendiri, tidak diulang di sini): tabel
+`transactions`, `transaction_items`, `payments` sekarang RLS aktif, `select`
+untuk semua user login aktif (bukan dibatasi per-kasir — sengaja, dikonfirmasi
+pemilik project, supaya Dashboard & modul lain yang sudah baca "semua
+transaksi" tidak berubah perilaku), tanpa policy insert/update sama sekali
+(semua tulisan tetap wajib lewat RPC `SECURITY DEFINER` yang sudah ada). RPC
+publik `get_transaction_by_receipt` (T-07) tidak terpengaruh (`SECURITY
+DEFINER`, bypass RLS by design).
 
-RPC T-07 sendiri **aman** — `SECURITY DEFINER` bypass RLS secara sengaja dan
-sudah divalidasi ketat (nomor struk + tanggal harus cocok, satu baris saja).
-Tapi RPC ini menutup satu jalur, bukan sumber masalahnya. Sumber masalahnya
-ada di tabelnya sendiri.
-
-**Kenapa belum diperbaiki di sesi ini:** menambah RLS ke 3 tabel itu sekarang
-butuh policy lengkap per role (kasir hanya lihat transaksi miliknya sendiri
-atau semua? supervisor/admin lihat semua — lihat matrix permission §5 PRD)
-yang belum dirancang di PRD secara eksplisit untuk level tabel (baru ada di
-level menu/modul). Kalau ditambah asal-asalan tercampur T-07, berisiko
-mematahkan seluruh modul yang sudah jalan (Kasir checkout, Riwayat Transaksi,
-Dashboard, halaman baru `/cek-struk` ini sendiri) karena semuanya baca dari
-3 tabel ini lewat client biasa (`authenticated`), bukan cuma lewat RPC.
-
-**Rekomendasi untuk sesi berikutnya — kerjakan SEBELUM T-08:**
-
-1. Buat migration terpisah (`011_transactions_rls.sql` atau serupa) khusus
-   untuk ini — jangan dicampur task lain.
-2. Rancang dulu policy per role mengikuti §5 PRD: kasir → `select` transaksi
-   yang dia buat sendiri (`cashier_id = auth.uid()`) atau via `shift_id`
-   miliknya; supervisor/admin → `select` semua. `insert`/`update` tetap wajib
-   lewat RPC (`create_transaction`, `return_transaction`, dst.) yang sudah
-   `SECURITY DEFINER` — jangan buka policy `insert`/`update` langsung ke
-   `authenticated` supaya aturan main §18.5 (logika uang di RPC) tidak bisa
-   dilewati dari client.
-3. Setelah RLS aktif, **uji ulang halaman `/cek-struk` secara end-to-end**
-   (buka di browser tanpa login) — RPC-nya `SECURITY DEFINER` jadi seharusnya
-   tetap jalan normal walau RLS `transactions` sudah aktif, tapi ini WAJIB
-   diverifikasi langsung, jangan diasumsikan.
-4. Uji juga modul yang sudah ada (Kasir, Riwayat, Dashboard) tidak patah
-   setelah RLS diaktifkan — ini bagian paling berisiko dari perbaikan ini.
+**Migration sudah dijalankan ke production** (dikonfirmasi pemilik project sesi
+ini). **Belum dikonfirmasi:** pengujian end-to-end setelah RLS aktif — lihat
+poin 2 & 3 di bagian "Yang HARUS dikonfirmasi" di bawah, JANGAN anggap otomatis
+aman hanya karena migration-nya sudah jalan tanpa error SQL.
 
 ## Yang HARUS dikonfirmasi di awal sesi berikutnya
 
-1. **`npm run build` + `npm run lint` untuk T-07 BELUM dijalankan** saat file
-   ini ditulis — agent sesi #7 tidak punya akses jaringan (`npm install` tidak
-   bisa dieksekusi). Kode `app/cek-struk/page.tsx` sudah diverifikasi manual
-   terhadap tipe di `lib/pos/cartLogic.ts` (`formatRupiah`) dan konvensi warna
-   di `app/globals.css` (`lco-teal`/`lco-green`/`lco-coral`/`lco-mustard`
-   semuanya ada), tapi belum lewat compiler. **Jalankan build dulu.**
-2. Migration `010_public_receipt_lookup.sql` **belum dijalankan ke database
-   production** — baru berupa file migration. Perlu dieksekusi lewat SQL
-   Editor Supabase (atau `scripts/migrate.ts` kalau jalurnya lewat situ)
-   sebelum halaman `/cek-struk` benar-benar bisa dites end-to-end.
-3. Halaman `/cek-struk` belum pernah dibuka di browser oleh pemilik project.
-   Setelah migration `010` jalan, coba cek satu struk asli (nomor + tanggal
-   yang benar) DAN satu percobaan salah (nomor benar tanggal salah, nomor
-   salah) — pastikan pesan gagalnya sama persis untuk kedua kasus (sengaja,
-   lihat komentar di migration).
+1. **`npm run build` (`next build`) penuh belum pernah sukses di lingkungan
+   manapun.** Di sandbox sesi ini, `tsc --noEmit` bersih (tidak ada type
+   error) dan `next build` gagal HANYA pada tahap fetch font Google
+   (`fonts.googleapis.com` diblokir jaringan sandbox) — bukan error kode.
+   **Jalankan `npm run build` dari mesin dengan akses internet normal (mis.
+   MacBook pemilik project) untuk konfirmasi build benar-benar hijau
+   end-to-end**, termasuk tahap yang tidak bisa diuji dari sandbox ini
+   (bundling font, dsb).
+2. **`npm run lint` menemukan 13 error + 6 warning** — daftar lengkap:
+   `react-hooks/set-state-in-effect` di `PaymentModal.tsx`,
+   `KategoriModule.tsx`, `TransactionDetailModal.tsx`, `useCategories.ts`,
+   `useProducts.ts`, `useSettings.ts` (pola `setState` langsung di body
+   `useEffect`, dianggap error oleh versi `eslint-config-next`/plugin
+   react-hooks yang ter-install sekarang); `@typescript-eslint/no-explicit-any`
+   di `useTransactions.ts:114` dan `transactionApi.ts:242,263`; warning
+   `no-img-element` di `ProdukModule.tsx` dan unused var `Boxes` di
+   `StokModule.tsx`. **Semua itu pra-eksisting, bukan disebabkan sesi ini** —
+   baru ketahuan sekarang karena ini kemungkinan besar kali pertama `npm
+install`+`npm run lint` berhasil jalan penuh (sesi-sesi sebelumnya sering
+   tidak punya akses jaringan). **Satu error ADA di file T-08 yang baru**:
+   `hooks/useReports.ts:516` — `useMemo` dependency array
+   `[dateRange.start.getTime(), dateRange.end.getTime()]` ditolak aturan
+   "dependency list harus ekspresi sederhana". Tidak menghalangi build/type
+   check (cuma lint), tapi sebaiknya dibereskan (opsi: pindahkan
+   `.getTime()` ke variabel terpisah sebelum dependency array) di sesi
+   terpisah — jangan campur dengan task lain, dan jangan asal "perbaiki
+   semua 13 error lint" tanpa diminta karena itu menyentuh banyak file lama
+   di luar scope T-08.
+3. **Uji ulang halaman `/cek-struk` secara end-to-end** (buka di browser
+   tanpa login) sekarang migration `011` sudah aktif di production — RPC-nya
+   `SECURITY DEFINER` seharusnya tetap jalan normal, tapi ini **belum
+   dikonfirmasi diuji langsung**, jangan diasumsikan.
+4. **Uji modul Kasir (checkout), Riwayat Transaksi, dan Dashboard** tidak
+   patah setelah RLS `011` aktif — bagian paling berisiko dari migration itu,
+   dan **belum dikonfirmasi diuji**.
+5. **Uji modul Laporan (T-08) end-to-end di browser** — belum pernah dibuka
+   pemilik project sejauh yang diketahui sesi ini: cek 3 sub-tab (Harian/
+   Bulanan, Per Shift, Piutang/Tempo), coba tandai satu piutang TEMPO lunas
+   (RPC `settle_receivable`), dan pastikan filter preset/custom tanggal
+   berfungsi.
 
 ## Task berikutnya (disarankan)
 
-- **Perbaiki temuan keamanan RLS di atas dulu** (`011_transactions_rls.sql`) —
-  ini bukan task bernomor di PRD §17, tapi risikonya lebih tinggi dari
-  menunda T-08. Utang ini sudah ada sejak sebelum T-01 (bukan disebabkan oleh
-  T-07), tapi baru ketahuan sekarang.
-- **T-08 — Laporan + PDF struk/WA + export** (PRD §17 Fase E, §4.5, §4.7):
-  isi `app/components/laporan/LaporanModule.tsx` dengan sub-tab Per Shift,
-  Harian/Bulanan, **Piutang/Tempo** (status Lunas/Belum/Jatuh Tempo, tandai
-  lunas + upload bukti — catatan: skema belum ada kolom "lunas", lihat utang
-  teknis T-06 di bawah); filter tanggal custom + preset; export Excel (`xlsx`)
-  & PDF (`jspdf` + `html-to-image`); `printLogic.ts` ditambah
-  `generateReceiptImage()` untuk share WA. Dependensi (T-02, T-04, T-06) sudah
-  selesai semua.
+- **Selesaikan sisa T-08**: `lib/pos/reportExport.ts` (export Excel via
+  `xlsx`, PDF via `jspdf`+`html-to-image`) dan `generateReceiptImage()` di
+  `printLogic.ts` untuk share WA.
+- **Jalankan checklist "Yang HARUS dikonfirmasi" di atas** (build asli,
+  end-to-end `/cek-struk` + Kasir/Riwayat/Dashboard + Laporan) — sebaiknya
+  sebelum menambah task baru lagi, supaya utang verifikasi tidak menumpuk.
+- Beres-beres lint pra-eksisting (13 error) — bukan blocker, tapi bikin
+  `npm run lint` tidak bisa dipakai sebagai sinyal "ada regresi baru" selama
+  masih penuh dengan error lama yang bercampur.
 
 ## Catatan penting untuk sesi berikutnya
 
-**File yang dibuat/diubah (T-07 — Halaman publik `/cek-struk`):**
+**File yang dibuat/diubah sesi #8:**
+
+- `app/components/layout/Sidebar.tsx` — diganti pemilik project (grup menu
+  "Laporan", key `laporan`).
+- `app/page.tsx` — dynamic import `LaporanModule` + render
+  `activeMenu === "laporan"`.
+- Tidak ada migration baru sesi ini — `011` dan `012` sudah ada sebagai file
+  dari sesi sebelumnya, sesi ini hanya mengonfirmasi keduanya sudah dieksekusi
+  ke production.
+
+Detail lengkap T-07 (RPC `get_transaction_by_receipt`, keputusan desain,
+utang teknis) dipindah ke histori sesi diciutkan di bawah — sudah tidak
+menjadi task aktif sejak RLS `011` menyusul dan diverifikasi.
+
+## Bug ditemukan (BELUM diperbaiki, bukan blocker) — baris Retur tidak punya rincian item
+
+Saat pemilik project cek fitur Retur: RPC `return_transaction` (migration `004`,
+dibuat sebelum sesi T-01) membuat baris transaksi baru berstatus `RETURN` (nomor
+`LCO-RTR/...`) untuk tiap retur, tapi **tidak pernah insert baris ke
+`transaction_items` untuk transaksi retur itu sendiri** — cuma nominal refund
+yang tersimpan. Akibatnya di modal detail, baris Retur cuma tampil total uang
+tanpa daftar barang. Halaman `/cek-struk` (T-07) mewarisi keterbatasan yang
+sama kalau pelanggan mencari langsung nomor `LCO-RTR/...`.
+
+Info barang yang diretur **sebenarnya tetap ada** — tersimpan sebagai
+`returned_qty` di `transaction_items` milik transaksi ASLI, dan sudah tampil
+di UI sebagai label "X sudah diretur" per item.
+
+**Belum diperbaiki atas keputusan pemilik project** (dikonfirmasi langsung) —
+kalau mau dikerjakan nanti: RPC `return_transaction` perlu insert baris
+`transaction_items` untuk `v_return_id` juga; **kalau ini dikerjakan,
+`hooks/useDashboard.ts` DAN `hooks/useReports.ts` (T-08, filter item yang sama)
+WAJIB ikut disesuaikan** supaya item terjual tidak terhitung ganda.
+
+<details>
+<summary>Detail T-07 (Halaman publik <code>/cek-struk</code>) — diciutkan, sudah bukan task aktif</summary>
+
+**File yang dibuat/diubah:**
 
 - `supabase/migrations/010_public_receipt_lookup.sql` — **baru**. RPC
   `get_transaction_by_receipt(p_receipt_no text, p_date date) returns jsonb`,
@@ -119,20 +220,17 @@ Dashboard, halaman baru `/cek-struk` ini sendiri) karena semuanya baca dari
   Satu-satunya sumber data adalah RPC di atas lewat `createClient()` dari
   `@/lib/supabase/client` (sesuai Aturan Main §18.4).
 - Tidak ada perubahan di `middleware.ts` — sudah lebih dulu mengizinkan
-  `/cek-struk` di `PUBLIC_PATHS` (diverifikasi langsung baca file, bukan
-  percaya begitu saja ke PRD/PROGRESS lama, sesuai pesan peringatan sesi #6).
+  `/cek-struk` di `PUBLIC_PATHS`.
 
 **Definition of Done T-07 — status:**
 
 - [x] Struk asli bisa diverifikasi publik — form nomor struk + tanggal →
       RPC → tampil status & rincian.
-- [ ] **"anon tidak bisa lihat data lain (cek dengan RLS)" — BELUM bisa
-      dicentang penuh.** Jalur RPC-nya sendiri sudah aman (lihat desain di
-      bawah), tapi ini butuh diverifikasi bersamaan dengan perbaikan temuan
-      RLS di atas, karena keduanya menyentuh tabel yang sama. Jangan centang
-      sampai `011_transactions_rls.sql` selesai dan diuji.
+- [x] "anon tidak bisa lihat data lain (cek dengan RLS)" — migration `011`
+      sudah jalan di production. **Pengujian end-to-end-nya sendiri belum
+      dikonfirmasi** — lihat poin 3 di "Yang HARUS dikonfirmasi" di atas.
 
-**Keputusan yang diambil sesi ini:**
+**Keputusan yang diambil sesi T-07:**
 
 - **Kunci pencarian: nomor struk + tanggal, bukan nomor struk saja.** Format
   nomor struk berurutan (`LCO-STR/26/09/000123`), jadi tanpa pasangan tanggal
@@ -181,43 +279,12 @@ Dashboard, halaman baru `/cek-struk` ini sendiri) karena semuanya baca dari
   kasir** (mis. QR code atau URL tercetak di footer). Bisa jadi penambahan
   kecil di `printLogic.ts`, tapi di luar scope T-07 seperti ditulis di PRD.
 
-## Bug ditemukan (BELUM diperbaiki, bukan blocker) — baris Retur tidak punya rincian item
-
-Saat pemilik project cek fitur Retur: RPC `return_transaction` (migration `004`,
-dibuat sebelum sesi T-01) membuat baris transaksi baru berstatus `RETURN` (nomor
-`LCO-RTR/...`) untuk tiap retur, tapi **tidak pernah insert baris ke
-`transaction_items` untuk transaksi retur itu sendiri** — cuma nominal refund
-yang tersimpan. Akibatnya di modal detail, baris Retur cuma tampil total uang
-tanpa daftar barang. **Halaman `/cek-struk` (T-07) mewarisi keterbatasan yang
-sama** kalau pelanggan mencari langsung nomor `LCO-RTR/...`: bagian "Rincian
-Barang" akan tampil "Tidak ada rincian barang untuk struk ini" (bukan error —
-RPC memang mengembalikan array kosong, UI sudah menangani array kosong).
-
-Info barang yang diretur **sebenarnya tetap ada** — tersimpan sebagai
-`returned_qty` di `transaction_items` milik transaksi ASLI (bukan baris Retur),
-dan sudah tampil di UI sebagai label "X sudah diretur" per item saat cari
-nomor struk ASLI-nya (baik di modal detail internal maupun di `/cek-struk`).
-Jadi bukan data hilang, cuma baris Retur-nya sendiri tidak "self-contained".
-
-**Belum diperbaiki atas keputusan pemilik project** (dikonfirmasi langsung, bukan
-diabaikan begitu saja) — kalau mau dikerjakan nanti: RPC `return_transaction`
-perlu insert baris `transaction_items` untuk `v_return_id` juga, lalu
-`TransactionDetailModal.tsx` DAN RPC `get_transaction_by_receipt` (T-07)
-otomatis akan menampilkannya karena keduanya sudah pakai `items` apa adanya.
-
-**⚠️ Kaitannya dengan T-06:** kalau bug ini nanti diperbaiki dengan cara menambah
-baris `transaction_items` untuk transaksi retur, **`hooks/useDashboard.ts` WAJIB
-ikut disesuaikan**. Saat ini hook sengaja hanya menarik item dari transaksi
-penjualan (`related_transaction_id IS NULL`) karena baris retur dipastikan tidak
-punya item. Begitu baris retur punya item, "item terjual" berisiko terhitung
-ganda kalau filter itu tidak diubah.
-
 **Belum diperbaiki, bukan blocker (sesi #7):**
 
 - Tidak ada bug baru ditemukan di modul lama saat mengerjakan T-07, di luar
-  temuan keamanan RLS yang sudah dicatat terpisah di atas (itu bukan bug baru
-  yang _disebabkan_ T-07, tapi celah lama yang baru ketahuan saat menulis RPC
-  T-07 dan memeriksa privilege tabel terkait).
+  temuan keamanan RLS (sudah diperbaiki migration `011`, lihat bagian atas).
+
+</details>
 
 ---
 

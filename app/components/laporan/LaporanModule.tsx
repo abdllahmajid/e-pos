@@ -16,18 +16,20 @@
 // visual baru di codebase ini.
 //
 // Yang SENGAJA belum ada di sini (bukan bug, scope file terpisah):
-// - Export Excel/PDF — tombol sudah disiapkan (lihat placeholder `onExport`)
-//   tapi implementasinya (pakai `xlsx`/`jspdf`+`html-to-image`, sudah ada di
-//   package.json) menyusul di file lib/pos/reportExport.ts terpisah, supaya
-//   file ini tidak makin panjang.
 // - `generateReceiptImage()` untuk share WA (disebut di rencana T-08 awal) —
-//   itu bagian printLogic.ts, file terpisah juga.
+//   itu bagian printLogic.ts, file terpisah (menyusul).
 // - Penyembunyian MENU Laporan dari Sidebar untuk kasir — itu di Sidebar.tsx +
-//   page.tsx (file terpisah berikutnya), belum diubah di sini. Untuk sekarang
-//   kalau kasir buka menu ini (kalau menu-nya sudah ditambahkan), yang menahan
-//   cuma layar blokir di bawah, sama seperti pola StokModule.tsx sebelum T-10.
+//   page.tsx (file terpisah), belum diubah di sini. Untuk sekarang kalau
+//   kasir buka menu ini, yang menahan cuma layar blokir di bawah, sama
+//   seperti pola StokModule.tsx sebelum T-10.
+//
+// Export Excel/PDF (lib/pos/reportExport.ts) SUDAH tersambung di sini lewat
+// dropdown "Export" — lihat `handleExportExcel`/`handleExportPdf` di
+// komponen utama. `reportContentRef` sengaja hanya membungkus konten TAB
+// AKTIF (bukan seluruh halaman) supaya PDF-nya cuma berisi data laporan,
+// tidak ikut menangkap filter tanggal/tombol tab.
 
-import { useMemo, useState, type ChangeEvent } from "react";
+import { useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   Loader2,
   AlertTriangle,
@@ -42,6 +44,7 @@ import {
   Upload,
   X,
   Download,
+  ChevronDown,
 } from "lucide-react";
 import {
   useReports,
@@ -53,6 +56,7 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { formatRupiah } from "@/lib/pos/cartLogic";
 import { uploadPaymentProofs } from "@/lib/pos/transactionApi";
+import { exportReportToExcel, exportReportToPdf } from "@/lib/pos/reportExport";
 
 type ReportTab = "harian" | "shift" | "piutang";
 
@@ -677,6 +681,79 @@ export default function LaporanModule() {
 
   const [activeTab, setActiveTab] = useState<ReportTab>("harian");
 
+  // ── TAMBAHAN (T-08 lanjutan) ── State & ref untuk export Excel/PDF.
+  // `reportContentRef` sengaja ditaruh cuma di sekeliling KONTEN TAB AKTIF
+  // (bukan seluruh halaman termasuk filter tanggal/tombol tab) — supaya PDF
+  // yang dihasilkan cuma berisi data laporan, bukan ikut nangkap UI kontrol
+  // yang tidak relevan buat diarsipkan. Lihat lib/pos/reportExport.ts untuk
+  // kenapa Excel & PDF punya sumber data yang beda (data mentah vs snapshot
+  // visual DOM).
+  const reportContentRef = useRef<HTMLDivElement>(null);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  // Dipakai baik untuk isi sel "Rentang Tanggal" di Excel maupun judul di PDF —
+  // format sama persis dengan yang tampil di bawah DateFilterBar (lihat
+  // `formatDateOnly`/`toDateInputValue` di komponen itu), supaya orang yang
+  // baca file Excel/PDF tidak bingung membandingkannya dengan tampilan layar.
+  const dateRangeLabel = useMemo(
+    () =>
+      `${formatDateOnly(toDateInputValue(dateRange.start))} — ${formatDateOnly(
+        toDateInputValue(dateRange.end),
+      )}`,
+    [dateRange],
+  );
+
+  const handleExportExcel = () => {
+    setIsExportMenuOpen(false);
+    setExportError(null);
+    try {
+      exportReportToExcel({
+        dateRangeLabel,
+        summary: salesSummary,
+        daily: dailySales,
+        shifts,
+        receivables,
+      });
+    } catch (err) {
+      // `XLSX.writeFile` jarang gagal (murni proses client), tapi tetap
+      // dibungkus try/catch — mis. browser yang memblokir download otomatis.
+      setExportError(
+        err instanceof Error ? err.message : "Gagal membuat file Excel.",
+      );
+    }
+  };
+
+  const handleExportPdf = async () => {
+    setIsExportMenuOpen(false);
+    setExportError(null);
+
+    if (!reportContentRef.current) {
+      // Secara teori tidak akan kejadian (tombol Export selalu ada bareng
+      // konten tab), tapi dijaga eksplisit — daripada exportReportToPdf()
+      // dipanggil dengan null dan error-nya jadi TypeError yang membingungkan.
+      setExportError("Konten laporan belum siap untuk diekspor.");
+      return;
+    }
+
+    setIsExporting(true);
+    try {
+      const tabLabel =
+        TABS.find((tab) => tab.key === activeTab)?.label ?? "Laporan";
+      await exportReportToPdf(reportContentRef.current, {
+        title: `Laporan ${tabLabel}`,
+        dateRangeLabel,
+      });
+    } catch (err) {
+      setExportError(
+        err instanceof Error ? err.message : "Gagal membuat file PDF.",
+      );
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   // Lihat catatan ASUMSI di header file & hooks/useReports.ts.
   const canViewReports = user?.role === "admin" || user?.role === "supervisor";
 
@@ -714,17 +791,60 @@ export default function LaporanModule() {
           </p>
         </div>
 
-        {/* Placeholder export — implementasi menyusul di file lib/pos/reportExport.ts */}
-        <button
-          type="button"
-          disabled
-          title="Export Excel/PDF menyusul di file berikutnya"
-          className="flex items-center gap-2 rounded-md border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-400 dark:border-zinc-800"
-        >
-          <Download className="h-3.5 w-3.5" />
-          Export
-        </button>
+        {/* Export Excel/PDF (T-08 lanjutan) — dropdown, bukan tombol tunggal,
+            karena dua format ini sumber datanya beda (lihat catatan di
+            lib/pos/reportExport.ts): Excel = data mentah SEMUA sub-tab
+            sekaligus, PDF = snapshot visual tab yang SEDANG aktif saja. Kalau
+            digabung jadi satu tombol, orang bisa salah kira PDF juga berisi
+            semua sub-tab. */}
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setIsExportMenuOpen((open) => !open)}
+            disabled={isExporting}
+            className="flex items-center gap-2 rounded-md border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-600 transition-colors duration-150 hover:border-lco-teal hover:text-lco-teal disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-400"
+          >
+            {isExporting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5" />
+            )}
+            Export
+            <ChevronDown
+              className={`h-3 w-3 transition-transform duration-150 ${
+                isExportMenuOpen ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+
+          {isExportMenuOpen && (
+            <div className="absolute right-0 z-10 mt-2 w-56 overflow-hidden rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-950">
+              <button
+                type="button"
+                onClick={handleExportExcel}
+                className="block w-full px-4 py-2.5 text-left text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-900"
+              >
+                Excel (.xlsx) — semua sub-tab
+              </button>
+              <button
+                type="button"
+                onClick={handleExportPdf}
+                className="block w-full border-t border-zinc-100 px-4 py-2.5 text-left text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+              >
+                PDF — tab &quot;
+                {TABS.find((tab) => tab.key === activeTab)?.label}&quot; ini
+              </button>
+            </div>
+          )}
+        </div>
       </div>
+
+      {exportError && (
+        <div className="mb-4 flex items-start gap-3 rounded-md border border-lco-coral/30 bg-lco-coral/10 p-4 text-sm text-lco-coral">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          {exportError}
+        </div>
+      )}
 
       <DateFilterBar
         preset={preset}
@@ -768,7 +888,7 @@ export default function LaporanModule() {
           Memuat data laporan...
         </div>
       ) : (
-        <>
+        <div ref={reportContentRef} className="p-1">
           {activeTab === "harian" && (
             <HarianBulananTab summary={salesSummary} daily={dailySales} />
           )}
@@ -776,7 +896,7 @@ export default function LaporanModule() {
           {activeTab === "piutang" && (
             <PiutangTab receivables={receivables} onSettle={settleReceivable} />
           )}
-        </>
+        </div>
       )}
     </div>
   );

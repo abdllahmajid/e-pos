@@ -37,6 +37,18 @@ const StokModule = dynamic(() => import("./components/stok/StokModule"), {
   ssr: false,
 });
 
+// ── TAMBAHAN (T-08) ── Modul Laporan (Harian/Bulanan, Per Shift, Piutang/Tempo).
+// Menu "laporan" sudah ada di Sidebar.tsx sejak T-08, tapi belum dirender di
+// sini sampai sekarang — sebelum baris ini ditambah, klik menu Laporan cuma
+// menampilkan layar kosong (activeMenu berubah, tapi tidak ada blok JSX yang
+// cocok di bawah).
+const LaporanModule = dynamic(
+  () => import("./components/laporan/LaporanModule"),
+  {
+    ssr: false,
+  },
+);
+
 export default function LCOPOS() {
   const [activeMenu, setActiveMenu] = useState("kasir");
 
@@ -61,6 +73,7 @@ export default function LCOPOS() {
         {activeMenu === "riwayat" && <TransactionHistoryModule />}
         {activeMenu === "stok" && <StokModule />}
         {activeMenu === "kas" && <KasModule />}
+        {activeMenu === "laporan" && <LaporanModule />}
       </main>
     </div>
   );
