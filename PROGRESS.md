@@ -6,6 +6,86 @@
 
 ## Status terakhir diperbarui
 
+2026-09-19, sesi #15. **T-11 bagian 2 (Split payment) — RPC baru dibuat,
+`KasirModule.tsx` di-wire, migration DIJALANKAN ke production DAN
+DIKONFIRMASI berjalan lancar oleh pemilik project.** Sesi ini juga
+**meluruskan klaim yang keliru dari sesi #14**: sesi #14 mencatat sudah
+membuat `019_held_orders.sql` (T-11) dan menggeser migration T-10 jadi
+`020_profiles_update_admin_lock.sql` supaya tidak bentrok lagi — **tapi
+isi zip project yang sebenarnya diserahkan ke sesi ini TETAP
+`019_hold_orders.sql`** (ejaan "hold", bukan "held" seperti yang dicatat
+sesi #14) **DAN `019_profiles_update_admin_lock.sql`, DUA-DUANYA MASIH
+BERNOMOR `019`.** Tidak ada file bernama `020_*` di repo yang diserahkan ke
+sesi ini sama sekali. Kemungkinan besar sesi #14 memang menulis file dengan
+nama yang benar, tapi export/commit ke repo yang diserahkan ke sesi
+berikutnya gagal sebagian — pola yang SAMA PERSIS dengan migration `015`
+yang pernah hilang (sesi #10→#11). **Tabrakan nomor migration `019` yang
+ditemukan sesi #13 JADI BELUM SELESAI**, meski sesi #14 mencatat dirinya
+sudah menyelesaikannya. Lihat "Yang HARUS dikonfirmasi" poin 15 (baru).
+
+Yang dikerjakan sesi ini:
+
+1. **`supabase/migrations/021_split_payment.sql` — baru.** `CREATE OR
+REPLACE FUNCTION create_transaction` menambah parameter
+   `p_payments jsonb default null` untuk split payment (T-11 bagian 2, PRD
+   §17 Fase G / §12 fase 1.1). Kalau `p_payments` diisi (array 1-4 baris
+   `{method, amount, received_amount, due_date}`), RPC memvalidasi ulang di
+   server — jumlah baris, tiap metode maksimal sekali, total `amount` harus
+   PERSIS sama dengan `p_total`, CASH wajib `received_amount >= amount`,
+   TEMPO wajib `due_date` + nama pelanggan (Aturan Main #5, PRD §18: logika
+   uang wajib di RPC, bukan cuma client) — lalu insert SATU baris `payments`
+   per elemen array (tabel `payments` memang sudah didesain 1-ke-banyak
+   sejak migration 006). Kalau `p_payments` NULL, perilaku identik migration
+   013 (satu metode, tidak ada perubahan). Hasil RPC menambah field
+   `payments` (array `{payment_id, method, amount}`, urut sesuai input)
+   supaya `PaymentModal.tsx` bisa menempelkan bukti transfer/QRIS ke baris
+   yang benar. Detail keputusan desain lengkap ada di komentar header file.
+   ⚠️ **Temuan saat mengerjakan ini**: `lib/pos/transactionApi.ts` dan
+   `app/components/kasir/PaymentModal.tsx` **SUDAH LEBIH DULU lengkap
+   menulis SELURUH alur split payment sisi client** (tipe
+   `SplitPaymentLine`, `validateSplitPayments()`, mode "Split Bayar" penuh
+   di UI) SEBELUM sesi ini — semuanya sudah menandai diri "TAMBAHAN (021)"
+   di komentar, menunggu migration `021` ini dibuat. **TIDAK ADA jejak sesi
+   manapun di file ini yang mencatat siapa/kapan kode client itu ditulis** —
+   pola yang SAMA PERSIS dengan temuan T-11 bagian 1&3 di sesi #13. Lihat
+   "Yang HARUS dikonfirmasi" poin 13 (masih berlaku, sekarang juga mencakup
+   split payment, bukan cuma hold order/barcode).
+2. **`app/components/kasir/KasirModule.tsx`** — 3 perubahan: (a) import tipe
+   `SplitPaymentLine`/`CreatedPayment` dari `transactionApi.ts`; (b) handler
+   baru `handleConfirmSplitPayment` (pola sama seperti `handleConfirmPayment`
+   yang sudah ada: simpan transaksi → cetak struk → simpan `lastReceipt` →
+   kosongkan keranjang; `paidAmount` struk = jumlah semua baris pembayaran,
+   `method` struk digabung jadi label seperti "Tunai + Transfer" lewat
+   konstanta baru `SPLIT_METHOD_LABELS`); (c) prop
+   `onConfirmSplitPayment={handleConfirmSplitPayment}` disambungkan ke
+   `<PaymentModal>` — **SEBELUM perubahan ini prop tersebut TIDAK PERNAH
+   dikirim sama sekali**, jadi pilihan "Split Bayar" (yang UI-nya sudah
+   lengkap sejak sebelum sesi ini, lihat poin 1) belum pernah bisa muncul di
+   layar Kasir manapun sampai sesi ini.
+3. **Migration `021` sudah dijalankan pemilik project ke Supabase production
+   DAN sudah diuji coba langsung — dikonfirmasi "berjalan dengan lancar".**
+   Ini bagian T-11 PERTAMA sejak audit sesi #13 yang statusnya benar-benar
+   terverifikasi end-to-end di sesi yang sama dengan penulisan kodenya
+   (biasanya menggantung 1-2 sesi seperti migration 013/019/020 sebelumnya).
+   **Detail kombinasi yang SUDAH dicoba TIDAK dirinci pemilik project** —
+   mis. belum jelas apakah sudah dicoba split 3-4 metode sekaligus, upload
+   bukti BANK_TRANSFER+QRIS bersamaan dalam satu transaksi split, atau TEMPO
+   sebagai salah satu baris split (bukan satu-satunya metode). **Jangan
+   asumsikan SEMUA kombinasi sudah teruji hanya dari konfirmasi umum ini** —
+   lihat "Yang HARUS dikonfirmasi" poin 16 (baru).
+4. **Verifikasi kode sesi ini** (jaringan tersedia): `npm install` berhasil.
+   `tsc --noEmit` penuh: cuma 1 error pra-eksisting (`app/layout.tsx:20`
+   `LayoutProps`, sama seperti tercatat sejak sesi #8) — **tidak ada error
+   baru** dari `KasirModule.tsx`. `eslint` khusus `KasirModule.tsx`: **0
+   error, 0 warning**. Migration `021` (SQL) tidak bisa di-lint dari sandbox
+   ini (sama seperti migration lain, tidak ada koneksi database) — tapi
+   SUDAH diverifikasi jalan di production oleh pemilik project (lihat poin
+   3), beda dari kebanyakan migration sesi-sesi sebelumnya yang biasanya
+   berhenti di "baru file, belum dieksekusi".
+
+<details>
+<summary>Detail sesi #14 (rekonstruksi migration `held_orders` T-11 & migration T-10 penggeseran nomor — ⚠️ menurut sesi #15, isi repo yang sebenarnya TIDAK cocok dengan klaim entri ini, lihat "Status terakhir diperbarui" sesi #15 di atas) — diciutkan</summary>
+
 2026-09-19, sesi #14. **Perbaikan atas Temuan 1 & 2 sesi #13 — 2 file
 migration baru dibuat: `019_held_orders.sql` (T-11 bagian 1) dan
 `020_profiles_update_admin_lock.sql` (T-10, digeser dari nomor `019` yang
@@ -56,6 +136,8 @@ benar-benar berfungsi. Lihat "Yang HARUS dikonfirmasi" poin 14.
    dicocokkan lagi terhadap `hooks/useHoldOrders.ts` dan migration 018
    yang sudah ada). `tsc --noEmit` & `eslint` tidak relevan untuk sesi ini
    (tidak ada file `.ts`/`.tsx` yang diubah).
+
+</details>
 
 <details>
 <summary>Detail sesi #13 (audit — tabrakan migration `019` & T-11 bagian 1/3 ditemukan tanpa catatan) — diciutkan</summary>
@@ -675,23 +757,29 @@ build` (`next build`) **gagal, tapi HANYA karena sandbox agent sesi ini
 - [ ] **T-11 — Fase 1.1/2.0 (PRD §17 Fase G, "setelah MVP stabil")** — status
       **SEBAGIAN, ditemukan lewat audit kode sesi #13, TIDAK ADA riwayat sesi
       manapun sebelum #13 yang mencatat pengerjaannya**:
-  - [x] (kode ada, migration ditulis ulang sesi #14, belum dijalankan)
-        **Bagian 1 — Hold order/"Tunda"**: `hooks/useHoldOrders.ts` + wiring
-        penuh di `KasirModule.tsx` (tombol Tunda, modal daftar held order,
-        resume dengan validasi ulang stok). Bergantung tabel `held_orders` —
-        migration aslinya hilang (Temuan 1&2, sesi #13), sudah direkonstruksi
-        sesi #14 sebagai `019_held_orders.sql` (lihat detail sesi #14 di
-        atas), **TAPI BELUM DIJALANKAN ke database manapun**. **Fitur ini
-        akan tetap gagal total kalau dipakai di production sampai migration
-        ini benar-benar dieksekusi.**
+  - [x] (kode ada, migration `019_hold_orders.sql` ADA di repo per sesi #15,
+        TAPI status jalan-atau-belum di database TIDAK DIKONFIRMASI sesi
+        ini — lihat "Yang HARUS dikonfirmasi" poin 15) **Bagian 1 — Hold
+        order/"Tunda"**: `hooks/useHoldOrders.ts` + wiring penuh di
+        `KasirModule.tsx` (tombol Tunda, modal daftar held order, resume
+        dengan validasi ulang stok). Bergantung tabel `held_orders`.
+        **Fitur ini akan gagal total kalau dipakai sebelum migration
+        `019_hold_orders.sql` benar-benar dieksekusi ke production** — belum
+        ada konfirmasi baru soal ini sejak sesi #14.
   - [x] (kode ada, tidak butuh migration) **Bagian 3 — Scan barcode kamera**:
         `app/components/kasir/BarcodeScanModal.tsx` (`html5-qrcode`) + wiring
         di `KasirModule.tsx`. Tidak menyentuh database, jadi kemungkinan
         besar sudah bisa dipakai langsung setelah build — **tapi belum
         pernah dicoba di browser/HP sungguhan sama sekali** sejauh yang
         tercatat di file ini.
-  - [ ] Bagian 2 — Split payment: **belum ada jejak kode sama sekali.**
-        Lihat "Yang HARUS dikonfirmasi" poin 12-14.
+  - [x] **Bagian 2 — Split payment: SELESAI & DIKONFIRMASI JALAN sesi #15.**
+        `supabase/migrations/021_split_payment.sql` (RPC `create_transaction`
+        menerima `p_payments`) + wiring `onConfirmSplitPayment` di
+        `KasirModule.tsx` — migration sudah dijalankan ke production dan
+        diuji coba langsung oleh pemilik project ("berjalan dengan lancar").
+        Ini satu-satunya bagian T-11 yang statusnya benar-benar
+        terverifikasi end-to-end. Detail kombinasi yang SUDAH dicoba tidak
+        dirinci pemilik project — lihat "Yang HARUS dikonfirmasi" poin 16.
 - [ ] T-12 (FCM/cron/PWA) & T-13 (backup/offline) — belum ada jejak kode
       sama sekali (dicek ulang sesi #13: tidak ada `firebase`,
       `manifest.json`, `api/backup`, atau pemakaian IndexedDB di luar
@@ -874,45 +962,98 @@ install`+`npm run lint` berhasil jalan penuh (sesi-sesi sebelumnya sering
     desain di `019_held_orders.sql`), dan ulangi pengujian poin 11 khusus
     untuk memastikan policy `profiles_update_admin_supervisor_locked`
     (bukan lagi `profiles_update_admin_supervisor` yang lama) yang aktif.
+15. **⚠️ BARU (sesi #15) — poin 9, 11, 12, dan 14 DI ATAS SEMUANYA MERUJUK KE
+    FILE `020_profiles_update_admin_lock.sql` YANG TIDAK ADA DI REPO.** Sesi
+    #15 mengecek langsung isi zip project yang diserahkan: migration T-10
+    masih bernama `019_profiles_update_admin_lock.sql`, dan migration T-11
+    bagian 1 bernama `019_hold_orders.sql` (bukan `019_held_orders.sql`
+    seperti tercatat sesi #14) — **tabrakan nomor `019` yang ditemukan sesi
+    #13 BELUM SELESAI**, meski sesi #14 mencatat dirinya sudah
+    menyelesaikannya. Kemungkinan besar sesi #14 memang sempat menulis file
+    dengan nama `019_held_orders.sql`/`020_profiles_update_admin_lock.sql`,
+    tapi yang ter-commit/ter-export ke repo yang diserahkan ke sesi
+    berikutnya adalah versi SEBELUM penggeseran nomor (pola yang sama
+    seperti migration `015` yang pernah hilang total, sesi #10→#11). **Sesi
+    ini TIDAK memperbaiki penggeseran nomornya** (di luar scope permintaan
+    sesi #15, yang fokus ke split payment) — cuma meluruskan catatan supaya
+    sesi berikutnya tidak salah asumsi. **Sebelum menjalankan migration T-10
+    apa pun ke production, cek dulu isi file yang benar-benar ada di repo
+    saat itu** (`ls supabase/migrations | grep 019`), jangan percaya begitu
+    saja ke nomor yang disebut di poin 9/11/12/14 atau di baris "Task
+    selesai" untuk T-10. Kalau memang mau menuntaskan penggeseran nomor,
+    ingat migration `019_hold_orders.sql` (T-11) TIDAK BOLEH ikut digeser —
+    `hooks/useHoldOrders.ts` sudah 3x menyebut "migration 019" verbatim di
+    komentarnya (lihat entri sesi #14 di atas) — yang perlu digeser cuma
+    migration T-10-nya, jadi `019_profiles_update_admin_lock.sql` →
+    `020_profiles_update_admin_lock.sql`.
+16. **⚠️ BARU (sesi #15) — split payment (migration `021`) sudah dikonfirmasi
+    jalan secara UMUM, tapi kombinasi spesifik berikut BELUM DIPASTIKAN
+    sudah dicoba** (pemilik project cuma bilang "berjalan dengan lancar",
+    tanpa rincian skenario):
+    - Split 3-4 metode sekaligus dalam satu transaksi (bukan cuma 2).
+    - Upload bukti untuk BANK_TRANSFER **dan** QRIS bersamaan dalam satu
+      transaksi split (`handleProcessSplitPayment` di `PaymentModal.tsx`
+      menempelkan bukti ke baris `payment_id` masing-masing lewat
+      `uploadPaymentProofs()` — belum ada konfirmasi jalur ini teruji untuk
+      > 1 baris bukti sekaligus).
+    - TEMPO sebagai SALAH SATU baris split (bukan satu-satunya metode) —
+      pastikan baris `payments` untuk TEMPO tetap muncul di Laporan
+      Piutang (T-08, `hooks/useReports.ts`) sama seperti TEMPO tunggal,
+      karena query piutang kemungkinan memfilter `method = 'TEMPO'` di
+      tabel `payments` (per-baris), bukan per-transaksi — kalau begitu
+      seharusnya otomatis benar, tapi belum ada yang mengecek langsung.
+    - Coba juga transaksi split GAGAL sebagian (mis. jumlah baris tidak
+      pas dengan total) benar-benar ditolak RPC dengan pesan yang jelas,
+      bukan cuma divalidasi di client.
+      Tidak menghalangi pekerjaan berikutnya, tapi jangan anggap split
+      payment "100% teruji" hanya dari konfirmasi umum sesi #15 ini.
 
 ## Task berikutnya (disarankan)
 
-- **Prioritas TERTINGGI sekarang (sesi #14 sudah menulis file migration-nya,
-  TAPI belum satu pun dijalankan): jalankan `019_held_orders.sql` dan
-  `020_profiles_update_admin_lock.sql` ke Supabase production** (poin 14,
-  "Yang HARUS dikonfirmasi") — SEBELUM menjalankan migration `016`-`018`
-  yang lama kalau belum, dan SEBELUM deploy frontend zip ini ke production.
-  Kalau langsung deploy tanpa membereskan ini dulu, modul Pengaturan akan
-  terlihat "jalan" tapi pengaman anti-privilege-escalation-nya bolong, DAN
-  fitur Tunda di Kasir akan mulai dipakai orang lalu gagal begitu menyentuh
-  tabel yang tidak ada. **Catatan tambahan untuk `019_held_orders.sql`**:
-  isinya REKONSTRUKSI dari kode TypeScript (file aslinya hilang, lihat
-  Temuan 1&2 sesi #13) — baca komentar header file itu dan cocokkan sekali
-  lagi terhadap `hooks/useHoldOrders.ts` sebelum menjalankannya, jangan
-  langsung percaya 100% tanpa review.
-- Setelah migration-migration di atas jalan: jalankan juga `016`–`018` kalau
-  memang belum (poin 9, "Yang HARUS dikonfirmasi") DAN uji modul Pengaturan
-  end-to-end di browser (poin 11), **DAN uji fitur Tunda + scan barcode
-  kamera di Kasir end-to-end** (poin 14 — belum ada checklist campuran
-  hold-order+multi-kasir sebelumnya di file ini, poin 14 sudah menyebut
-  skenario minimal yang harus dicoba). Setelah itu, konfirmasi juga apakah
-  role akun pemilik project sudah dinaikkan ke admin (poin 10) supaya sesi
-  berikutnya tidak salah asumsi soal role akun yang dipakai testing.
+- **✅ Split payment (migration `021` + wiring `KasirModule.tsx`) sudah
+  SELESAI & TERKONFIRMASI JALAN sesi #15** — bukan prioritas lagi, tapi
+  lihat poin 16 ("Yang HARUS dikonfirmasi") untuk kombinasi skenario yang
+  belum tentu ikut teruji (split 3-4 metode, upload bukti ganda, TEMPO di
+  dalam split, dst).
+- **Prioritas TERTINGGI sekarang: BERESKAN tabrakan nomor migration `019`
+  (poin 15, "Yang HARUS dikonfirmasi", BARU sesi #15) SEBELUM menjalankan
+  migration T-10 apa pun.** Sesi #14 mencatat dirinya sudah menggeser
+  migration T-10 jadi `020_profiles_update_admin_lock.sql` supaya tidak
+  bentrok dengan `019_hold_orders.sql` (T-11) — **tapi itu TIDAK BENAR
+  untuk repo yang ada sekarang**, kedua file masih sama-sama bernomor
+  `019`. Cek dulu `ls supabase/migrations | grep 019` di awal sesi
+  berikutnya, JANGAN percaya begitu saja ke nomor `020` yang disebut di
+  beberapa tempat lain di file ini (poin 9/11/12/14 "Yang HARUS
+  dikonfirmasi", dan baris "Task selesai" T-10) — semuanya sudah usang
+  menurut temuan sesi #15. Migration `019_hold_orders.sql` (T-11) TIDAK
+  BOLEH ikut digeser (`hooks/useHoldOrders.ts` sudah hardcode "migration
+  019" di komentarnya) — yang perlu digeser cuma migration T-10-nya jadi
+  `020_profiles_update_admin_lock.sql`, BARU dijalankan ke production
+  sesudah `019_hold_orders.sql`/`018` (urutan bebas relatif satu sama lain
+  seperti dicatat sesi #14, tapi `020` tetap harus SESUDAH `018`).
+- Setelah nomor migration-nya benar-benar beres & dijalankan: jalankan juga
+  `016`–`018` kalau memang belum (poin 9, "Yang HARUS dikonfirmasi") DAN uji
+  modul Pengaturan end-to-end di browser (poin 11), **DAN uji fitur Tunda +
+  scan barcode kamera di Kasir end-to-end** (poin 14 — skenario minimal yang
+  harus dicoba sudah disebutkan di poin itu). Setelah itu, konfirmasi juga
+  apakah role akun pemilik project sudah dinaikkan ke admin (poin 10) supaya
+  sesi berikutnya tidak salah asumsi soal role akun yang dipakai testing.
 - **Migration `013` (sesi #9, field HP customer) MASIH belum dikonfirmasi
   jalan** — sudah menggantung sejak sesi #9, disebutkan lagi di sesi
-  #10/#11, dan sesi #12/#13/#14 TIDAK menambah info baru soal ini. Jangan
-  lupakan ini hanya karena perhatian sekarang tertuju ke T-10/T-11 — lihat
-  poin 7 di "Yang HARUS dikonfirmasi".
+  #10/#11, dan sesi #12/#13/#14/#15 TIDAK menambah info baru soal ini.
+  Jangan lupakan ini hanya karena perhatian sekarang tertuju ke T-10/T-11 —
+  lihat poin 7 di "Yang HARUS dikonfirmasi".
 - Setelah checklist verifikasi T-10/T-11 & migration lama beres: **T-10
-  adalah task terakhir yang tercantum eksplisit di ALUR UTAMA PRD §17**
-  (T-11 sendiri sudah masuk Fase G/"setelah MVP stabil", dan sesi #13
-  menemukan sebagian sudah dikerjakan tanpa tercatat — lihat poin 13, "Yang
-  HARUS dikonfirmasi", soal siapa yang mengerjakannya) — cek PRD §17
-  langsung untuk task/fase berikutnya (kalau ada) sebelum mulai kerjaan
-  baru, jangan asumsikan dari file ini saja karena PROGRESS.md beberapa
-  kali terbukti basi soal urutan task (lihat catatan "PROGRESS.md basi" di
-  beberapa sesi, termasuk sesi #12, dan temuan T-11 tak tercatat di sesi
-  #13).
+  adalah task terakhir yang tercantum eksplisit di ALUR UTAMA PRD §17**, dan
+  T-11 (Fase G/"setelah MVP stabil") sekarang **kodenya sudah lengkap
+  ketiga bagiannya** (hold order, barcode, split payment) — tinggal
+  verifikasi browser + beres-beres migration di atas. Kalau semua itu sudah
+  beres, cek PRD §17 langsung untuk task/fase berikutnya (T-12 FCM/cron/PWA
+  atau T-13 backup/offline, keduanya belum ada jejak kode sama sekali per
+  sesi #13) — jangan asumsikan urutan dari file ini saja, PROGRESS.md
+  beberapa kali terbukti basi soal ini (lihat catatan "PROGRESS.md basi" di
+  beberapa sesi, termasuk sesi #12, dan dua kali salah catat migration `019`
+  di sesi #13 & #15).
 - Beres-beres lint pra-eksisting (13 error dari sesi #8, salah satunya di
   `TransactionDetailModal.tsx` — sudah tercatat sejak poin 4/"Yang HARUS
   dikonfirmasi" #2 di histori sesi #8, TIDAK bertambah karena perubahan sesi

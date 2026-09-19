@@ -40,7 +40,14 @@ import {
   isOutOfStock,
   formatRupiah,
 } from "@/lib/pos/cartLogic";
-import { createTransaction, PaymentMethod } from "@/lib/pos/transactionApi";
+import {
+  createTransaction,
+  PaymentMethod,
+  // ── TAMBAHAN (021, T-11 bagian 2) ── Tipe untuk wiring split payment ke
+  // PaymentModal — lihat handleConfirmSplitPayment di bawah.
+  type SplitPaymentLine,
+  type CreatedPayment,
+} from "@/lib/pos/transactionApi";
 import { useAuth } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings";
 // ── TAMBAHAN (T-04) ── Layar Kasir wajib mengecek shift aktif sebelum transaksi
@@ -52,6 +59,18 @@ import { useShifts } from "@/hooks/useShifts";
 // ── TAMBAHAN (T-11 bagian 1) ── Hold order / "Tunda" — lihat komentar header
 // hooks/useHoldOrders.ts untuk pembagian tanggung jawab lengkap.
 import { useHoldOrders } from "@/hooks/useHoldOrders";
+
+// ── TAMBAHAN (021, T-11 bagian 2) ── Label singkat per metode, dipakai
+// handleConfirmSplitPayment() untuk menyusun field `method` gabungan di
+// struk (mis. "Tunai + Transfer") — ReceiptData.method bertipe `string`
+// bebas (lib/pos/printLogic.ts), jadi aman diisi gabungan begini, beda dari
+// PaymentMethod tunggal yang dipakai jalur pembayaran biasa.
+const SPLIT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  CASH: "Tunai",
+  BANK_TRANSFER: "Transfer",
+  QRIS: "QRIS",
+  TEMPO: "Tempo",
+};
 
 interface KasirModuleProps {
   /** Dipanggil saat kasir menekan tombol "Buka Shift" di layar blokir (lihat di bawah). */
@@ -216,6 +235,94 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       return { paymentId: result.payment_id };
     } catch (err) {
       console.error("Transaction failed:", err);
+      const message =
+        err instanceof Error ? err.message : "Transaksi gagal disimpan.";
+      setTransactionError(message);
+      throw err instanceof Error ? err : new Error(message);
+    } finally {
+      setIsSavingTransaction(false);
+    }
+  };
+
+  // ── TAMBAHAN (021, T-11 bagian 2) ── Versi split payment dari
+  // handleConfirmPayment di atas. Alurnya sengaja dibuat semirip mungkin
+  // (createTransaction -> susun ReceiptData -> cetak -> simpan lastReceipt
+  // -> kosongkan keranjang) supaya perilaku di luar bagian pembayaran
+  // (cetak, "Kirim WA", refetch stok) tetap konsisten dengan jalur tunggal.
+  // Perbedaan utama:
+  // - createTransaction() dipanggil dengan `payments` (array), bukan
+  //   `paymentMethod`/`paymentAmount` tunggal — lihat cabang SplitPaymentParams
+  //   di lib/pos/transactionApi.ts.
+  // - `paidAmount` struk = jumlah SEMUA baris (bukan satu nilai yang dikirim
+  //   kasir), dan `method` struk digabung dari semua metode yang dipakai
+  //   (mis. "Tunai + Transfer") memakai SPLIT_METHOD_LABELS di atas.
+  // - Mengembalikan `payments` (bukan `paymentId` tunggal) — PaymentModal
+  //   butuh ini untuk menempelkan bukti transfer/QRIS ke baris yang benar
+  //   (lihat handleProcessSplitPayment di PaymentModal.tsx).
+  const handleConfirmSplitPayment = async (
+    lines: SplitPaymentLine[],
+    extra?: {
+      customerName?: string;
+      customerPhone?: string;
+      printFormat?: "thermal" | "nota";
+    },
+  ): Promise<{ payments: CreatedPayment[] }> => {
+    if (cart.length === 0) throw new Error("Keranjang masih kosong.");
+    setTransactionError(null);
+    setIsSavingTransaction(true);
+
+    try {
+      const result = await createTransaction({
+        items: cart,
+        subtotal,
+        discount,
+        tax,
+        total: grandTotal,
+        payments: lines,
+        customerName: extra?.customerName,
+        customerPhone: extra?.customerPhone,
+      });
+
+      const totalPaid = lines.reduce((sum, line) => sum + line.amount, 0);
+      const methodLabel = lines
+        .map((line) => SPLIT_METHOD_LABELS[line.method] ?? line.method)
+        .join(" + ");
+
+      const receiptData: ReceiptData = {
+        receiptNo: result.receipt_no,
+        cashierName: user?.full_name ?? user?.email ?? null,
+        customerName: extra?.customerName,
+        items: cart.map((item) => ({
+          name: item.product.name,
+          price: item.product.sell_price,
+          qty: item.qty,
+        })),
+        subtotal,
+        discount,
+        tax,
+        total: grandTotal,
+        paidAmount: totalPaid,
+        changeAmount: result.change_amount ?? 0,
+        method: methodLabel,
+      };
+
+      if (extra?.printFormat === "nota") {
+        printA6Nota(
+          receiptData,
+          (posSettings.paperNota as "A6" | "A5") ?? "A6",
+        );
+      } else {
+        printThermalReceipt(receiptData);
+      }
+
+      setLastReceipt(receiptData);
+      setLastCustomerPhone(extra?.customerPhone ?? null);
+
+      setCart(clearCart());
+      await refetch();
+      return { payments: result.payments };
+    } catch (err) {
+      console.error("Split transaction failed:", err);
       const message =
         err instanceof Error ? err.message : "Transaksi gagal disimpan.";
       setTransactionError(message);
@@ -750,6 +857,11 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
           (posSettings.printDefault as "thermal" | "nota") ?? "thermal"
         }
         onConfirmPayment={handleConfirmPayment}
+        // ── TAMBAHAN (021, T-11 bagian 2) ── Sebelum ini, prop tidak pernah
+        // dikirim sama sekali — pilihan "Split Bayar" di PaymentModal.tsx
+        // sengaja hanya muncul kalau prop ini ADA (`splitAvailable = !!onConfirmSplitPayment`),
+        // jadi tombolnya baru bisa terlihat/dipakai mulai dari baris ini.
+        onConfirmSplitPayment={handleConfirmSplitPayment}
         onSendWhatsApp={handleSendWhatsApp}
       />
 
