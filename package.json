@@ -13,6 +13,8 @@
     "@supabase/supabase-js": "^2.116.0",
     "browser-image-compression": "^2.0.2",
     "date-fns": "^4.4.0",
+    "firebase": "^12.12.1",
+    "firebase-admin": "^13.8.0",
     "html-to-image": "^1.11.13",
     "html5-qrcode": "^2.3.8",
     "jspdf": "^4.2.1",

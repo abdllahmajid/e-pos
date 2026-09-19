@@ -1,6 +1,23 @@
 -- Migration: T-10 revisi #2 — tutup celah RLS `profiles_update_admin_supervisor`
 -- (migration 018) untuk kolom SELAIN role/is_active.
 --
+-- ── Penomoran (sesi #16) ──
+-- File ini SEBELUMNYA bernomor `019_profiles_update_admin_lock.sql` — bentrok
+-- dengan `019_hold_orders.sql` (T-11 bagian 1, migration TERPISAH & TIDAK
+-- BERGANTUNG pada file ini sama sekali). Digeser jadi `020` di sini karena
+-- `hooks/useHoldOrders.ts` sudah 3x menyebut "migration 019" verbatim di
+-- komentarnya untuk merujuk ke `held_orders` — mengubah migration ITU berarti
+-- ikut mengedit baris TypeScript, lebih berisiko daripada menggeser migration
+-- ini yang tidak di-hardcode di kode manapun (dicek ulang sesi #16: tidak ada
+-- referensi "019_profiles_update_admin_lock" atau nomor migration ini di file
+-- `.ts`/`.tsx` manapun). Isi SQL di bawah PERSIS sama seperti versi `019`
+-- sebelumnya, cuma satu baris `comment on policy` di akhir file yang diubah
+-- (019 → 020) supaya self-reference-nya konsisten dengan nama file yang baru.
+-- Sesi #14 sempat mencatat penggeseran ini sudah dilakukan, tapi file yang
+-- sebenarnya sampai ke repo masih bernomor `019` (lihat PROGRESS.md sesi
+-- #15/#16 untuk kronologi lengkap) — file `019_profiles_update_admin_lock.sql`
+-- yang lama SUDAH DIHAPUS dari repo di sesi #16, digantikan file ini.
+--
 -- ── Temuan (ditemukan saat review UI T-10, PengaturanAdminTab.tsx, BUKAN
 -- insiden nyata yang sudah terjadi — murni defensif) ──
 -- Pengaman A/B migration 018 ("supervisor tidak bisa sentuh/promosikan akun
@@ -93,4 +110,4 @@ create policy "profiles_update_admin_supervisor"
   );
 
 comment on policy "profiles_update_admin_supervisor" on public.profiles is
-  'Admin+supervisor boleh UPDATE profiles siapa pun (migration 018), TAPI supervisor tidak lolos sama sekali untuk baris yang role-nya admin (SEBELUM maupun SESUDAH update) — migration 019, menutup celah full_name/email yang tidak lewat trigger enforce_profiles_role_change.';
+  'Admin+supervisor boleh UPDATE profiles siapa pun (migration 018), TAPI supervisor tidak lolos sama sekali untuk baris yang role-nya admin (SEBELUM maupun SESUDAH update) — migration 020, menutup celah full_name/email yang tidak lewat trigger enforce_profiles_role_change.';
