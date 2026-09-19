@@ -32,6 +32,21 @@
 // user lain, perlu konfirmasi eksplisit) — TAPI aktifkan kembali & reset
 // password TIDAK pakai modal (dampaknya kecil/reversible, konfirmasi malah
 // memperlambat kerja admin untuk aksi yang sering dipakai).
+//
+// ── TAMBAHAN ── Tombol "+ Tambah User" (sebelumnya SENGAJA ditunda di PRD
+// §17 T-10 — keputusan awal "user dibuat via dashboard/invite", sekarang
+// dipindah ke dalam app atas permintaan lanjutan). Beda dari semua aksi lain
+// di tab ini: bukan RPC/`.update()` langsung, tapi lewat
+// `hooks/useAdminUsers.ts` -> `createUser()` -> API route server
+// `app/api/admin/create-user/route.ts` (butuh Supabase Admin API + service
+// role key, lihat komentar header route.ts). User baru dikirimi EMAIL
+// UNDANGAN (bukan password sementara) — dia set password sendiri lewat link,
+// konsisten dengan pola "Kirim Reset Password" yang sudah ada di tab ini.
+// Modal Tambah User pakai batasan role yang SAMA dengan dropdown edit role
+// per-baris (`getRoleOptionsFor` — supervisor tidak bisa membuat akun Admin),
+// TIDAK pakai modal konfirmasi terpisah (submit form-nya sendiri sudah cukup
+// eksplisit, beda dari ubah role/nonaktifkan yang mengubah akun yang SUDAH
+// ada).
 
 import { useState } from "react";
 import {
@@ -39,9 +54,11 @@ import {
   CheckCircle2,
   KeyRound,
   Loader2,
+  Mail,
   Pencil,
   ShieldAlert,
   UserCheck,
+  UserPlus,
   UserX,
 } from "lucide-react";
 import { useAuth, type UserRole } from "@/hooks/useAuth";
@@ -83,6 +100,7 @@ export default function PengaturanAdminTab() {
     setUserActive,
     updateUserContact,
     sendPasswordReset,
+    createUser,
   } = useAdminUsers();
 
   // Konfirmasi ubah role — { user, newRole } sekaligus supaya modal tahu
@@ -100,6 +118,16 @@ export default function PengaturanAdminTab() {
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
 
+  // ── TAMBAHAN ── Modal "Tambah User". Dipisah state-nya dari modal Edit di
+  // atas (walau field mirip: nama & email) karena aksinya beda total (create
+  // vs update) dan Tambah User punya field tambahan (role) + tidak ada
+  // "user yang sedang diedit" untuk dijadikan initial value.
+  const [isAddUserOpen, setIsAddUserOpen] = useState(false);
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserRole, setNewUserRole] = useState<UserRole>("kasir");
+  const [addUserSuccess, setAddUserSuccess] = useState(false);
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   // id user yang baru sukses kirim reset password, dipakai tampilkan centang
@@ -114,6 +142,41 @@ export default function PengaturanAdminTab() {
     setEditingUser(targetUser);
     setEditName(targetUser.full_name ?? "");
     setEditEmail(targetUser.email ?? "");
+  }
+
+  function openAddUser() {
+    setActionError(null);
+    setAddUserSuccess(false);
+    setNewUserName("");
+    setNewUserEmail("");
+    // Default role paling aman: 'kasir' (bukan 'admin'/'supervisor') supaya
+    // admin harus SADAR mengangkat dropdown-nya kalau memang mau bikin role
+    // lebih tinggi, bukan ke-klik tanpa sengaja.
+    setNewUserRole("kasir");
+    setIsAddUserOpen(true);
+  }
+
+  async function handleConfirmAddUser() {
+    setIsSubmitting(true);
+    setActionError(null);
+    try {
+      await createUser({
+        fullName: newUserName,
+        email: newUserEmail,
+        role: newUserRole,
+      });
+      // Beda dari modal Edit (langsung tutup) — modal ini tetap terbuka
+      // sebentar menampilkan pesan sukses dulu, supaya admin sadar undangan
+      // sudah terkirim (bukan langsung raib begitu submit), baru admin yang
+      // menutup sendiri.
+      setAddUserSuccess(true);
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : "Gagal membuat user baru.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   async function handleConfirmEdit() {
@@ -226,6 +289,17 @@ export default function PengaturanAdminTab() {
           {actionError}
         </div>
       )}
+
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={openAddUser}
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-lco-green px-4 py-2.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
+        >
+          <UserPlus className="h-4 w-4" />
+          Tambah User
+        </button>
+      </div>
 
       <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
         <table className="w-full text-sm">
@@ -452,6 +526,112 @@ export default function PengaturanAdminTab() {
                 Simpan
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Tambah User ── */}
+      {isAddUserOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/30 p-4">
+          <div className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+            {addUserSuccess ? (
+              // ── Layar sukses — bukan modal Edit yang langsung tutup,
+              // supaya admin sadar undangan email sudah terkirim.
+              <div className="text-center">
+                <div className="mx-auto mb-3 flex h-9 w-9 items-center justify-center rounded-full bg-lco-teal/10 text-lco-teal">
+                  <Mail className="h-4 w-4" />
+                </div>
+                <h3 className="text-sm font-semibold">Undangan terkirim</h3>
+                <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                  Email undangan sudah dikirim ke{" "}
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                    {newUserEmail}
+                  </span>
+                  . User akan muncul di daftar setelah dia klik link di email
+                  itu dan mengatur password.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIsAddUserOpen(false)}
+                  className="mt-4 w-full rounded-md bg-lco-teal px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-teal/90"
+                >
+                  Tutup
+                </button>
+              </div>
+            ) : (
+              <>
+                <h3 className="mb-3 text-sm font-semibold">Tambah User</h3>
+
+                <label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                  Nama
+                </label>
+                <input
+                  type="text"
+                  value={newUserName}
+                  onChange={(e) => setNewUserName(e.target.value)}
+                  disabled={isSubmitting}
+                  placeholder="Nama lengkap"
+                  className="mb-3 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm outline-none transition-colors duration-150 focus:border-lco-teal focus:ring-1 focus:ring-lco-teal disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-950"
+                />
+
+                <label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={newUserEmail}
+                  onChange={(e) => setNewUserEmail(e.target.value)}
+                  disabled={isSubmitting}
+                  placeholder="user@email.com"
+                  className="mb-3 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm outline-none transition-colors duration-150 focus:border-lco-teal focus:ring-1 focus:ring-lco-teal disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-950"
+                />
+
+                <label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                  Role
+                </label>
+                {/* roleOptions sudah dihitung di atas lewat getRoleOptionsFor
+                    — supervisor tidak melihat opsi "Admin" di sini juga,
+                    sama seperti dropdown ubah role per-baris. */}
+                <select
+                  value={newUserRole}
+                  onChange={(e) => setNewUserRole(e.target.value as UserRole)}
+                  disabled={isSubmitting}
+                  className="mb-1 w-full rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm outline-none transition-colors duration-150 focus:border-lco-teal focus:ring-1 focus:ring-lco-teal disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950"
+                >
+                  {roleOptions.map((role) => (
+                    <option key={role} value={role}>
+                      {ROLE_LABEL[role]}
+                    </option>
+                  ))}
+                </select>
+                <p className="mb-3 text-xs text-zinc-400">
+                  User akan menerima email undangan untuk mengatur password
+                  sendiri — tidak ada password sementara.
+                </p>
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddUserOpen(false)}
+                    disabled={isSubmitting}
+                    className="rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmAddUser}
+                    disabled={isSubmitting}
+                    className="inline-flex items-center gap-2 rounded-md bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isSubmitting && (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    )}
+                    Kirim Undangan
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

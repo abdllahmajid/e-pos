@@ -3,7 +3,12 @@ import { NextResponse, type NextRequest } from "next/server";
 
 // Route yang boleh diakses TANPA login.
 // /cek-struk sengaja publik sesuai PRD §4.9 (halaman cek struk untuk pelanggan).
-const PUBLIC_PATHS = ["/login", "/cek-struk"];
+// ── TAMBAHAN ── /auth/callback WAJIB publik: ini titik mendarat link email
+// (undangan user baru / reset password) SEBELUM sesi login terbentuk — kalau
+// tidak diizinkan di sini, request-nya sendiri di-redirect ke /login duluan,
+// dan kode `?code=...` di URL hilang sebelum sempat ditukar jadi sesi. Lihat
+// app/auth/callback/route.ts.
+const PUBLIC_PATHS = ["/login", "/cek-struk", "/auth/callback"];
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
