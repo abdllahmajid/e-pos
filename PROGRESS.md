@@ -6,6 +6,160 @@
 
 ## Status terakhir diperbarui
 
+2026-09-19, sesi #14. **Perbaikan atas Temuan 1 & 2 sesi #13 — 2 file
+migration baru dibuat: `019_held_orders.sql` (T-11 bagian 1) dan
+`020_profiles_update_admin_lock.sql` (T-10, digeser dari nomor `019` yang
+lama supaya tidak bentrok).** ⚠️ **File-nya sudah dibuat & disertakan ke
+repo, TAPI BELUM SATU PUN DIJALANKAN ke database manapun** (sandbox ini
+tetap tidak punya akses ke Supabase production, sama seperti semua sesi
+sebelumnya) — status "diperbaiki" di judul ini artinya "kodenya sudah
+ditulis", BUKAN "sudah aktif di database". Pemilik project WAJIB menjalankan
+kedua file ini secara berurutan (`019` dulu, baru `020`) lewat SQL Editor
+Supabase sebelum fitur Tunda & pengaman anti-privilege-escalation T-10
+benar-benar berfungsi. Lihat "Yang HARUS dikonfirmasi" poin 14.
+
+1. **`supabase/migrations/019_held_orders.sql` — baru (rekonstruksi).**
+   Tabel `held_orders` (`id`, `cashier_id`, `label`, `items` jsonb,
+   `item_count`, `subtotal`, `created_at`) + RLS select/insert/delete
+   terbatas ke baris milik kasir sendiri (`cashier_id = auth.uid()`), tidak
+   ada policy update (baris held order tidak pernah di-UPDATE, cuma
+   insert lalu delete). Disusun ULANG murni dari membaca
+   `hooks/useHoldOrders.ts` baris-per-baris (interface `HeldOrder`, kolom
+   apa yang di-select/insert, cara resume & delete) — **BUKAN dari file SQL
+   asli yang sudah hilang**, jadi ada kemungkinan detail kecil (index
+   tambahan, constraint check lain) dari versi asli yang tidak tertangkap.
+   Nomor `019` SENGAJA dipertahankan (bukan digeser) karena
+   `hooks/useHoldOrders.ts` sudah 3x menyebut "migration 019" verbatim di
+   komentarnya — menggeser nomor ini berarti harus mengedit 3 baris komentar
+   TypeScript, lebih berisiko daripada menggeser migration T-10 yang tidak
+   di-hardcode di kode manapun (lihat poin 2). Detail keputusan desain
+   lengkap ada di komentar header file itu sendiri, tidak diulang di sini.
+2. **`supabase/migrations/020_profiles_update_admin_lock.sql` — baru
+   (bukan rekonstruksi tebakan — isi PERSIS mengikuti deskripsi detail di
+   entri sesi #12 poin 4 di bawah, cuma penomoran file yang berubah dari
+   `019` ke `020`).** Mengganti policy `profiles_update_admin_supervisor`
+   (migration 018) dengan `profiles_update_admin_supervisor_locked`:
+   supervisor tidak lolos USING (baris SEBELUM update) maupun WITH CHECK
+   (baris SESUDAH update) untuk baris `role = 'admin'`, berlaku kolom
+   apapun yang diubah — bukan cuma role/is_active seperti trigger
+   `enforce_profiles_role_change` (migration 018) yang TIDAK diubah/dihapus
+   di sini, tetap jadi penjaga kedua (defense in depth). Admin tidak kena
+   batasan tambahan apa pun.
+3. **Tidak ada perubahan kode frontend/TypeScript sesi ini** — cuma 2 file
+   SQL baru. `PengaturanAdminTab.tsx`, `hooks/useAdminUsers.ts`,
+   `hooks/useHoldOrders.ts`, `KasirModule.tsx`, `BarcodeScanModal.tsx`
+   semuanya sudah benar dari sesi-sesi sebelumnya — murni migration
+   database yang menyusul, sama pola dengan sesi #11 (migration 015).
+4. **Belum bisa diverifikasi dari sandbox ini**: kedua file SQL baru
+   **tidak bisa di-lint/dijalankan dari sini** (tidak ada koneksi ke
+   database Supabase manapun) — cuma diperiksa manual (dibaca ulang,
+   dicocokkan lagi terhadap `hooks/useHoldOrders.ts` dan migration 018
+   yang sudah ada). `tsc --noEmit` & `eslint` tidak relevan untuk sesi ini
+   (tidak ada file `.ts`/`.tsx` yang diubah).
+
+<details>
+<summary>Detail sesi #13 (audit — tabrakan migration `019` & T-11 bagian 1/3 ditemukan tanpa catatan) — diciutkan</summary>
+
+2026-09-19, sesi #13. **Audit verifikasi (TIDAK ADA perubahan kode) —
+ditemukan tabrakan penomoran migration `019` (dua isi berbeda, KEDUANYA
+hilang dari repo) DAN pekerjaan T-11 bagian 1 & 3 yang sama sekali belum
+pernah tercatat di file ini.** Sesi ini murni membandingkan isi
+`PROGRESS.md` terhadap PRD §17 dan kode sungguhan di zip project (`npm
+install` + `tsc --noEmit` + `eslint` dijalankan penuh, jaringan tersedia) —
+**tidak menulis/mengubah satu baris kode maupun migration pun**, cuma
+memperbarui catatan ini supaya sesi berikutnya tidak salah asumsi.
+
+**Temuan 1 — tabrakan nomor migration `019` (PALING KRITIS):** Sesi #12
+mencatat `019_profiles_update_admin_lock.sql` (kunci profil admin dari
+supervisor, lihat detail sesi #12 di bawah). Tapi kode `hooks/useHoldOrders.ts`
+(lihat Temuan 2) menyebut **migration `019` yang ISINYA SAMA SEKALI BEDA** —
+`CREATE TABLE held_orders` + policy `held_orders_insert_own` untuk fitur
+Hold Order/Tunda. **Kedua file migration `019` ini SAMA-SAMA TIDAK ADA di
+repo/zip** yang diserahkan ke sesi ini (`find . -iname "*019*"` di root
+project: kosong) — dicek juga `scripts/setup-database.sql` dan
+`scripts/migrate.ts` untuk isi `held_orders`, tidak ada jejak sama sekali.
+Ini pola yang SAMA seperti migration `015` yang hilang (sesi #10→#11, lihat
+detail sesi #11 di bawah), tapi sekarang dua sesi/pekerjaan berbeda
+kebetulan memakai nomor yang sama untuk isi yang berbeda — **jangan asumsikan
+salah satu "menang" atau salah satu "yang benar"**, kemungkinan besar
+KEDUANYA perlu dibuat ulang, dengan nomor BERBEDA (mis. `019` untuk salah
+satu, `020` untuk yang lain — tentukan urutan berdasarkan dependency:
+`held_orders` (T-11) tidak bergantung pada `profiles_update_admin_lock`
+(T-10) atau sebaliknya, jadi urutan bebas, tapi JANGAN pakai nomor yang
+sama untuk keduanya lagi). Lihat "Yang HARUS dikonfirmasi" poin 12.
+
+**Temuan 2 — T-11 bagian 1 (Hold Order/"Tunda") & bagian 3 (Scan barcode
+kamera) SUDAH ADA DI KODE, TIDAK PERNAH TERCATAT di file ini sebelumnya:**
+PRD §17 menempatkan T-11 di "Fase G — setelah MVP stabil" (fase 1.1/2.0,
+bukan bagian alur T-01→T-10 utama), jadi wajar kalau belum "waktunya"
+dikerjakan menurut urutan PRD — **tapi kodenya SUDAH ADA dan sudah
+tersambung ke UI**, dan tidak ada satu pun jejak sesi (baik di histori sesi
+manapun di file ini) yang menyebut siapa yang mengerjakan atau kapan. Yang
+ditemukan lewat pembacaan kode langsung (bukan dari catatan sesi manapun):
+
+- **`hooks/useHoldOrders.ts` (baru, belum tercatat)** — hook penuh untuk
+  tunda/lanjutkan/hapus pesanan (`holdOrder()`, `resumeHeldOrder()`),
+  ber-komentar header "PRD §17 T-11, bagian 1 dari 3". Baca tabel
+  `held_orders` yang skemanya disebut ada di "migration 019" — lihat Temuan
+  1, migration itu TIDAK ADA di repo. `resumeHeldOrder()` sengaja
+  memvalidasi ulang stok terkini (bukan asumsi stok sama seperti saat
+  ditunda) dan melaporkan `skippedItems` untuk produk yang sudah
+  dihapus/nonaktif/stok kurang, tanpa membatalkan seluruh resume.
+- **`app/components/kasir/BarcodeScanModal.tsx` (baru, belum tercatat)** —
+  modal scan barcode pakai kamera (`html5-qrcode`, sudah ada di
+  `package.json` dependencies), ber-komentar header "T-11 bagian 3".
+  Komentar kode mencatat sendiri sebuah koreksi desain: versi pertama
+  auto-start kamera lewat `useEffect` saat modal dibuka ternyata gagal di
+  banyak browser mobile (Safari iOS, sebagian Chrome Android PWA) karena
+  `getUserMedia()` harus dipicu LANGSUNG dari user gesture (tap), bukan dari
+  efek React — sudah diperbaiki di versi yang ada sekarang (kamera start
+  dari tap tombol eksplisit, bukan otomatis).
+- **`app/components/kasir/KasirModule.tsx` — sudah diwiring** (bukan file
+  baru, tapi berubah signifikan tanpa tercatat): tombol/modal "Tunda", modal
+  daftar held order (lanjutkan/hapus), tombol/modal scan barcode kamera,
+  semuanya sudah ada di JSX dan handler-nya (lihat komentar "TAMBAHAN (T-11
+  bagian 1)" dan "(T-11 bagian 3)" tersebar di file ini).
+- **T-11 bagian 2 (split payment) BELUM ada jejak kode sama sekali** — cuma
+  bagian 1 & 3 yang sudah dikerjakan. T-12 (FCM/PWA/cron) dan T-13
+  (backup/offline) juga belum ada jejak kode (dicek: tidak ada
+  `firebase`/`manifest.json`/`api/backup`/IndexedDB di luar komentar "Jangan
+  dulu" yang memang sudah lama ada di `DashboardModule.tsx`).
+
+⚠️ **Konsekuensi paling penting dari kedua temuan di atas**: modul Kasir
+(`KasirModule.tsx`) sekarang **memanggil tabel `held_orders` yang tidak
+pernah ada di database manapun** (migration-nya hilang) — kalau frontend
+sesi #12/#13 ini di-deploy ke production TANPA migration `held_orders`
+dibuat ulang dan dijalankan lebih dulu, **fitur "Tunda" akan gagal total
+begitu dipakai** (query ke tabel yang tidak ada → error), sama persis
+seperti kasus migration `013` yang pernah kejadian (sesi #9). Ini BUKAN
+regresi dari sesi #12/#13 — kemungkinan besar sudah jadi masalah sejak
+sebelumnya, cuma baru ketahuan sekarang karena inilah audit pertama yang
+membandingkan isi kode terhadap isi `PROGRESS.md` secara menyeluruh.
+
+**Verifikasi kode sesi ini** (jaringan tersedia, tanpa akses
+database/browser — kendala sama seperti sesi-sesi sebelumnya):
+`npm install` berhasil. `tsc --noEmit` penuh: **cuma 1 error**, sama persis
+seperti yang sudah tercatat sejak sesi #8 (`app/layout.tsx:20`
+`LayoutProps`) — tidak ada error baru, termasuk di file-file T-11 yang baru
+ketahuan sesi ini. `eslint .` (seluruh project, bukan cuma file yang
+diubah): **17 error, 8 warning** — angka ini BEDA dari "13 error + 6
+warning" yang tercatat di "Yang HARUS dikonfirmasi" poin 2 (sesi #8), tapi
+**bukan regresi** — selisihnya berasal dari file-file yang belum ada saat
+lint terakhir dijalankan penuh (`PengaturanTokoTab.tsx`,
+`hooks/useAdminUsers.ts`, `hooks/useHoldOrders.ts`,
+`BarcodeScanModal.tsx`, plus makin banyak temuan di
+`DashboardModule.tsx`), semuanya pola `react-hooks/set-state-in-effect`
+atau `no-explicit-any` yang SAMA seperti yang sudah dicatat sebagai
+pra-eksisting, bukan pola baru. 3 file spesifik yang diubah sesi #12
+(`Sidebar.tsx`, `PengaturanModule.tsx`, `PengaturanAdminTab.tsx`) sendiri
+tetap **0 error, 0 warning** kalau di-lint terpisah — detail sesi #12 di
+bawah masih akurat untuk bagian itu.
+
+</details>
+
+<details>
+<summary>Detail sesi #12 (T-10 — akses dilonggarkan ke admin+supervisor, celah RLS ditutup, verifikasi kode) — diciutkan</summary>
+
 2026-09-19, sesi #12. **T-10 (Pengaturan Admin) — akses dilonggarkan ke
 admin+supervisor, celah RLS ditutup, verifikasi kode.** Sesi ini melanjutkan
 pekerjaan T-10 yang SEBELUMNYA sudah dibangun (migration
@@ -112,6 +266,8 @@ itu yang hilang** (sama seperti migration `015` yang filenya sempat hilang
 di sesi #10→#11) — kalau menemukan perilaku T-10 yang tidak dijelaskan di
 sini, jangan asumsikan itu bug, cek dulu kode
 `PengaturanTokoTab.tsx`/`hooks/useAdminUsers.ts` langsung.
+
+</details>
 
 <details>
 <summary>Detail sesi #11 (bug fix Log Aktivitas kosong untuk supervisor, migration <code>015</code> dibuat ulang & dieksekusi) — diciutkan</summary>
@@ -503,19 +659,51 @@ build` (`next build`) **gagal, tapi HANYA karena sandbox agent sesi ini
       aktifkan/nonaktifkan, edit kontak, reset password — migration
       `016_admin_user_management.sql`/`017_profiles_email.sql`). Akses
       direvisi dari admin-only jadi **admin+supervisor** (migration
-      `018_pengaturan_supervisor_access.sql` +
-      `019_profiles_update_admin_lock.sql`, sesi #12), dengan pengaman:
+      `018_pengaturan_supervisor_access.sql`, sesi #12), dengan pengaman:
       supervisor tidak bisa sentuh/promosikan akun admin (role, status,
-      MAUPUN kontak — lihat migration 019). ⚠️ **Migration 016/017/018/019
-      SEMUANYA belum dikonfirmasi dieksekusi ke production, dan modul ini
-      belum pernah dibuka di browser sungguhan sama sekali** (baik oleh agent
-      maupun pemilik project) — lihat "Yang HARUS dikonfirmasi" poin 9-11.
-      Jangan baca centang ini sebagai "sudah jalan", cuma "sudah lengkap
-      ditulis & lolos type-check/lint".
+      MAUPUN kontak — migration `020_profiles_update_admin_lock.sql`, dibuat
+      sesi #14, **digeser dari nomor `019` yang tadinya bentrok dengan
+      migration `held_orders` milik T-11**, lihat Temuan 1 sesi #13). ⚠️
+      **Migration `020` ini sudah ditulis tapi BELUM DIKONFIRMASI dijalankan
+      ke database manapun** (sandbox sesi #14 tidak punya akses Supabase,
+      sama seperti 016/017/018 yang statusnya juga masih menggantung) — jadi
+      pengaman "supervisor tidak bisa ubah kontak akun admin" **BELUM AKTIF
+      di production sampai file ini benar-benar dijalankan**. Modul ini juga
+      belum pernah dibuka di browser sungguhan sama sekali (baik oleh agent
+      maupun pemilik project) — lihat "Yang HARUS dikonfirmasi" poin 9, 11, 14. Jangan baca centang ini sebagai "sudah jalan", cuma "sudah lengkap
+      ditulis & lolos review manual".
+- [ ] **T-11 — Fase 1.1/2.0 (PRD §17 Fase G, "setelah MVP stabil")** — status
+      **SEBAGIAN, ditemukan lewat audit kode sesi #13, TIDAK ADA riwayat sesi
+      manapun sebelum #13 yang mencatat pengerjaannya**:
+  - [x] (kode ada, migration ditulis ulang sesi #14, belum dijalankan)
+        **Bagian 1 — Hold order/"Tunda"**: `hooks/useHoldOrders.ts` + wiring
+        penuh di `KasirModule.tsx` (tombol Tunda, modal daftar held order,
+        resume dengan validasi ulang stok). Bergantung tabel `held_orders` —
+        migration aslinya hilang (Temuan 1&2, sesi #13), sudah direkonstruksi
+        sesi #14 sebagai `019_held_orders.sql` (lihat detail sesi #14 di
+        atas), **TAPI BELUM DIJALANKAN ke database manapun**. **Fitur ini
+        akan tetap gagal total kalau dipakai di production sampai migration
+        ini benar-benar dieksekusi.**
+  - [x] (kode ada, tidak butuh migration) **Bagian 3 — Scan barcode kamera**:
+        `app/components/kasir/BarcodeScanModal.tsx` (`html5-qrcode`) + wiring
+        di `KasirModule.tsx`. Tidak menyentuh database, jadi kemungkinan
+        besar sudah bisa dipakai langsung setelah build — **tapi belum
+        pernah dicoba di browser/HP sungguhan sama sekali** sejauh yang
+        tercatat di file ini.
+  - [ ] Bagian 2 — Split payment: **belum ada jejak kode sama sekali.**
+        Lihat "Yang HARUS dikonfirmasi" poin 12-14.
+- [ ] T-12 (FCM/cron/PWA) & T-13 (backup/offline) — belum ada jejak kode
+      sama sekali (dicek ulang sesi #13: tidak ada `firebase`,
+      `manifest.json`, `api/backup`, atau pemakaian IndexedDB di luar
+      komentar "Jangan dulu" yang memang sudah lama ada di
+      `DashboardModule.tsx`).
 
 ## Sedang dikerjakan
 
-- (tidak ada sesi aktif)
+- (tidak ada sesi aktif — tapi lihat Temuan 2 sesi #13: ada kode T-11 yang
+  jelas PERNAH dikerjakan seseorang/sesi lain tanpa pernah tercatat di sini,
+  jadi "tidak ada sesi aktif" tidak sama dengan "tidak ada pekerjaan yang
+  menggantung tanpa catatan")
 
 ## ✅ Temuan keamanan RLS sesi #7 — SUDAH DIPERBAIKI (migration `011`)
 
@@ -620,11 +808,17 @@ install`+`npm run lint` berhasil jalan penuh (sesi-sesi sebelumnya sering
      eksplisit, bukan `setTimeout`).
 9. **Jalankan migration `016_admin_user_management.sql`,
    `017_profiles_email.sql`, `018_pengaturan_supervisor_access.sql`, dan
-   `019_profiles_update_admin_lock.sql` ke Supabase production — SEMUANYA,
-   berurutan sesuai nomor.** Sampai ini dijalankan, modul Pengaturan (T-10)
+   `020_profiles_update_admin_lock.sql` ke Supabase production — SEMUANYA,
+   berurutan sesuai nomor** (⚠️ nomor migration terakhir DIGESER dari `019`
+   jadi `020` di sesi #14, lihat poin 12 & entri sesi #14 di atas — kalau
+   masih menyimpan referensi lama ke "019" untuk migration ini di catatan
+   lain, itu sudah usang). Sampai ini dijalankan, modul Pengaturan (T-10)
    tidak akan berfungsi sama sekali di production (RPC/kolom/policy yang
    dipakai kode belum ada atau masih versi lama) — mirip situasi migration
-   `013` di poin 7, tapi untuk 4 file migration sekaligus.
+   `013` di poin 7, tapi untuk 4 file migration sekaligus. **Jalankan juga
+   `019_held_orders.sql` (T-11) di urutan yang sama** — walau secara teknis
+   independen dari 4 migration T-10 ini, keduanya sama-sama menggantung
+   sejak sesi #14 dan sama-sama harus beres sebelum deploy (lihat poin 14).
 10. **Konfirmasi apakah 2 query SQL manual (poin 5, entri sesi #12) untuk
     naikkan role akun pemilik project dari supervisor ke admin sudah
     dijalankan.** Kalau sudah, akun itu sekarang admin — jangan asumsikan
@@ -639,40 +833,112 @@ install`+`npm run lint` berhasil jalan penuh (sesi-sesi sebelumnya sering
       UI (dropdown, tombol nonaktifkan, Edit, Reset Password semuanya
       disabled) DAN coba juga panggil `.update()`/RPC langsung lewat
       Supabase client (bukan cuma lewat UI) ke baris admin — pastikan
-      benar-benar ditolak RLS (migration 019). **Ini yang paling penting
-      diuji**, karena tombol disabled di UI tidak menjamin database juga
-      menolak kalau migration 019 belum dijalankan (lihat poin 9).
+      benar-benar ditolak RLS (migration `020`, bukan `019` lagi — lihat
+      poin 9). **Ini yang paling penting diuji**, karena tombol disabled di
+      UI tidak menjamin database juga menolak kalau migration `020` belum
+      dijalankan.
+12. **✅ SUDAH DIKERJAKAN sesi #14 (sebelumnya poin ini berbunyi "buat ulang
+    kedua file migration yang bentrok"): kedua file sudah dibuat**
+    (`019_held_orders.sql` untuk T-11 bagian 1, `020_profiles_update_admin_lock.sql`
+    untuk T-10, lihat entri sesi #14 di atas). **Yang TERSISA**: keduanya
+    belum dijalankan ke database manapun (lihat poin 9 & 14), dan
+    `019_held_orders.sql` masih berstatus REKONSTRUKSI dari kode TypeScript
+    (bukan file asli yang sudah hilang) — kemungkinan ada detail kecil yang
+    meleset, lihat komentar header file itu sendiri sebelum menjalankannya
+    ke production.
+13. **Cari tahu siapa/sesi mana yang mengerjakan T-11 bagian 1 & 3** (kalau
+    memang bukan sesi lokal/luar `PROGRESS.md`, misalnya dikerjakan
+    langsung oleh pemilik project sendiri di MacBook tanpa lewat sesi agent
+    yang menulis catatan ini) — supaya jelas apakah ada keputusan desain
+    lain dari pekerjaan itu yang juga belum tercatat, sama seperti pola
+    "keputusan desain hilang" yang sudah beberapa kali kejadian di file ini
+    (migration 015, T-10 dasar sebelum sesi #12). Kalau ternyata pemilik
+    project sendiri yang mengerjakannya via alat lain (mis. Claude Code
+    langsung di terminal/MacBook tanpa sesi yang menuliskan PROGRESS.md),
+    catat itu di sini supaya polanya diketahui, bukan dianggap misteri lagi.
+    **Masih berlaku sepenuhnya setelah sesi #14** — sesi #14 cuma menulis
+    migration yang hilang, tidak menjawab pertanyaan siapa yang menulis
+    kode T-11 asalnya.
+14. **⚠️ BARU (sesi #14), PALING MENDESAK sekarang: jalankan
+    `019_held_orders.sql` DAN `020_profiles_update_admin_lock.sql` ke
+    Supabase production** (bisa urutan bebas relatif satu sama lain — dua
+    migration ini independen, tidak saling bergantung — tapi `020` tetap
+    harus SESUDAH `018`, dan `019` boleh kapan saja). **Sebelum kedua file
+    ini dijalankan, JANGAN deploy frontend dari zip/repo ini ke
+    production**: fitur "Tunda" di Kasir akan gagal total (tabel
+    `held_orders` belum ada), dan pengaman anti-privilege-escalation T-10
+    (poin 4, sesi #12) tidak benar-benar aktif di database walau kode
+    frontend sudah berperilaku seolah-olah aktif. Setelah dijalankan, uji
+    juga: coba fitur Tunda dari 2 akun kasir berbeda pada produk yang sama
+    (pastikan validasi stok ulang saat resume bekerja, lihat komentar
+    desain di `019_held_orders.sql`), dan ulangi pengujian poin 11 khusus
+    untuk memastikan policy `profiles_update_admin_supervisor_locked`
+    (bukan lagi `profiles_update_admin_supervisor` yang lama) yang aktif.
 
 ## Task berikutnya (disarankan)
 
-- **Prioritas tertinggi sekarang: jalankan migration `016`–`019` ke
-  production (poin 9, "Yang HARUS dikonfirmasi") DAN uji modul Pengaturan
-  end-to-end di browser (poin 11)** — T-10 sudah 100% selesai secara kode,
-  tapi migration-nya menumpuk 4 file berurutan yang belum satu pun
-  dikonfirmasi jalan, dan modulnya belum pernah dibuka sama sekali oleh
-  siapa pun. Setelah itu, konfirmasi juga apakah role akun pemilik project
-  sudah dinaikkan ke admin (poin 10) supaya sesi berikutnya tidak salah
-  asumsi soal role akun yang dipakai testing.
+- **Prioritas TERTINGGI sekarang (sesi #14 sudah menulis file migration-nya,
+  TAPI belum satu pun dijalankan): jalankan `019_held_orders.sql` dan
+  `020_profiles_update_admin_lock.sql` ke Supabase production** (poin 14,
+  "Yang HARUS dikonfirmasi") — SEBELUM menjalankan migration `016`-`018`
+  yang lama kalau belum, dan SEBELUM deploy frontend zip ini ke production.
+  Kalau langsung deploy tanpa membereskan ini dulu, modul Pengaturan akan
+  terlihat "jalan" tapi pengaman anti-privilege-escalation-nya bolong, DAN
+  fitur Tunda di Kasir akan mulai dipakai orang lalu gagal begitu menyentuh
+  tabel yang tidak ada. **Catatan tambahan untuk `019_held_orders.sql`**:
+  isinya REKONSTRUKSI dari kode TypeScript (file aslinya hilang, lihat
+  Temuan 1&2 sesi #13) — baca komentar header file itu dan cocokkan sekali
+  lagi terhadap `hooks/useHoldOrders.ts` sebelum menjalankannya, jangan
+  langsung percaya 100% tanpa review.
+- Setelah migration-migration di atas jalan: jalankan juga `016`–`018` kalau
+  memang belum (poin 9, "Yang HARUS dikonfirmasi") DAN uji modul Pengaturan
+  end-to-end di browser (poin 11), **DAN uji fitur Tunda + scan barcode
+  kamera di Kasir end-to-end** (poin 14 — belum ada checklist campuran
+  hold-order+multi-kasir sebelumnya di file ini, poin 14 sudah menyebut
+  skenario minimal yang harus dicoba). Setelah itu, konfirmasi juga apakah
+  role akun pemilik project sudah dinaikkan ke admin (poin 10) supaya sesi
+  berikutnya tidak salah asumsi soal role akun yang dipakai testing.
 - **Migration `013` (sesi #9, field HP customer) MASIH belum dikonfirmasi
   jalan** — sudah menggantung sejak sesi #9, disebutkan lagi di sesi
-  #10/#11, dan sesi #12 ini TIDAK menambah info baru soal ini. Jangan lupakan
-  ini hanya karena perhatian sekarang tertuju ke T-10 — lihat poin 7 di
-  "Yang HARUS dikonfirmasi".
-- Setelah checklist verifikasi T-10 & migration lama beres: **T-10 adalah
-  task terakhir yang tercantum eksplisit di urutan PRD §17** sejauh yang
-  diketahui sesi ini — cek PRD §17 langsung untuk task/fase berikutnya
-  (kalau ada) sebelum mulai kerjaan baru, jangan asumsikan dari file ini
-  saja karena PROGRESS.md beberapa kali terbukti basi soal urutan task
-  (lihat catatan "PROGRESS.md basi" di beberapa sesi, termasuk sesi #12).
+  #10/#11, dan sesi #12/#13/#14 TIDAK menambah info baru soal ini. Jangan
+  lupakan ini hanya karena perhatian sekarang tertuju ke T-10/T-11 — lihat
+  poin 7 di "Yang HARUS dikonfirmasi".
+- Setelah checklist verifikasi T-10/T-11 & migration lama beres: **T-10
+  adalah task terakhir yang tercantum eksplisit di ALUR UTAMA PRD §17**
+  (T-11 sendiri sudah masuk Fase G/"setelah MVP stabil", dan sesi #13
+  menemukan sebagian sudah dikerjakan tanpa tercatat — lihat poin 13, "Yang
+  HARUS dikonfirmasi", soal siapa yang mengerjakannya) — cek PRD §17
+  langsung untuk task/fase berikutnya (kalau ada) sebelum mulai kerjaan
+  baru, jangan asumsikan dari file ini saja karena PROGRESS.md beberapa
+  kali terbukti basi soal urutan task (lihat catatan "PROGRESS.md basi" di
+  beberapa sesi, termasuk sesi #12, dan temuan T-11 tak tercatat di sesi
+  #13).
 - Beres-beres lint pra-eksisting (13 error dari sesi #8, salah satunya di
   `TransactionDetailModal.tsx` — sudah tercatat sejak poin 4/"Yang HARUS
   dikonfirmasi" #2 di histori sesi #8, TIDAK bertambah karena perubahan sesi
   #9 maupun #12; 1 error TAMBAHAN pra-eksisting juga ada di
-  `PaymentModal.tsx` per sesi #9 — lihat poin 5 di entri sesi #9) — bukan
-  blocker, tapi bikin `npm run lint` tidak bisa dipakai sebagai sinyal "ada
-  regresi baru" selama masih penuh dengan error lama yang bercampur.
+  `PaymentModal.tsx` per sesi #9 — lihat poin 5 di entri sesi #9; sesi #13
+  mencatat jumlah totalnya sudah berubah jadi 17 error/8 warning karena
+  file-file baru, tapi pola errornya sama, bukan regresi) — bukan blocker,
+  tapi bikin `npm run lint` tidak bisa dipakai sebagai sinyal "ada regresi
+  baru" selama masih penuh dengan error lama yang bercampur.
 
 ## Catatan penting untuk sesi berikutnya
+
+**File yang dibuat sesi #14 (lihat entri sesi #14 di atas untuk detail
+lengkap) — BELUM SATU PUN dijalankan ke database manapun:**
+
+- `supabase/migrations/019_held_orders.sql` — **baru, rekonstruksi.** Tabel
+  `held_orders` + RLS select/insert/delete milik-sendiri, untuk T-11 bagian
+  1 (Hold Order/"Tunda"). Nomor `019` dipertahankan karena sudah di-hardcode
+  di komentar `hooks/useHoldOrders.ts`.
+- `supabase/migrations/020_profiles_update_admin_lock.sql` — **baru**,
+  penomoran ulang dari yang sebelumnya disebut "019" di catatan sesi #12
+  (lihat Catatan sesi #12 di bawah — nama file YANG SEBENARNYA DIBUAT sesi
+  #14 beda dari yang disebut sesi #12, karena sesi #12 sendiri TIDAK PERNAH
+  benar-benar menuliskan file-nya ke repo, cuma menulis rencana isinya di
+  `PROGRESS.md`. Isi SQL-nya sama persis dengan rencana sesi #12, cuma nama
+  filenya baru resmi ada sekarang dengan nomor yang benar).
 
 **File yang dibuat/diubah sesi #12:**
 
@@ -687,10 +953,13 @@ install`+`npm run lint` berhasil jalan penuh (sesi-sesi sebelumnya sering
   Edit, dan Reset Password semuanya `disabled` + tooltip; opsi "Admin"
   disembunyikan dari dropdown role untuk supervisor lewat fungsi baru
   `getRoleOptionsFor()` (lihat poin 3).
-- `supabase/migrations/019_profiles_update_admin_lock.sql` — **baru**.
-  Menutup celah RLS `profiles_update_admin_supervisor` untuk kolom
-  full_name/email yang tidak lewat trigger role/is_active (lihat poin 4).
-  **BELUM DIEKSEKUSI ke production.**
+- ⚠️ Sesi #12 MENGAKU sudah membuat `supabase/migrations/019_profiles_update_admin_lock.sql`
+  (poin 4) — **tapi file itu TIDAK ADA di repo/zip yang diaudit sesi #13**
+  (lihat Temuan 1). Isinya baru benar-benar ditulis ke repo sesi #14, DENGAN
+  nomor berbeda (`020`, bukan `019` — lihat "File yang dibuat sesi #14" di
+  atas), karena nomor `019` ternyata sudah dipakai kode T-11 untuk keperluan
+  lain. Jangan cari file bernama persis `019_profiles_update_admin_lock.sql`
+  di repo — yang ada sekarang namanya `020_profiles_update_admin_lock.sql`.
 - Tidak ada perubahan ke `hooks/useAdminUsers.ts`, `PengaturanTokoTab.tsx`,
   migration `016`/`017`/`018` — semuanya dari sesi sebelumnya (yang tidak
   sempat menulis PROGRESS.md, lihat peringatan di entri sesi #12 di atas)
