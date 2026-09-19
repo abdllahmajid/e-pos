@@ -15,10 +15,15 @@ Aplikasi kasir (POS) berbasis Next.js + Supabase untuk Langitan.co. Lihat
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/storelangitanco/lco-pos.git
+git clone <url-repo-ini>
 cd lco-pos
 npm install
 ```
+
+> **Punya lebih dari satu akun GitHub?** Kalau di editor code Anda
+> menggunakan `gh auth switch` untuk berpindah akun, lihat
+> [Menggunakan beberapa akun GitHub](#menggunakan-beberapa-akun-github-gh-auth-switch)
+> di bawah sebelum clone/push ke repo ini.
 
 ### 2. Buat project Supabase & setup struktur database
 
@@ -87,6 +92,70 @@ npm run dev
 
 Buka [http://localhost:3000](http://localhost:3000), login pakai akun dari
 Langkah 3.
+
+## Menggunakan beberapa akun GitHub (gh auth switch)
+
+Kalau Anda mengelola beberapa akun GitHub di komputer yang sama (misalnya
+akun pribadi dan akun kerja/organisasi) dan mengandalkan `gh auth switch`
+di editor code untuk berpindah akun, berikut alurnya khusus untuk repo
+ini.
+
+### Prasyarat
+
+- Install [GitHub CLI](https://cli.github.com) (`gh`).
+- Login sekali untuk tiap akun yang dipakai:
+
+  ```bash
+  gh auth login
+  ```
+
+  `gh` akan menyimpan kredensial masing-masing akun, jadi cukup dilakukan
+  sekali per akun.
+
+### Cek akun yang sedang aktif
+
+```bash
+gh auth status
+```
+
+### Berpindah akun
+
+```bash
+gh auth switch
+```
+
+Kalau ada lebih dari dua akun tersimpan, tentukan akun tujuannya secara
+eksplisit:
+
+```bash
+gh auth switch --hostname github.com --user <username>
+```
+
+### Pastikan git ikut memakai akun yang baru dipilih
+
+`gh` mengatur kredensial git lewat credential helper miliknya sendiri.
+Token akun lama kadang masih ter-cache oleh git/editor, jadi setelah
+`gh auth switch`, jalankan:
+
+```bash
+gh auth setup-git
+```
+
+supaya `git clone`, `git pull`, dan `git push` ke repo ini konsisten
+menggunakan akun yang aktif saat itu.
+
+### Catatan khusus repo ini
+
+- Pastikan akun yang aktif punya akses (minimal read untuk clone, write
+  kalau perlu push) ke repo `lco-pos` sebelum menjalankan Langkah 1
+  (`git clone`) atau melakukan `git push`.
+- Kalau editor (VS Code, dsb.) punya integrasi Git/GitHub sendiri,
+  reload window / restart integrasi tersebut setelah `gh auth switch`
+  supaya editor membaca ulang kredensial yang aktif — kalau tidak,
+  editor bisa saja masih memakai token akun sebelumnya.
+- `gh auth switch` hanya mengganti kredensial CLI/git secara lokal; ini
+  tidak berkaitan dengan environment variable Supabase/Firebase di
+  `.env.local` (Langkah 4), yang tetap sama untuk semua akun GitHub.
 
 ## Backup / migrasi struktur database
 
