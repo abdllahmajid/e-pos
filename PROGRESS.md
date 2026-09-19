@@ -3,8 +3,304 @@
 > **Buku serah terima antar-agent.** File ini WAJIB dibaca agent saat mulai
 > sesi dan WAJIB ditulis ulang saat sesi berakhir (lihat PRD v1.1 §17 & §18).
 > PRD: `PRD-LCO-POS-Aplikasi-Kasir-v1.1.md` — acuan task ada di §17.
+>
+> **Cara baca file ini:** semua yang ada SEBELUM bagian "Arsip" di paling
+> bawah adalah status TERKINI. Bagian "Arsip" berisi riwayat lengkap versi
+> lama (sesi #7–#15) apa adanya — **sebagian isinya sudah usang atau
+> keliru** (mis. klaim tabrakan migration `019`, "T-12 belum ada jejak
+> kode"). Jangan jadikan arsip sebagai acuan status; pakai hanya kalau butuh
+> alasan di balik keputusan lama.
+>
+> **Preferensi kerja pemilik project (sesi #17):** agent memberi **SATU file
+> per langkah**, diserahkan sebagai file yang bisa diunduh — bukan banyak
+> kode sekaligus di dalam chat.
 
 ## Status terakhir diperbarui
+
+2026-09-19, sesi #17 (nomor diperkirakan — header `020_*.sql` menyebut
+"sesi #16", tapi sesi itu tidak punya entri sama sekali di file ini; lihat
+"Koreksi terhadap catatan lama"). **T-12 (FCM/PWA/cron) ternyata SUDAH
+SEBAGIAN dikerjakan sebelum sesi ini tanpa pernah tercatat; sesi ini
+menambah migration `022` (kolom token + RPC) dan merapikan PROGRESS.md.**
+
+Yang dikerjakan sesi ini:
+
+1. **Audit isi zip vs catatan lama.** Hasilnya di "Koreksi terhadap catatan
+   lama" dan tabel T-12 di "Sedang dikerjakan".
+2. **`supabase/migrations/022_profiles_fcm_token.sql` — baru.** Kolom
+   `profiles.fcm_token` + `fcm_token_updated_at`, partial unique index pada
+   `fcm_token`, RPC `save_my_fcm_token(p_token)` (simpan token pemanggil DAN
+   cabut token yang sama dari profil user lain — tablet kasir dipakai
+   bergantian, tanpa ini notifikasi kasir A muncul di layar kasir B) dan
+   `clear_my_fcm_token(p_token default null)` (untuk logout; kalau `p_token`
+   diisi, hanya menghapus bila cocok, supaya logout di satu perangkat tidak
+   mematikan perangkat lain). Kolom & nama sudah cocok dengan yang dibaca
+   `lib/notifications/sendPush.ts`. Batasan yang DISENGAJA: **satu token per
+   profil** (perangkat terakhir yang mendaftar yang menang) — multi-perangkat
+   butuh tabel `fcm_tokens` terpisah, belum dibangun. Detail keputusan di
+   komentar header file itu.
+3. **Diuji di Postgres 16 sandbox** (bukan Supabase asli; `auth.uid()` dan
+   role `anon`/`authenticated` di-stub): jalan dua kali tanpa error
+   (idempotent); token pindah dari kasir A ke B pada perangkat yang sama;
+   token kosong/pendek/>4096 karakter, akun nonaktif, dan tanpa sesi
+   ditolak; `.update()` langsung dengan token milik profil lain ditolak
+   index unik; `anon` tidak bisa menjalankan RPC; pengaman role migration
+   018 tetap menolak kasir menaikkan role sendiri.
+4. **Pemilik project melaporkan (sesi #17): semua migration yang tadinya
+   menggantung sudah dijalankan ke production dan "berjalan normal".**
+   ⚠️ Rinciannya TIDAK diberikan (nomor migration mana saja, dan skenario
+   apa yang dicoba). Dicatat sebagai: `013`, `016`, `017`, `018`, `019`
+   (`hold_orders`), `020`, dan `022` sudah dijalankan — **ini interpretasi
+   agent atas kata "semua", belum dikonfirmasi per nomor**. Lihat "Yang HARUS
+   dikonfirmasi" poin 1 untuk query pengecekan cepat.
+5. **Selisih hasil sandbox vs production yang BELUM terjelaskan** — lihat
+   bagian "Selisih sandbox vs production: rekursi RLS `profiles`" di bawah.
+   Tidak ada perbaikan yang dibuat karena production dilaporkan normal.
+6. **Verifikasi kode:** sesi ini HANYA menyentuh SQL (`022`) dan file
+   catatan ini — tidak ada `.ts`/`.tsx` yang diubah. `npm install`/`tsc`/
+   `eslint` **tidak dijalankan** (baseline dari sesi #15 tetap: 1 error
+   pra-eksisting `app/layout.tsx` `LayoutProps`, lint pra-eksisting seperti
+   dicatat sesi #13). PRD §15 (checkbox) **belum diperbarui** — hanya
+   PROGRESS.md yang diminta sesi ini.
+
+## Koreksi terhadap catatan lama (baca dulu)
+
+- **Tabrakan nomor migration `019` SUDAH BERES di repo.** Isi zip sekarang:
+  `019_hold_orders.sql` (T-11 bagian 1) dan `020_profiles_update_admin_lock.sql`
+  (T-10), tidak ada lagi dua file bernomor `019`. Header `020` mencatat
+  penggeserannya dikerjakan "sesi #16". Klaim sesi #15 bahwa tabrakan masih
+  ada **sudah usang**.
+- **T-12 bukan "nol jejak kode".** Yang SUDAH ada di repo (semuanya tidak
+  tercatat di PROGRESS.md mana pun sebelumnya): `lib/firebase/client.ts`,
+  `lib/notifications/sendPush.ts`, `app/api/send-notification/route.ts`,
+  `public/firebase-messaging-sw.js`, `public/icons/*` (3 PNG placeholder),
+  `public/manifest.json` (**0 byte, kosong**), plus `layout.tsx` sudah
+  memuat `manifest: "/manifest.json"`, ikon, dan `viewport.themeColor`.
+  `package.json` sudah punya `firebase` dan `firebase-admin`. Detail per
+  bagian di tabel "Sedang dikerjakan".
+- **Alur undang user baru tidak pernah tercatat**, padahal kodenya ada:
+  `app/api/admin/create-user/route.ts` (invite lewat Supabase Admin API,
+  butuh `SUPABASE_SERVICE_ROLE_KEY`, dibatasi admin+supervisor, supervisor
+  tidak boleh membuat admin), `app/auth/callback/route.ts`,
+  `app/set-password/page.tsx` (sengaja tidak masuk `PUBLIC_PATHS` di
+  `middleware.ts`). Ini "tambah user dari dalam app" yang PRD §17 T-10 tulis
+  "Jangan dulu" — ternyata sudah dikerjakan belakangan. Status ujinya tidak
+  diketahui.
+- **Sesi #16 tidak punya entri.** Satu-satunya jejaknya komentar header
+  `020_profiles_update_admin_lock.sql`. Pola "sesi terputus sebelum menulis
+  PROGRESS.md" sudah terjadi berulang (sesi #5/#7/#8/#10/#12/#14/#16) —
+  **tulis PROGRESS.md sebelum menutup sesi, bukan setelahnya.**
+
+## Task selesai
+
+Legenda: ✅ = kode lengkap DAN dilaporkan jalan oleh pemilik project;
+🟡 = kode lengkap, tapi jalan-atau-belumnya tidak dirinci/tidak diuji.
+
+- ✅ T-01 — `settings` + `useSettings` (migration `005`).
+- ✅ T-02 — Pembayaran per metode CASH/TRANSFER/QRIS/TEMPO (migration `006`).
+- ✅ T-03 — Nota A6/A5 + pilihan format cetak (`lib/pos/printLogic.ts`).
+- ✅ T-04 — Shift kasir (migration `007`, `008`; `hooks/useShifts.ts`).
+- ✅ T-05 — Mutasi stok & opname (migration `009`; `hooks/useStock.ts`).
+- ✅ T-06 — Dashboard (`hooks/useDashboard.ts`).
+- ✅ T-07 — `/cek-struk` publik (migration `010`).
+- ✅ RLS `transactions`/`transaction_items`/`payments` (migration `011`).
+- 🟡 T-08 — Laporan (migration `012`, `013`; `hooks/useReports.ts`,
+  `lib/pos/reportExport.ts`, Kirim WA). Kode 100% lengkap. **Export
+  Excel/PDF dan Kirim WA belum pernah dicoba di browser sungguhan** sejauh
+  yang tercatat. Migration `013` (No. HP pelanggan) masuk dugaan "semua
+  sudah dijalankan" sesi #17 — belum dikonfirmasi per nomor.
+- ✅ T-09 — Sampah & Log Aktivitas (migration `014`, `015`; diuji browser
+  sesi #10/#11). Akses admin+supervisor (menyimpang PRD §5, sengaja).
+- 🟡 T-10 — Pengaturan Admin (migration `016`–`018`, `020`;
+  `app/components/pengaturan/*`, `hooks/useAdminUsers.ts`). Akses
+  admin+supervisor, supervisor tidak bisa menyentuh akun admin. Migration
+  dilaporkan sudah dijalankan & normal (sesi #17); **uji browser skenario
+  supervisor-vs-admin belum dirinci** — lihat "Yang HARUS dikonfirmasi".
+- 🟡 T-11 — Fase 1.1: semua 3 bagian kodenya lengkap.
+  - Bagian 1 Hold order/"Tunda": `hooks/useHoldOrders.ts`, migration
+    `019_hold_orders.sql` (**rekonstruksi** dari kode TS, bukan file
+    asli — bisa ada detail kecil yang meleset). Migration dilaporkan
+    sudah dijalankan.
+  - Bagian 2 Split payment: migration `021` + `PaymentModal.tsx` +
+    `KasirModule.tsx`. ✅ **Dikonfirmasi jalan sesi #15** (kombinasi
+    spesifik yang dicoba tidak dirinci).
+  - Bagian 3 Scan barcode kamera: `BarcodeScanModal.tsx`
+    (`html5-qrcode`). Tanpa migration; **belum tercatat pernah dicoba di
+    HP/browser sungguhan.**
+  - Siapa yang menulis bagian 1 & 3 pertama kali tidak pernah terungkap
+    (dulu "poin 13"). Bukan blocker.
+- ⏳ T-12 — SEBAGIAN, lihat "Sedang dikerjakan".
+- ⬜ T-13 — Backup `/api/backup`, mode offline IndexedDB, sinkron
+  Warehouse, multi-unit: belum ada jejak kode.
+
+## Sedang dikerjakan — T-12 (FCM, cron harian, PWA)
+
+Status per bagian (dicek langsung ke isi zip, sesi #17):
+
+| Bagian                                                                                 | File                                                                  | Status                                                                                                                                                                                                                                               |
+| -------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Kolom token + RPC simpan/hapus                                                         | `supabase/migrations/022_profiles_fcm_token.sql`                      | ✅ Dibuat & diuji sandbox sesi #17; dilaporkan sudah dijalankan                                                                                                                                                                                      |
+| Wrapper Firebase (client)                                                              | `lib/firebase/client.ts`                                              | 🟡 Kode ada, **belum ada pemanggil satu pun** di `app/`/`hooks/`                                                                                                                                                                                     |
+| Kirim push (server)                                                                    | `lib/notifications/sendPush.ts`, `app/api/send-notification/route.ts` | 🟡 Kode ada, dibatasi admin+supervisor aktif, **belum ada pemanggil**. Butuh env `FIREBASE_ADMIN_PROJECT_ID`, `FIREBASE_ADMIN_CLIENT_EMAIL`, `FIREBASE_ADMIN_PRIVATE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`                                               |
+| Service worker                                                                         | `public/firebase-messaging-sw.js`                                     | ⚠️ **`firebaseConfig` masih berisi placeholder** (`"ISI_SAMA_PERSIS_DENGAN_NEXT_PUBLIC_FIREBASE_..."`) — WAJIB diisi manual, sama persis dengan `NEXT_PUBLIC_FIREBASE_*` di `.env.local`. Selama placeholder, notifikasi background tidak akan jalan |
+| Hook simpan token                                                                      | `hooks/useFcmToken.ts`                                                | ❌ **Belum ada** (dirujuk komentar di `client.ts`/`sendPush.ts`). Wajib pakai RPC `save_my_fcm_token`/`clear_my_fcm_token`, BUKAN `.update()` langsung ke `profiles` (lihat alasan di header migration 022)                                          |
+| PWA manifest                                                                           | `public/manifest.json`                                                | ❌ **0 byte, kosong** — padahal `layout.tsx` sudah merujuknya (`manifest: "/manifest.json"`), jadi browser mencoba mem-parse file kosong. Ikon di `public/icons/` masih placeholder monogram "LCO"                                                   |
+| Event notifikasi nyata (PRD §4.10: stok menipis, piutang jatuh tempo, transaksi besar) | —                                                                     | ❌ Belum ada. PRD tidak merinci pemicunya; jangan asumsikan sendiri tanpa konfirmasi                                                                                                                                                                 |
+| Cron `/api/cron/daily-summary` + `vercel.json`                                         | —                                                                     | ❌ Belum ada (`vercel.json` tidak ada di repo)                                                                                                                                                                                                       |
+| `/api/version` (UpdateBanner), `/api/backup`                                           | —                                                                     | ❌ Belum ada (PRD §7.1; `backup` masuk T-13)                                                                                                                                                                                                         |
+| Env & Firebase Console                                                                 | `.env.local`, Vercel env                                              | ❓ **Tidak diketahui** apakah project Firebase sudah dibuat dan 7 var `NEXT_PUBLIC_FIREBASE_*` + 3 var `FIREBASE_ADMIN_*` sudah diisi                                                                                                                |
+
+## Yang HARUS dikonfirmasi di awal sesi berikutnya
+
+1. **Konfirmasi "semua migration sudah dijalankan" per nomor** (sesi #17
+   hanya menerima pernyataan umum). Query cepat di SQL Editor:
+   ```sql
+   -- 019: tabel ada?      016-020: policy/trigger profiles lengkap?
+   select to_regclass('public.held_orders') as held_orders;
+   select polname from pg_policy where polrelid = 'public.profiles'::regclass order by 1;
+   -- harapan: profiles_select_admin_supervisor, profiles_select_own,
+   --          profiles_update_admin_supervisor, profiles_update_own
+   select column_name from information_schema.columns
+    where table_schema='public' and table_name='profiles'
+      and column_name in ('email','fcm_token','fcm_token_updated_at'); -- 3 baris
+   -- 013 & 021: RPC create_transaction punya parameter baru?
+   select pg_get_function_arguments(p.oid) from pg_proc p
+    where p.proname='create_transaction'
+      and pg_get_function_arguments(p.oid) ilike '%p_customer_phone%'
+      and pg_get_function_arguments(p.oid) ilike '%p_payments%';       -- 1 baris
+   ```
+   Untuk 013–015 ada juga `scripts/check_migrations_013_014_015.sql`.
+2. **Env Firebase & Console** (lihat baris terakhir tabel T-12): sudah ada
+   project Firebase? 7 var `NEXT_PUBLIC_FIREBASE_*` (termasuk
+   `..._VAPID_KEY`) dan 3 var `FIREBASE_ADMIN_*` sudah diisi di `.env.local`
+   dan Vercel? Placeholder `firebase-messaging-sw.js` sudah diganti?
+3. **Role akun pemilik project** (sebelumnya "poin 10"): apakah sudah
+   dinaikkan dari `supervisor` ke `admin` lewat query manual sesi #12?
+   Tidak pernah dikonfirmasi.
+4. **Uji browser yang belum pernah dirinci** (jangan anggap sudah, hanya
+   karena migration-nya dilaporkan normal):
+   - Pengaturan (T-10), sebagai admin DAN supervisor: baris admin harus
+     terkunci di UI; coba juga `.update()`/RPC langsung ke baris admin dari
+     akun supervisor lewat Supabase client — harus ditolak RLS (migration
+     `020`).
+   - Tunda (hold order) dari 2 akun kasir pada produk yang sama, dan Scan
+     barcode kamera di HP.
+   - Split payment: 3–4 metode sekaligus, upload bukti BANK_TRANSFER +
+     QRIS bersamaan, TEMPO sebagai salah satu baris split (harus muncul di
+     Laporan Piutang), dan transaksi split yang jumlahnya tidak pas harus
+     ditolak RPC dengan pesan jelas.
+   - Field No. HP + tombol Kirim WA di layar Kasir (HP: jalur Web Share;
+     desktop: unduh + tab `wa.me`; tanpa No. HP: fallback tanpa nomor).
+   - Export Excel (4 sheet, nominal tetap `number`) dan PDF (tabel panjang
+     lanjut ke halaman berikutnya).
+   - `/cek-struk` tanpa login, dan Kasir/Riwayat/Dashboard setelah RLS `011`.
+   - Alur undang user baru: Tambah User → email undangan →
+     `/auth/callback` → `/set-password`.
+5. **`npm run build` dari mesin pemilik project** (akses internet normal;
+   sandbox agent tidak bisa fetch Google Fonts). Belum pernah dikonfirmasi
+   hijau end-to-end. `npm run lint` masih penuh error pra-eksisting (pola
+   `react-hooks/set-state-in-effect`, `no-explicit-any`) — bukan sinyal
+   regresi; jangan "perbaiki semua" tanpa diminta.
+
+## Selisih sandbox vs production: rekursi RLS `profiles` (BELUM TERJELASKAN)
+
+Ditemukan sesi #17 saat menguji migration `022`. **Hasil di sandbox:**
+dengan migration `002` + `005` + `016` diterapkan ke Postgres 16 kosong,
+`select full_name from public.profiles` sebagai role `authenticated`
+menghasilkan `ERROR: infinite recursion detected in policy for relation
+"profiles"`. Dengan `002` saja query itu normal. Penyebab di sandbox:
+policy `profiles_select_admin_supervisor` (016) berisi `exists (select 1 from
+profiles p ...)` — membaca tabel yang sama dengan yang sedang diamankan.
+Migration `018`/`020` memakai pola subquery yang sama di policy UPDATE
+(rekursinya sendiri berasal dari policy SELECT itu).
+
+**Hasil di production (laporan pemilik project, sesi #17):** semua migration
+dijalankan dan aplikasi "berjalan normal". Ini **bertentangan** dengan hasil
+sandbox kalau 016–020 memang sudah aktif di sana. **Penyebab selisih belum
+diketahui** — bisa karena migration tidak benar-benar aktif seperti
+dugaan, atau ada perbedaan lingkungan (versi Postgres/Supabase, riwayat
+policy dari `scripts/setup-database.sql`, dst.); tidak ada yang diverifikasi.
+**Tidak ada perbaikan dibuat**, karena bukti terkuat (aplikasi berjalan)
+menunjukkan production tidak bermasalah. Poin 1 di "Yang HARUS dikonfirmasi"
+(query daftar policy) sekaligus menjawab apakah policy 016 benar-benar aktif.
+
+**Kalau suatu saat muncul error `infinite recursion detected in policy for
+relation "profiles"` (login gagal / role tidak terbaca)**, perbaikan yang
+sudah diuji di sandbox (rekursi hilang; kasir hanya melihat barisnya
+sendiri, supervisor melihat semua tapi tetap tidak bisa mengubah baris
+admin — peran admin sendiri tidak diuji terpisah):
+
+```sql
+create or replace function public.auth_user_role()
+returns public.user_role language sql stable security definer
+set search_path = public as
+$$ select role from public.profiles where id = auth.uid() and is_active = true $$;
+revoke all on function public.auth_user_role() from public, anon;
+grant execute on function public.auth_user_role() to authenticated;
+
+drop policy if exists "profiles_select_admin_supervisor" on public.profiles;
+create policy "profiles_select_admin_supervisor" on public.profiles for select
+  using (public.auth_user_role() in ('admin', 'supervisor'));
+```
+
+Jadikan migration bernomor berikutnya (`023`, idempotent) kalau dipakai —
+jangan ditempel manual tanpa file, supaya rantai migration tetap utuh.
+
+## Task berikutnya (disarankan, satu file per langkah)
+
+1. **`hooks/useFcmToken.ts`** — minta izin, ambil token lewat
+   `requestFcmPermissionAndToken()`, simpan lewat RPC `save_my_fcm_token`,
+   hapus lewat `clear_my_fcm_token(p_token)` saat logout, dan pasang
+   `listenForegroundMessages()` (cleanup saat unmount). Belum di-wire ke
+   layar manapun.
+2. **`public/manifest.json`** — isi (saat ini 0 byte). Cocokkan dengan
+   `layout.tsx`: `themeColor #124540`, `lang: "id-ID"`, ikon 192/512/
+   512-maskable yang sudah ada.
+3. **Isi `firebaseConfig` di `public/firebase-messaging-sw.js`** — manual
+   oleh pemilik project dari Firebase Console (bukan dikarang agent).
+4. **Wiring hook ke aplikasi** (mis. `app/page.tsx`) + tentukan dengan
+   pemilik project **event mana yang memicu notifikasi** (PRD §4.10 hanya
+   menyebut stok menipis, piutang jatuh tempo, transaksi nominal besar —
+   tanpa ambang/penerima).
+5. **`/api/cron/daily-summary`** + `vercel.json` (cron 1×/hari — batas plan
+   gratis, PRD §7). Panggil `sendPushToUser()` lewat import biasa, bukan
+   `fetch` ke endpoint sendiri (alasan di header `sendPush.ts`).
+6. Perbarui **PRD §15** (checkbox) — belum dikerjakan sesi #17.
+7. Setelah T-12: T-13 (`/api/backup`, offline, dst.) — cek PRD §17 langsung,
+   jangan andalkan file ini saja (PROGRESS.md berkali-kali terbukti basi).
+
+## Bug ditemukan (BELUM diperbaiki, bukan blocker) — baris Retur tidak punya rincian item
+
+Saat pemilik project cek fitur Retur: RPC `return_transaction` (migration `004`,
+dibuat sebelum sesi T-01) membuat baris transaksi baru berstatus `RETURN` (nomor
+`LCO-RTR/...`) untuk tiap retur, tapi **tidak pernah insert baris ke
+`transaction_items` untuk transaksi retur itu sendiri** — cuma nominal refund
+yang tersimpan. Akibatnya di modal detail, baris Retur cuma tampil total uang
+tanpa daftar barang. Halaman `/cek-struk` (T-07) mewarisi keterbatasan yang
+sama kalau pelanggan mencari langsung nomor `LCO-RTR/...`.
+
+Info barang yang diretur **sebenarnya tetap ada** — tersimpan sebagai
+`returned_qty` di `transaction_items` milik transaksi ASLI, dan sudah tampil
+di UI sebagai label "X sudah diretur" per item.
+
+**Belum diperbaiki atas keputusan pemilik project** (dikonfirmasi langsung) —
+kalau mau dikerjakan nanti: RPC `return_transaction` perlu insert baris
+`transaction_items` untuk `v_return_id` juga; **kalau ini dikerjakan,
+`hooks/useDashboard.ts` DAN `hooks/useReports.ts` (T-08, filter item yang sama)
+WAJIB ikut disesuaikan** supaya item terjual tidak terhitung ganda.
+
+---
+
+<details>
+<summary><strong>ARSIP</strong> — PROGRESS.md versi sesi #15 (riwayat lengkap sesi #7–#15, T-01–T-09). ⚠️ Sebagian USANG/KELIRU, lihat "Koreksi terhadap catatan lama" di atas. Tidak perlu dibaca untuk melanjutkan kerja.</summary>
+
+> Disalin apa adanya dari versi sesi #15 (heading `##` diturunkan jadi `####`, dan tag
+> `<details>` sesi #10/#9/#8 yang tidak seimbang di file lama dirapikan). Klaim yang SUDAH
+> DIBANTAH sesi #17: (a) tabrakan migration `019` masih ada — sekarang sudah `019_hold_orders` +
+> `020_profiles_update_admin_lock`; (b) T-12 "belum ada jejak kode" — sebagian sudah ada;
+> (c) status "BELUM DIEKSEKUSI" untuk migration 013/016–020 — dilaporkan sudah dijalankan.
+
+#### Status terakhir diperbarui
 
 2026-09-19, sesi #15. **T-11 bagian 2 (Split payment) — RPC baru dibuat,
 `KasirModule.tsx` di-wire, migration DIJALANKAN ke production DAN
@@ -677,8 +973,10 @@ build` (`next build`) **gagal, tapi HANYA karena sandbox agent sesi ini
     layar sukses `KasirModule.tsx`).
 
 </details>
+</details>
+</details>
 
-## Task selesai
+#### Task selesai
 
 - [x] T-01 — Tabel `settings` + hook `useSettings` (migration `005_settings.sql`)
 - [x] T-02 — Pembayaran lengkap per metode (transfer/qris/tempo): migration `006_payment_enhance.sql` (`due_date` di `payments`, tabel `payment_proofs` multi-file); update UI modal pembayaran dan riwayat.
@@ -786,14 +1084,14 @@ build` (`next build`) **gagal, tapi HANYA karena sandbox agent sesi ini
       komentar "Jangan dulu" yang memang sudah lama ada di
       `DashboardModule.tsx`).
 
-## Sedang dikerjakan
+#### Sedang dikerjakan
 
 - (tidak ada sesi aktif — tapi lihat Temuan 2 sesi #13: ada kode T-11 yang
   jelas PERNAH dikerjakan seseorang/sesi lain tanpa pernah tercatat di sini,
   jadi "tidak ada sesi aktif" tidak sama dengan "tidak ada pekerjaan yang
   menggantung tanpa catatan")
 
-## ✅ Temuan keamanan RLS sesi #7 — SUDAH DIPERBAIKI (migration `011`)
+#### ✅ Temuan keamanan RLS sesi #7 — SUDAH DIPERBAIKI (migration `011`)
 
 Ringkasan (detail keputusan desain lengkap ada di komentar header migration
 `011_transactions_rls.sql` itu sendiri, tidak diulang di sini): tabel
@@ -810,7 +1108,7 @@ ini). **Belum dikonfirmasi:** pengujian end-to-end setelah RLS aktif — lihat
 poin 2 & 3 di bagian "Yang HARUS dikonfirmasi" di bawah, JANGAN anggap otomatis
 aman hanya karena migration-nya sudah jalan tanpa error SQL.
 
-## Yang HARUS dikonfirmasi di awal sesi berikutnya
+#### Yang HARUS dikonfirmasi di awal sesi berikutnya
 
 1. **`npm run build` (`next build`) penuh belum pernah sukses di lingkungan
    manapun.** Di sandbox sesi ini, `tsc --noEmit` bersih (tidak ada type
@@ -1008,7 +1306,7 @@ install`+`npm run lint` berhasil jalan penuh (sesi-sesi sebelumnya sering
       Tidak menghalangi pekerjaan berikutnya, tapi jangan anggap split
       payment "100% teruji" hanya dari konfirmasi umum sesi #15 ini.
 
-## Task berikutnya (disarankan)
+#### Task berikutnya (disarankan)
 
 - **✅ Split payment (migration `021` + wiring `KasirModule.tsx`) sudah
   SELESAI & TERKONFIRMASI JALAN sesi #15** — bukan prioritas lagi, tapi
@@ -1064,7 +1362,7 @@ install`+`npm run lint` berhasil jalan penuh (sesi-sesi sebelumnya sering
   tapi bikin `npm run lint` tidak bisa dipakai sebagai sinyal "ada regresi
   baru" selama masih penuh dengan error lama yang bercampur.
 
-## Catatan penting untuk sesi berikutnya
+#### Catatan penting untuk sesi berikutnya
 
 **File yang dibuat sesi #14 (lihat entri sesi #14 di atas untuk detail
 lengkap) — BELUM SATU PUN dijalankan ke database manapun:**
@@ -1143,26 +1441,6 @@ lengkap) — BELUM SATU PUN dijalankan ke database manapun:**
 Detail lengkap T-07 (RPC `get_transaction_by_receipt`, keputusan desain,
 utang teknis) dipindah ke histori sesi diciutkan di bawah — sudah tidak
 menjadi task aktif sejak RLS `011` menyusul dan diverifikasi.
-
-## Bug ditemukan (BELUM diperbaiki, bukan blocker) — baris Retur tidak punya rincian item
-
-Saat pemilik project cek fitur Retur: RPC `return_transaction` (migration `004`,
-dibuat sebelum sesi T-01) membuat baris transaksi baru berstatus `RETURN` (nomor
-`LCO-RTR/...`) untuk tiap retur, tapi **tidak pernah insert baris ke
-`transaction_items` untuk transaksi retur itu sendiri** — cuma nominal refund
-yang tersimpan. Akibatnya di modal detail, baris Retur cuma tampil total uang
-tanpa daftar barang. Halaman `/cek-struk` (T-07) mewarisi keterbatasan yang
-sama kalau pelanggan mencari langsung nomor `LCO-RTR/...`.
-
-Info barang yang diretur **sebenarnya tetap ada** — tersimpan sebagai
-`returned_qty` di `transaction_items` milik transaksi ASLI, dan sudah tampil
-di UI sebagai label "X sudah diretur" per item.
-
-**Belum diperbaiki atas keputusan pemilik project** (dikonfirmasi langsung) —
-kalau mau dikerjakan nanti: RPC `return_transaction` perlu insert baris
-`transaction_items` untuk `v_return_id` juga; **kalau ini dikerjakan,
-`hooks/useDashboard.ts` DAN `hooks/useReports.ts` (T-08, filter item yang sama)
-WAJIB ikut disesuaikan** supaya item terjual tidak terhitung ganda.
 
 <details>
 <summary>Detail T-07 (Halaman publik <code>/cek-struk</code>) — diciutkan, sudah bukan task aktif</summary>
@@ -1316,5 +1594,7 @@ baru ditambahkan manual ke `profiles`, WAJIB isi `id` persis sama dengan
 
 **Belum diputuskan**: apakah `scripts/setup-database.sql` masih relevan dipakai
 atau sebaiknya di-deprecate sekarang rantai migration sudah berjalan sampai `010`.
+
+</details>
 
 </details>
