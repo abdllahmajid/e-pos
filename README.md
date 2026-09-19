@@ -1,36 +1,117 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# LCO POS — Aplikasi Kasir
 
-## Getting Started
+Aplikasi kasir (POS) berbasis Next.js + Supabase untuk Langitan.co. Lihat
+`PRD-LCO-POS-Aplikasi-Kasir-v1.1.md` untuk spesifikasi lengkap fitur, dan
+`PROGRESS.md` untuk status pengembangan terkini.
 
-First, run the development server:
+## Tech stack
+
+- **Next.js** (App Router) + TypeScript
+- **Supabase** — Postgres, Auth, Storage, RLS
+- **Firebase Cloud Messaging** — notifikasi push (opsional)
+
+## Quick start
+
+### 1. Clone & install
+
+```bash
+git clone <url-repo-ini>
+cd lco-pos
+npm install
+```
+
+### 2. Buat project Supabase & setup struktur database
+
+1. Buat project baru di [supabase.com](https://supabase.com).
+2. Buka **SQL Editor** di project baru → tempel seluruh isi
+   [`supabase/schema.sql`](./supabase/schema.sql) → **Run**.
+
+   File ini membuat semua tabel, enum, RLS policy, function/RPC, dan
+   Storage bucket yang dibutuhkan aplikasi — **satu kali jalan**. File ini
+   diambil langsung (`pg_dump --schema-only`) dari database production
+   yang berjalan, jadi dijamin sinkron dengan struktur asli — bukan
+   disusun ulang dari catatan.
+
+   > `supabase/migrations/*.sql` berisi **riwayat** perubahan struktur
+   > dari waktu ke waktu (untuk referensi/audit), **bukan** langkah setup
+   > untuk instalasi baru. Untuk instalasi baru, cukup `supabase/schema.sql`.
+
+### 3. Buat akun pertama (admin)
+
+Aplikasi ini tidak punya halaman signup publik — akun pertama dibuat
+manual lewat dashboard, akun berikutnya diundang dari dalam aplikasi oleh
+admin/supervisor (menu Pengaturan Admin).
+
+1. Dashboard Supabase → **Authentication → Users → Add user** → isi email
+   & password.
+2. Salin **User UID** yang baru dibuat, lalu di **SQL Editor**:
+   ```sql
+   insert into public.profiles (id, full_name, role)
+   values ('TEMPEL-USER-UID-DI-SINI', 'Nama Anda', 'admin');
+   ```
+
+### 4. Environment variables
+
+Buat `.env.local` di root project:
+
+```bash
+# Wajib — Project Settings > API di dashboard Supabase
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+
+# Wajib hanya untuk fitur "Tambah User" dari dalam aplikasi (Pengaturan
+# Admin). Project Settings > API > service_role.
+# JANGAN pernah di-expose ke client/browser.
+SUPABASE_SERVICE_ROLE_KEY=
+
+# Opsional — notifikasi push (PWA). Aplikasi tetap jalan normal tanpa ini,
+# hanya fitur notifikasi yang tidak aktif. Isi dari Firebase Console kalau
+# dibutuhkan.
+NEXT_PUBLIC_FIREBASE_API_KEY=
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
+NEXT_PUBLIC_FIREBASE_APP_ID=
+NEXT_PUBLIC_FIREBASE_VAPID_KEY=
+FIREBASE_ADMIN_PROJECT_ID=
+FIREBASE_ADMIN_CLIENT_EMAIL=
+FIREBASE_ADMIN_PRIVATE_KEY=
+```
+
+### 5. Jalankan
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Buka [http://localhost:3000](http://localhost:3000), login pakai akun dari
+Langkah 3.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Backup / migrasi struktur database
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Kalau suatu saat perlu memindahkan struktur database ke project Supabase
+lain (ganti akun, disaster recovery, dsb.), lihat
+[`MIGRASI-DATABASE.md`](./MIGRASI-DATABASE.md) — mengambil struktur
+langsung dari database yang berjalan (`pg_dump --schema-only`), bukan
+menyusun ulang dari file migration (ada riwayat drift yang tidak selalu
+tercatat, dijelaskan di file itu).
 
-## Learn More
+## Struktur folder yang relevan
 
-To learn more about Next.js, take a look at the following resources:
+```
+app/                  # halaman & komponen (App Router)
+lib/pos/              # logika bisnis POS (produk, transaksi, cetak struk, dll.)
+lib/supabase/         # client Supabase
+hooks/                # data-fetching hooks per fitur
+supabase/schema.sql   # setup database sekali-jalan (instalasi baru)
+supabase/migrations/  # riwayat perubahan struktur (referensi, bukan setup)
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Dokumen project
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `PRD-LCO-POS-Aplikasi-Kasir-v1.1.md` — spesifikasi produk
+- `PROGRESS.md` — status pengembangan per sesi, task selesai/belum, catatan
+  serah terima antar-agent
+- `AGENTS.md` / `CLAUDE.md` — panduan kerja untuk AI agent yang membantu
+  pengembangan
