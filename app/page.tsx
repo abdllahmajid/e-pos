@@ -66,6 +66,19 @@ const LogAktivitasModule = dynamic(
   },
 );
 
+// ── TAMBAHAN (T-10) ── Modul Pengaturan (Toko/Struk + kelola user), admin
+// only — menu "pengaturan" sudah ada di Sidebar.tsx (grup "Administrasi"),
+// belum dirender di sini sampai sekarang. Isi modulnya sendiri masih stub
+// ("segera hadir") per komentar header PengaturanModule.tsx — sub-tabnya
+// menyusul sesi berikutnya, tapi menu sudah bisa diklik & gate-nya sudah
+// bisa dites mulai commit ini.
+const PengaturanModule = dynamic(
+  () => import("./components/pengaturan/PengaturanModule"),
+  {
+    ssr: false,
+  },
+);
+
 export default function LCOPOS() {
   const [activeMenu, setActiveMenu] = useState("kasir");
 
@@ -93,6 +106,7 @@ export default function LCOPOS() {
         {activeMenu === "laporan" && <LaporanModule />}
         {activeMenu === "sampah" && <SampahModule />}
         {activeMenu === "log-aktivitas" && <LogAktivitasModule />}
+        {activeMenu === "pengaturan" && <PengaturanModule />}
       </main>
     </div>
   );

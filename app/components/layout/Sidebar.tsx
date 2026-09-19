@@ -20,13 +20,26 @@ import {
   TrendingUp,
   Trash2,
   ClipboardList,
+  Settings,
   type LucideIcon,
 } from "lucide-react";
+import { useAuth, type UserRole } from "@/hooks/useAuth";
 
 export interface SidebarMenuItem {
   key: string;
   label: string;
   icon: LucideIcon;
+  /**
+   * ── TAMBAHAN (T-10) ── Role yang boleh MELIHAT menu ini, sesuai matriks
+   * permission PRD §5 (kolom "view" tiap modul). Kosongkan (undefined) untuk
+   * menu yang boleh dilihat SEMUA role aktif (dashboard/kasir/produk/riwayat/
+   * kas_shift — semuanya minimal "view" di §5). Role `qc` sengaja diperlakukan
+   * seperti `kasir` (paling terbatas) untuk menu yang tidak eksplisit
+   * disebut di matriks §5 (kolomnya cuma Kasir/Supervisor/Admin) — belum ada
+   * keputusan pemilik project soal qc, jadi default paling aman (tidak
+   * elevated) dipakai sampai ada keputusan lain.
+   */
+  roles?: UserRole[];
 }
 
 export interface SidebarMenuGroup {
@@ -55,7 +68,14 @@ const MENU_GROUPS: SidebarMenuGroup[] = [
       // "Produk" sendiri sengaja dibiarkan di grup Utama seperti sebelumnya —
       // memindahkannya bukan bagian task ini dan bisa membingungkan kasir yang
       // sudah hafal posisi menu.
-      { key: "stok", label: "Stok & Opname", icon: Boxes },
+      // roles: PRD §5 baris `stok` — Kasir "—", Supervisor/Admin "✔".
+      {
+        key: "stok",
+        label: "Stok & Opname",
+        icon: Boxes,
+        roles: ["admin", "supervisor"],
+      },
+      // roles: kosong (semua role) — PRD §5 baris `kas_shift` — Kasir "✔ (sendiri)".
       { key: "kas", label: "Kas & Shift", icon: Wallet },
     ],
   },
@@ -63,12 +83,23 @@ const MENU_GROUPS: SidebarMenuGroup[] = [
     // ── TAMBAHAN (T-08) ── Grup terpisah dari "Alat Kasir" secara sengaja —
     // Laporan diasumsikan khusus admin/supervisor (lihat catatan ASUMSI di
     // LaporanModule.tsx & hooks/useReports.ts), beda konteks dari alat kerja
-    // harian kasir. Penyembunyian menu ini dari kasir sendiri belum dikerjakan
-    // di sini (itu scope T-10, permission matrix) — untuk sekarang menu tetap
-    // tampil semua role, yang menahan akses cuma layar blokir di
-    // LaporanModule.tsx (pola sama seperti menu "stok").
+    // harian kasir.
+    //
+    // ── PERUBAHAN (T-10) ── `roles` sekarang benar-benar diterapkan (lihat
+    // fungsi filter di komponen bawah) — sebelumnya menu ini tampil ke semua
+    // role dan cuma ditahan layar blokir di dalam LaporanModule.tsx. Layar
+    // blokir itu TETAP ada, sengaja tidak dihapus (defense in depth — kalau
+    // suatu saat filter di sini ke-skip karena bug, LaporanModule.tsx sendiri
+    // tetap menolak).
     label: "Laporan",
-    items: [{ key: "laporan", label: "Laporan", icon: TrendingUp }],
+    items: [
+      {
+        key: "laporan",
+        label: "Laporan",
+        icon: TrendingUp,
+        roles: ["admin", "supervisor"],
+      },
+    ],
   },
   {
     // ── TAMBAHAN (T-09) ── Grup "Lainnya" sesuai penamaan persis di PRD §4.1
@@ -78,17 +109,81 @@ const MENU_GROUPS: SidebarMenuGroup[] = [
     //
     // Kedua menu di grup ini admin+supervisor (bukan admin-only seperti PRD
     // §5 asli — keputusan sadar pemilik project, migration 015; lihat
-    // komentar header migration itu). Menu tetap tampil ke semua role,
-    // sama seperti pola grup "Laporan" — yang menahan akses justru layar
-    // blokir di dalam masing-masing modul (SampahModule.tsx /
-    // LogAktivitasModule.tsx sendiri).
+    // komentar header migration itu).
+    //
+    // ── PERUBAHAN (T-10) ── `roles` di bawah sekarang benar-benar diterapkan
+    // (sebelumnya cuma catatan komentar, menu tampil ke semua role). Layar
+    // blokir di SampahModule.tsx/LogAktivitasModule.tsx TETAP ada (defense
+    // in depth, sama alasannya dengan grup "Laporan" di atas).
     label: "Lainnya",
     items: [
-      { key: "sampah", label: "Sampah", icon: Trash2 },
-      { key: "log-aktivitas", label: "Log Aktivitas", icon: ClipboardList },
+      {
+        key: "sampah",
+        label: "Sampah",
+        icon: Trash2,
+        roles: ["admin", "supervisor"],
+      },
+      {
+        key: "log-aktivitas",
+        label: "Log Aktivitas",
+        icon: ClipboardList,
+        roles: ["admin", "supervisor"],
+      },
+    ],
+  },
+  {
+    // ── TAMBAHAN (T-10) ── Grup baru "Administrasi", khusus menu
+    // "Pengaturan". Sengaja dipisah dari grup "Lainnya" (bukan ditumpuk
+    // dengan Sampah/Log Aktivitas) walau sama-sama admin — PRD §4.1 memang
+    // menyebut "Pengaturan Admin" terpisah dari grup "LAINNYA" (baris
+    // "Pengaturan Admin — user, role, permission, ..." ditulis sebagai
+    // section sendiri di diagram §4.1, bukan di bawah "Sampah/Log
+    // Aktivitas"). `roles: ["admin"]` SAJA (bukan +supervisor) — beda dari
+    // Sampah/Log Aktivitas yang sengaja dilonggarkan migration 015; menu ini
+    // TIDAK ikut dilonggarkan karena belum ada keputusan sadar pemilik
+    // project untuk `settings` (PRD §5 baris `settings` tetap admin only,
+    // tidak disentuh migration 015 sama sekali — RLS `settings` di migration
+    // 005 pun masih murni admin only).
+    label: "Administrasi",
+    items: [
+      {
+        key: "pengaturan",
+        label: "Pengaturan",
+        icon: Settings,
+        roles: ["admin"],
+      },
     ],
   },
 ];
+
+/**
+ * ── TAMBAHAN (T-10) ── Saring MENU_GROUPS sesuai role user aktif. Item tanpa
+ * `roles` (undefined) lolos untuk role manapun. Grup yang jadi kosong setelah
+ * disaring (semua itemnya tersaring) TIDAK dirender sama sekali — supaya
+ * tidak ada judul grup menggantung tanpa isi (mis. kasir tidak akan melihat
+ * judul grup "Administrasi" kalau satu-satunya isinya, "Pengaturan",
+ * tersaring).
+ *
+ * `role` boleh `undefined` (auth masih loading) — dalam kondisi itu semua
+ * item yang PUNYA `roles` ikut disembunyikan dulu (default paling aman),
+ * baru muncul begitu role user selesai dimuat. Ini sengaja, supaya tidak ada
+ * "kedipan" menu sensitif tampil sebentar lalu hilang saat auth masih
+ * resolve (pola yang sama seperti kehati-hatian anti-blink di modul lain,
+ * lihat catatan blink LaporanModule.tsx/SampahModule.tsx di PROGRESS.md).
+ */
+function filterMenuGroups(
+  groups: SidebarMenuGroup[],
+  role: UserRole | undefined,
+) {
+  return groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter(
+        (item) => !item.roles || (role && item.roles.includes(role)),
+      ),
+    }))
+    .filter((group) => group.items.length > 0);
+}
 
 interface SidebarProps {
   activeMenu: string;
@@ -96,6 +191,15 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
+  // ── TAMBAHAN (T-10) ── Sidebar sengaja tetap "dumb" untuk activeMenu/
+  // onMenuChange (dikontrol dari page.tsx seperti sebelumnya), tapi butuh
+  // tahu role sendiri untuk menyaring menu — dipanggil langsung di sini
+  // (bukan lewat prop baru dari page.tsx) supaya page.tsx tidak perlu
+  // berubah sama sekali, konsisten dengan komentar header file ini
+  // ("tidak perlu sentuh page.tsx sama sekali" untuk urusan menu).
+  const { user } = useAuth();
+  const visibleGroups = filterMenuGroups(MENU_GROUPS, user?.role);
+
   return (
     <aside className="hidden w-64 border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 md:flex md:flex-col">
       <div className="border-b border-zinc-200 p-5 dark:border-zinc-800">
@@ -104,7 +208,7 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
         </h1>
       </div>
 
-      {MENU_GROUPS.map((group) => (
+      {visibleGroups.map((group) => (
         <div key={group.label} className="p-3 pt-3 first:pt-3">
           <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
             {group.label}
