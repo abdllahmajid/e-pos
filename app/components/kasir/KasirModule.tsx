@@ -855,7 +855,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
                         onClick={() => handleResumeHeldOrder(ho.id)}
                         disabled={resumingId === ho.id}
                         title="Lanjutkan"
-                        className="rounded-md p-2 text-lco-green hover:bg-lco-green/10 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="rounded-md p-2 text-lco-teal hover:bg-lco-green/10 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {resumingId === ho.id ? (
                           <Loader2 className="h-4 w-4 animate-spin" />

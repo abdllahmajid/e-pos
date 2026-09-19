@@ -374,7 +374,7 @@ export default function PengaturanAdminTab() {
                     <span
                       className={
                         row.is_active
-                          ? "font-medium text-lco-green"
+                          ? "font-medium text-lco-teal"
                           : "font-medium text-lco-coral"
                       }
                     >

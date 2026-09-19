@@ -10,20 +10,96 @@ export type PaymentMethod =
   | "QRIS"
   | "TEMPO";
 
-export interface CreateTransactionParams {
-  items: CartItem[];
+// ── TAMBAHAN (021, T-11 bagian 2) ── Satu baris pembayaran untuk split payment.
+// Bentuk ini SAMA dengan elemen `p_payments` di RPC create_transaction (migration
+// 021), hanya nama field di-camelCase-kan. Arti `amount` di sini = porsi tagihan
+// yang dilunasi lewat metode ini (BUKAN uang yang diserahkan) — untuk uang yang
+// diserahkan pelanggan pada baris CASH pakai `receivedAmount`.
+export interface SplitPaymentLine {
+  method: PaymentMethod;
+  amount: number;
+  /** Wajib untuk CASH, >= amount. Diabaikan untuk metode lain. */
+  receivedAmount?: number;
+  /** Wajib untuk TEMPO, format "YYYY-MM-DD". Diabaikan untuk metode lain. */
+  dueDate?: string;
+}
 
-  subtotal: number;
-  discount?: number;
-  tax?: number;
-  total: number;
+// Batas ini harus sama dengan batas di RPC (array 1-4 baris, tiap metode 1x).
+export const MAX_SPLIT_PAYMENT_LINES = 4;
 
+/**
+ * ── TAMBAHAN (021) ── Validasi ringan split payment, dipakai createTransaction()
+ * DAN (nanti) PaymentModal.tsx supaya tombol Bayar/pesan error konsisten dengan
+ * yang akan ditolak server. Mengembalikan pesan error, atau null kalau valid.
+ * Validasi SEBENARNYA yang tidak bisa dilewati tetap di RPC (Aturan Main #5).
+ *
+ * `customerName` hanya dipakai untuk aturan "TEMPO wajib nama pelanggan".
+ */
+export function validateSplitPayments(
+  total: number,
+  lines: SplitPaymentLine[],
+  customerName?: string,
+): string | null {
+  if (lines.length === 0) {
+    return "Rincian pembayaran masih kosong.";
+  }
+  if (lines.length > MAX_SPLIT_PAYMENT_LINES) {
+    return `Maksimal ${MAX_SPLIT_PAYMENT_LINES} metode pembayaran per transaksi.`;
+  }
+  if (total <= 0) {
+    return "Split pembayaran hanya untuk transaksi dengan total lebih dari nol.";
+  }
+
+  const seen = new Set<PaymentMethod>();
+  let sum = 0;
+
+  for (const line of lines) {
+    if (seen.has(line.method)) {
+      return `Metode ${line.method} dipakai lebih dari sekali.`;
+    }
+    seen.add(line.method);
+
+    if (!Number.isInteger(line.amount) || line.amount <= 0) {
+      return `Nominal ${line.method} harus bilangan bulat lebih dari nol.`;
+    }
+    sum += line.amount;
+
+    if (line.method === "CASH") {
+      if (
+        line.receivedAmount === undefined ||
+        line.receivedAmount < line.amount
+      ) {
+        return "Uang tunai yang diterima kurang dari porsi tunai.";
+      }
+    }
+
+    if (line.method === "TEMPO" && !line.dueDate) {
+      return "Tanggal jatuh tempo wajib diisi untuk pembayaran TEMPO.";
+    }
+  }
+
+  if (sum !== total) {
+    return sum < total
+      ? "Jumlah pembayaran masih kurang dari total."
+      : "Jumlah pembayaran melebihi total.";
+  }
+
+  if (seen.has("TEMPO") && !customerName?.trim()) {
+    return "Nama pelanggan wajib diisi untuk pembayaran TEMPO.";
+  }
+
+  return null;
+}
+
+// Bagian pembayaran dipisah jadi 2 bentuk yang saling eksklusif (TAMBAHAN 021):
+// - Tunggal (perilaku lama, dipakai KasirModule.tsx hari ini): paymentMethod + paymentAmount.
+// - Split: `payments` (1-4 baris). Kalau `payments` diisi, paymentMethod/paymentAmount/
+//   receivedAmount/dueDate top-level TIDAK boleh diisi — jatuh tempo & uang diterima
+//   ada di masing-masing baris.
+interface SinglePaymentParams {
   paymentMethod: PaymentMethod;
   paymentAmount: number;
   receivedAmount?: number;
-
-  customerName?: string;
-  notes?: string;
 
   /**
    * ── TAMBAHAN (T-02) ── Tanggal jatuh tempo, format "YYYY-MM-DD".
@@ -32,6 +108,29 @@ export interface CreateTransactionParams {
    * lihat migration 006_payment_enhance.sql, sesuai Aturan Main #5).
    */
   dueDate?: string;
+
+  payments?: undefined;
+}
+
+interface SplitPaymentParams {
+  payments: SplitPaymentLine[];
+
+  paymentMethod?: undefined;
+  paymentAmount?: undefined;
+  receivedAmount?: undefined;
+  dueDate?: undefined;
+}
+
+interface CreateTransactionBaseParams {
+  items: CartItem[];
+
+  subtotal: number;
+  discount?: number;
+  tax?: number;
+  total: number;
+
+  customerName?: string;
+  notes?: string;
 
   /**
    * ── TAMBAHAN (013) ── Nomor HP pelanggan, opsional untuk SEMUA metode bayar
@@ -44,11 +143,27 @@ export interface CreateTransactionParams {
   customerPhone?: string;
 }
 
+export type CreateTransactionParams = CreateTransactionBaseParams &
+  (SinglePaymentParams | SplitPaymentParams);
+
+// ── TAMBAHAN (021) ── Satu baris pembayaran yang baru tersimpan, dari hasil RPC.
+// PaymentModal memakai `payment_id` ini untuk menempelkan bukti transfer/QRIS ke
+// baris yang benar (satu transaksi split bisa punya beberapa baris non-tunai).
+export interface CreatedPayment {
+  payment_id: string;
+  method: PaymentMethod;
+  amount: number;
+}
+
 export interface CreateTransactionResult {
   success: boolean;
   transaction_id: string;
   receipt_no: string;
+  /** Baris pembayaran PERTAMA. Untuk pembayaran tunggal = satu-satunya baris. */
   payment_id: string;
+  /** ── TAMBAHAN (021) ── Semua baris pembayaran, urut sesuai input. */
+  payments: CreatedPayment[];
+  /** Total kembalian dari semua baris CASH (0 kalau tidak ada). */
   change_amount: number;
 }
 
@@ -78,26 +193,38 @@ export async function createTransaction(
     throw new Error("Total transaksi tidak valid.");
   }
 
-  if (params.paymentAmount < 0) {
-    throw new Error("Nominal pembayaran tidak valid.");
-  }
-
-  if (
-    params.paymentMethod === "CASH" &&
-    (params.receivedAmount === undefined ||
-      params.receivedAmount < params.total)
-  ) {
-    throw new Error("Nominal uang tunai tidak mencukupi.");
-  }
-
-  // ── TAMBAHAN (T-02) ── Validasi ringan UX untuk TEMPO — gagal cepat di client
-  // sebelum roundtrip ke server. RPC tetap validasi ulang (wajib, bukan opsional).
-  if (params.paymentMethod === "TEMPO") {
-    if (!params.customerName || !params.customerName.trim()) {
-      throw new Error("Nama pelanggan wajib diisi untuk pembayaran TEMPO.");
+  // ── TAMBAHAN (021) ── Cabang split payment. Validasi ringan di client
+  // (validateSplitPayments), lalu SEMUA data pembayaran dikirim lewat p_payments.
+  const splitLines = params.payments;
+  if (splitLines) {
+    const splitError = validateSplitPayments(
+      params.total,
+      splitLines,
+      params.customerName,
+    );
+    if (splitError) throw new Error(splitError);
+  } else {
+    if (params.paymentAmount < 0) {
+      throw new Error("Nominal pembayaran tidak valid.");
     }
-    if (!params.dueDate) {
-      throw new Error("Tanggal jatuh tempo wajib diisi untuk pembayaran TEMPO.");
+
+    if (
+      params.paymentMethod === "CASH" &&
+      (params.receivedAmount === undefined ||
+        params.receivedAmount < params.total)
+    ) {
+      throw new Error("Nominal uang tunai tidak mencukupi.");
+    }
+
+    // ── TAMBAHAN (T-02) ── Validasi ringan UX untuk TEMPO — gagal cepat di client
+    // sebelum roundtrip ke server. RPC tetap validasi ulang (wajib, bukan opsional).
+    if (params.paymentMethod === "TEMPO") {
+      if (!params.customerName || !params.customerName.trim()) {
+        throw new Error("Nama pelanggan wajib diisi untuk pembayaran TEMPO.");
+      }
+      if (!params.dueDate) {
+        throw new Error("Tanggal jatuh tempo wajib diisi untuk pembayaran TEMPO.");
+      }
     }
   }
 
@@ -117,10 +244,26 @@ export async function createTransaction(
     p_total: params.total,
     p_customer_name: params.customerName ?? null,
     p_notes: params.notes ?? null,
-    p_payment_method: params.paymentMethod,
-    p_payment_amount: params.paymentAmount,
-    p_received_amount: params.receivedAmount ?? null,
-    p_due_date: params.dueDate ?? null,
+    // ── KOREKSI (021) ── Pembayaran tunggal: field lama dikirim seperti biasa.
+    // Split: field lama TIDAK dikirim (RPC mengabaikannya kalau p_payments ada,
+    // dan mengirim `null` ke p_payment_method — enum NOT NULL default 'CASH' —
+    // akan menimpa default-nya jadi NULL, jadi lebih aman dihilangkan).
+    ...(splitLines
+      ? {
+          p_payments: splitLines.map((line) => ({
+            method: line.method,
+            amount: line.amount,
+            received_amount:
+              line.method === "CASH" ? (line.receivedAmount ?? null) : null,
+            due_date: line.method === "TEMPO" ? (line.dueDate ?? null) : null,
+          })),
+        }
+      : {
+          p_payment_method: params.paymentMethod,
+          p_payment_amount: params.paymentAmount,
+          p_received_amount: params.receivedAmount ?? null,
+          p_due_date: params.dueDate ?? null,
+        }),
     // ── TAMBAHAN (013) ── lihat komentar CreateTransactionParams.customerPhone
     // di atas. Named parameter, jadi ditambahkan di akhir daftar RPC di sini
     // tidak bergantung urutan parameter di definisi SQL-nya.
@@ -141,6 +284,22 @@ export async function createTransaction(
     transaction_id: data.transaction_id,
     receipt_no: data.receipt_no,
     payment_id: data.payment_id,
+    // ── TAMBAHAN (021) ── `payments` baru ada setelah migration 021 dijalankan.
+    // Fallback ke 1 baris dari `payment_id` supaya kode tetap jalan kalau RPC
+    // masih versi lama (mis. migration belum dieksekusi di environment tertentu).
+    payments: Array.isArray(data.payments)
+      ? data.payments.map((p: any) => ({
+          payment_id: p.payment_id,
+          method: p.method,
+          amount: Number(p.amount ?? 0),
+        }))
+      : [
+          {
+            payment_id: data.payment_id,
+            method: params.paymentMethod ?? "CASH",
+            amount: params.paymentAmount ?? params.total,
+          },
+        ],
     change_amount: Number(data.change_amount ?? 0),
   };
 }
