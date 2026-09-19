@@ -134,23 +134,29 @@ const MENU_GROUPS: SidebarMenuGroup[] = [
   {
     // ── TAMBAHAN (T-10) ── Grup baru "Administrasi", khusus menu
     // "Pengaturan". Sengaja dipisah dari grup "Lainnya" (bukan ditumpuk
-    // dengan Sampah/Log Aktivitas) walau sama-sama admin — PRD §4.1 memang
-    // menyebut "Pengaturan Admin" terpisah dari grup "LAINNYA" (baris
-    // "Pengaturan Admin — user, role, permission, ..." ditulis sebagai
-    // section sendiri di diagram §4.1, bukan di bawah "Sampah/Log
-    // Aktivitas"). `roles: ["admin"]` SAJA (bukan +supervisor) — beda dari
-    // Sampah/Log Aktivitas yang sengaja dilonggarkan migration 015; menu ini
-    // TIDAK ikut dilonggarkan karena belum ada keputusan sadar pemilik
-    // project untuk `settings` (PRD §5 baris `settings` tetap admin only,
-    // tidak disentuh migration 015 sama sekali — RLS `settings` di migration
-    // 005 pun masih murni admin only).
+    // dengan Sampah/Log Aktivitas) walau sama-sama admin+supervisor — PRD
+    // §4.1 memang menyebut "Pengaturan Admin" terpisah dari grup "LAINNYA"
+    // (baris "Pengaturan Admin — user, role, permission, ..." ditulis
+    // sebagai section sendiri di diagram §4.1, bukan di bawah "Sampah/Log
+    // Aktivitas").
+    //
+    // ── REVISI (migration 018) ── `roles` semula `["admin"]` saja, sekarang
+    // `["admin", "supervisor"]` — pemilik project MINTA LANGSUNG akses
+    // supervisor ke modul ini untuk keperluan pengujian, sama alasannya
+    // dengan migration 015 (akun pemilik/penguji sehari-hari berrole
+    // `supervisor`). Ini keputusan sadar, menyimpang dari PRD §5 asli
+    // (baris `settings` = "Admin" saja) — lihat komentar header migration
+    // `018_pengaturan_supervisor_access.sql` untuk detail lengkap & 2
+    // pengaman tambahan (supervisor tidak bisa menyentuh/membuat akun
+    // admin) yang TIDAK ada di migration 015 karena modul ini beda kelas
+    // risiko (bisa ubah role user lain, bukan cuma restore data).
     label: "Administrasi",
     items: [
       {
         key: "pengaturan",
         label: "Pengaturan",
         icon: Settings,
-        roles: ["admin"],
+        roles: ["admin", "supervisor"],
       },
     ],
   },

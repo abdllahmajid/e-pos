@@ -14,6 +14,19 @@
 // error dari RPC), bukan sumber kebenaran permission-nya — itu tetap di
 // database.
 //
+// ── TAMBAHAN (migration 018) ── Modul ini sekarang admin+supervisor (lihat
+// PengaturanModule.tsx). Supervisor dapat 2 pengaman TAMBAHAN yang tidak
+// berlaku untuk admin, mencerminkan trigger `profiles_enforce_role_change` +
+// RPC `admin_update_user_role`/`admin_set_user_active` di migration 018:
+//   A. Baris user yang ROLE-NYA SAAT INI admin dikunci total dari supervisor
+//      (dropdown role & tombol nonaktifkan disabled) — supervisor tidak
+//      boleh menyentuh akun admin sama sekali.
+//   B. Pilihan role "Admin" disembunyikan dari dropdown supervisor sama
+//      sekali — supervisor tidak bisa mempromosikan siapa pun jadi admin.
+// UI ini cuma mencerminkan batasan itu lebih awal (disabled/disembunyikan,
+// bukan menunggu error RPC) — sumber kebenarannya tetap di database, sama
+// seperti pola pengaman self-target di atas.
+//
 // Pola konfirmasi: reuse gaya modal konfirmasi ProdukModule.tsx (hapus
 // produk) untuk ubah role & nonaktifkan (aksi yang berdampak ke akses login
 // user lain, perlu konfirmasi eksplisit) — TAPI aktifkan kembali & reset
@@ -42,6 +55,17 @@ const ROLE_LABEL: Record<UserRole, string> = {
 };
 
 const ROLE_OPTIONS: UserRole[] = ["admin", "supervisor", "kasir", "qc"];
+
+// ── TAMBAHAN (migration 018, pengaman B) ── Opsi role yang boleh DIPILIH
+// tergantung role pemanggil. Supervisor tidak pernah melihat "Admin" sebagai
+// pilihan (tidak bisa mempromosikan siapa pun jadi admin) — admin tetap
+// melihat semua opsi seperti sebelumnya.
+function getRoleOptionsFor(callerRole: UserRole | undefined): UserRole[] {
+  if (callerRole === "supervisor") {
+    return ROLE_OPTIONS.filter((role) => role !== "admin");
+  }
+  return ROLE_OPTIONS;
+}
 
 function formatDate(isoString: string): string {
   return new Intl.DateTimeFormat("id-ID", { dateStyle: "medium" }).format(
@@ -173,6 +197,11 @@ export default function PengaturanAdminTab() {
     }
   }
 
+  // ── TAMBAHAN (migration 018, pengaman A/B) ── Dihitung sekali di luar
+  // loop baris, dipakai per baris di bawah.
+  const isSupervisorCaller = currentUser?.role === "supervisor";
+  const roleOptions = getRoleOptionsFor(currentUser?.role);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white p-10 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
@@ -213,6 +242,10 @@ export default function PengaturanAdminTab() {
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
             {users.map((row) => {
               const isSelf = row.id === currentUser?.id;
+              // Pengaman A (migration 018): supervisor tidak boleh
+              // menyentuh baris yang ROLE-NYA SAAT INI admin sama sekali.
+              const isLockedForSupervisor =
+                isSupervisorCaller && row.role === "admin";
 
               return (
                 <tr key={row.id} className={!row.is_active ? "opacity-60" : ""}>
@@ -234,7 +267,12 @@ export default function PengaturanAdminTab() {
                   <td className="px-4 py-3">
                     <select
                       value={row.role}
-                      disabled={isSelf}
+                      disabled={isSelf || isLockedForSupervisor}
+                      title={
+                        isLockedForSupervisor
+                          ? "Supervisor tidak bisa mengubah role akun admin"
+                          : undefined
+                      }
                       onChange={(e) =>
                         setRoleChangeTarget({
                           targetUser: row,
@@ -243,11 +281,19 @@ export default function PengaturanAdminTab() {
                       }
                       className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm outline-none transition-colors duration-150 focus:border-lco-teal focus:ring-1 focus:ring-lco-teal disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950"
                     >
-                      {ROLE_OPTIONS.map((role) => (
-                        <option key={role} value={role}>
-                          {ROLE_LABEL[role]}
-                        </option>
-                      ))}
+                      {/* ── TAMBAHAN (migration 018, pengaman B) ── Baris
+                          yang SAAT INI admin tapi selectnya disabled (lihat
+                          di atas) tetap perlu opsi "Admin" supaya value
+                          terpilih valid — roleOptions (tanpa "admin" untuk
+                          supervisor) dipakai untuk baris LAIN yang bisa
+                          diedit, bukan baris ini. */}
+                      {(row.role === "admin" ? ROLE_OPTIONS : roleOptions).map(
+                        (role) => (
+                          <option key={role} value={role}>
+                            {ROLE_LABEL[role]}
+                          </option>
+                        ),
+                      )}
                     </select>
                   </td>
                   <td className="px-4 py-3">
@@ -268,9 +314,14 @@ export default function PengaturanAdminTab() {
                     <div className="flex items-center justify-end gap-1.5">
                       <button
                         type="button"
-                        title="Edit nama & email"
+                        title={
+                          isLockedForSupervisor
+                            ? "Supervisor tidak bisa mengedit akun admin"
+                            : "Edit nama & email"
+                        }
                         onClick={() => openEdit(row)}
-                        className="rounded-md border border-zinc-200 p-1.5 text-zinc-500 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                        disabled={isLockedForSupervisor}
+                        className="rounded-md border border-zinc-200 p-1.5 text-zinc-500 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
@@ -278,12 +329,18 @@ export default function PengaturanAdminTab() {
                       <button
                         type="button"
                         title={
-                          !row.email
-                            ? "Isi email dulu lewat Edit sebelum kirim reset password"
-                            : "Kirim email reset password"
+                          isLockedForSupervisor
+                            ? "Supervisor tidak bisa mengirim reset password akun admin"
+                            : !row.email
+                              ? "Isi email dulu lewat Edit sebelum kirim reset password"
+                              : "Kirim email reset password"
                         }
                         onClick={() => handleSendReset(row)}
-                        disabled={!row.email || sendingResetForId === row.id}
+                        disabled={
+                          isLockedForSupervisor ||
+                          !row.email ||
+                          sendingResetForId === row.id
+                        }
                         className="rounded-md border border-zinc-200 p-1.5 text-zinc-500 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                       >
                         {sendingResetForId === row.id ? (
@@ -301,10 +358,12 @@ export default function PengaturanAdminTab() {
                           title={
                             isSelf
                               ? "Tidak bisa menonaktifkan diri sendiri"
-                              : "Nonaktifkan"
+                              : isLockedForSupervisor
+                                ? "Supervisor tidak bisa menonaktifkan akun admin"
+                                : "Nonaktifkan"
                           }
                           onClick={() => setDeactivateTarget(row)}
-                          disabled={isSelf}
+                          disabled={isSelf || isLockedForSupervisor}
                           className="rounded-md border border-zinc-200 p-1.5 text-zinc-500 transition-colors duration-150 hover:bg-lco-coral/10 hover:text-lco-coral disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700"
                         >
                           <UserX className="h-3.5 w-3.5" />
@@ -312,9 +371,14 @@ export default function PengaturanAdminTab() {
                       ) : (
                         <button
                           type="button"
-                          title="Aktifkan kembali"
+                          title={
+                            isLockedForSupervisor
+                              ? "Supervisor tidak bisa mengaktifkan akun admin"
+                              : "Aktifkan kembali"
+                          }
                           onClick={() => handleReactivate(row)}
-                          className="rounded-md border border-zinc-200 p-1.5 text-zinc-500 transition-colors duration-150 hover:bg-lco-green/10 hover:text-lco-green dark:border-zinc-700"
+                          disabled={isLockedForSupervisor}
+                          className="rounded-md border border-zinc-200 p-1.5 text-zinc-500 transition-colors duration-150 hover:bg-lco-green/10 hover:text-lco-green disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700"
                         >
                           <UserCheck className="h-3.5 w-3.5" />
                         </button>

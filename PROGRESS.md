@@ -6,6 +6,116 @@
 
 ## Status terakhir diperbarui
 
+2026-09-19, sesi #12. **T-10 (Pengaturan Admin) — akses dilonggarkan ke
+admin+supervisor, celah RLS ditutup, verifikasi kode.** Sesi ini melanjutkan
+pekerjaan T-10 yang SEBELUMNYA sudah dibangun (migration
+`016_admin_user_management.sql`, `017_profiles_email.sql`,
+`app/components/pengaturan/*`, `hooks/useAdminUsers.ts`, wiring
+`Sidebar.tsx`/`page.tsx`) dan percakapan lanjutan soal akses supervisor
+(migration `018_pengaturan_supervisor_access.sql`, sudah dibuat) — tapi
+`PROGRESS.md` ini sendiri **TIDAK SEMPAT ditulis ulang** sebelum sesi itu
+terputus (pola yang sama sudah terjadi 3x sebelumnya di sesi #5/#7/#8, lihat
+histori di bawah — kali ini basi untuk T-10 utuh, bukan cuma satu migration).
+
+Root cause pemicu revisi akses: pemilik project (yang JADI penguji
+sehari-hari) login dengan akun ber-role `supervisor`, langsung diblokir layar
+"Akses Ditolak" walau menu Pengaturan sudah muncul di Sidebar — sesuai desain
+SEMULA (admin-only murni, PRD §5 baris `settings`). Keputusan pemilik project
+(dikonfirmasi langsung, pola sama dengan migration `015`): longgarkan ke
+admin+supervisor, DENGAN 2 pengaman tambahan (supervisor tidak bisa
+sentuh/promosikan akun admin) karena modul ini beda kelas risiko dari
+Sampah/Log Aktivitas (bisa ubah role user lain & pengaturan toko).
+
+⚠️ Sesi ini (seperti kebanyakan sesi sebelumnya) dikerjakan TANPA akses ke
+database Supabase production maupun browser sungguhan. BEDA dari kebanyakan
+sesi: `npm install` dan akses jaringan TERSEDIA PENUH sesi ini (lihat poin 6
+di bawah) — tapi tetap tidak ada cara menjalankan migration SQL atau membuka
+UI di browser dari sandbox ini, keduanya tetap wajib dilakukan pemilik
+project sendiri.
+
+Yang dikerjakan sesi ini:
+
+1. **`app/components/layout/Sidebar.tsx`** — menu "Pengaturan" (grup
+   "Administrasi"): `roles` diganti dari `["admin"]` jadi
+   `["admin", "supervisor"]`, konsisten dengan migration `018`. Komentar
+   header disesuaikan.
+2. **`app/components/pengaturan/PengaturanModule.tsx`** — gate akses
+   `canAccessSettings` diganti dari `role === "admin"` jadi
+   `role === "admin" || role === "supervisor"`. Pesan layar "Akses Ditolak"
+   disesuaikan. **Ini file yang bikin pemilik project masih diblokir padahal
+   menu sudah muncul** — Sidebar (poin 1, sebelum diubah sesi ini) dan
+   Module ini sebelumnya TIDAK SINKRON dengan migration `018`: backend sudah
+   melonggarkan, tapi 2 gate frontend ini masih admin-only murni.
+3. **`app/components/pengaturan/PengaturanAdminTab.tsx`** — tambahan
+   pengaman UI untuk baris user ber-role admin KETIKA yang login supervisor
+   (mencerminkan pengaman A/B migration `018` di sisi tampilan, bukan cuma
+   menunggu error RPC):
+   - Dropdown role & tombol nonaktifkan: `disabled` + tooltip penjelasan.
+   - Opsi "Admin" disembunyikan dari dropdown role kalau pemanggil
+     supervisor (fungsi baru `getRoleOptionsFor()`) — supervisor tidak bisa
+     lihat/pilih opsi itu sama sekali untuk baris manapun.
+   - **Tambahan di luar rencana awal, ditemukan saat review**: tombol Edit
+     (nama/email) & Kirim Reset Password JUGA dikunci untuk baris admin
+     kalau pemanggil supervisor — lihat root cause di poin 4.
+4. **`supabase/migrations/019_profiles_update_admin_lock.sql` — baru.**
+   Menutup celah keamanan yang ditemukan saat review poin 3: pengaman
+   migration `018` ("supervisor tidak bisa sentuh akun admin") HANYA
+   ditegakkan lewat trigger `enforce_profiles_role_change`, yang baris
+   pertamanya `if new.role = old.role and new.is_active = old.is_active then
+return new` — SAMA SEKALI TIDAK JALAN kalau yang diubah cuma
+   `full_name`/`email` (jalur `updateUserContact` di `hooks/useAdminUsers.ts`,
+   pakai `.update()` langsung, bukan RPC). Policy
+   `profiles_update_admin_supervisor` (migration `018`) mengizinkan update
+   baris SIAPA PUN tanpa syarat kolom. **Risiko konkret**: supervisor ganti
+   email akun admin ke email yang dia kuasai → klik "Kirim Reset Password"
+   (`supabase.auth.resetPasswordForEmail`, API Auth terpisah dari RLS —
+   memang terbuka untuk email manapun, itu bukan bagian yang bocor) → link
+   reset terkirim ke email yang sudah diganti → pengambilalihan akun admin.
+   **BELUM PERNAH TERJADI/DILAPORKAN** — murni temuan defensif saat review
+   kode, BUKAN insiden nyata. Perbaikan: policy
+   `profiles_update_admin_supervisor` diganti — supervisor sekarang tidak
+   lolos USING/WITH CHECK sama sekali untuk baris yang `role = 'admin'`
+   (SEBELUM maupun SESUDAH update), berlaku untuk kolom APAPUN, tidak
+   bergantung trigger lagi. Admin tidak terkena batasan tambahan apa pun.
+5. **Permintaan terpisah dari pemilik project**: naikkan role akun pemilik
+   sendiri (saat ini `supervisor`) jadi `admin` langsung — dianggap
+   perbaikan yang lebih rapi untuk akun pemilik aplikasi dibanding terus
+   bergantung pada jalur pelonggaran supervisor. **Bukan migration**
+   (perubahan data satu baris, bukan skema/policy) — diberi 2 query SQL
+   Editor manual ke pemilik project: SELECT untuk cari `id` akun, lalu
+   `alter table ... disable trigger profiles_enforce_role_change` + `update
+profiles set role='admin'` + `enable trigger` lagi (trigger perlu
+   dimatikan sebentar karena `enforce_profiles_role_change` mengecek
+   `auth.uid()` yang NULL di konteks SQL Editor, akan menolak update kalau
+   trigger aktif). **Belum dikonfirmasi sudah dijalankan pemilik project** —
+   lihat "Yang HARUS dikonfirmasi" poin 10.
+6. **Verifikasi kode** (jaringan tersedia sesi ini, TANPA akses
+   database/browser — lihat peringatan di atas): `npm install` **berhasil**
+   (tidak seperti beberapa sesi sebelumnya yang kadang tidak punya jaringan).
+   `tsc --noEmit` **penuh satu project**: bersih untuk ke-3 file yang diubah,
+   1 error pra-eksisting tidak terkait (`app/layout.tsx:20` `LayoutProps` —
+   sudah tercatat sejak sesi #8, butuh `next build`/`next dev` untuk generate
+   types, tidak tersentuh sesi ini). `eslint` khusus 3 file yang diubah
+   (`Sidebar.tsx`, `PengaturanModule.tsx`, `PengaturanAdminTab.tsx`): **0
+   error, 0 warning**. Migration `019` (SQL) tidak bisa di-lint dari sandbox
+   ini (tidak ada koneksi ke database Supabase manapun) — cuma diperiksa
+   manual (dibaca ulang), belum pernah dijalankan ke database manapun sama
+   sekali, termasuk staging.
+
+⚠️ **Status T-10 dasar (migration 016/017, komponen Pengaturan) SEBELUM sesi
+ini**: dikerjakan sesi terpisah yang terputus SEBELUM sempat menulis
+`PROGRESS.md` — riwayatnya TIDAK ADA di file ini sebelum sesi #12
+menuliskannya sekarang (retroaktif, dari hasil membaca kode yang sudah ada
+di repo/zip, BUKAN dari catatan sesi itu sendiri karena catatannya memang
+tidak pernah dibuat). **Kemungkinan ada detail keputusan desain dari sesi
+itu yang hilang** (sama seperti migration `015` yang filenya sempat hilang
+di sesi #10→#11) — kalau menemukan perilaku T-10 yang tidak dijelaskan di
+sini, jangan asumsikan itu bug, cek dulu kode
+`PengaturanTokoTab.tsx`/`hooks/useAdminUsers.ts` langsung.
+
+<details>
+<summary>Detail sesi #11 (bug fix Log Aktivitas kosong untuk supervisor, migration <code>015</code> dibuat ulang & dieksekusi) — diciutkan</summary>
+
 2026-09-18, sesi #11. **Bug fix: halaman Log Aktivitas tampil kosong untuk
 akun supervisor walau void/retur sudah kejadian dan tersimpan di database.**
 Root cause: **file migration `015` yang menurut catatan sesi #10 "sudah
@@ -74,6 +184,8 @@ policy`/`create policy activity_logs_select_admin_supervisor` (select
 3. Tidak ada perubahan kode frontend sesi ini — `LogAktivitasModule.tsx`,
    `Sidebar.tsx`, `page.tsx` dari sesi #10 semuanya sudah benar dari awal,
    murni migration database yang menyusul.
+
+</details>
 
 <details>
 <summary>Detail sesi #10 (keputusan akses Sampah/Log Aktivitas admin+supervisor; migration <code>015</code> awal, filenya sempat hilang — lihat root cause sesi #11 di atas) — diciutkan</summary>
@@ -372,6 +484,34 @@ build` (`next build`) **gagal, tapi HANYA karena sandbox agent sesi ini
         alur ini belum pernah dicoba di browser sama sekali** — lihat "Yang
         HARUS dikonfirmasi" poin 7 & 8, WAJIB dilakukan sebelum menganggap
         fitur ini benar-benar jalan.
+- [x] **T-09 — Sampah & Log Aktivitas** (PRD §17 Fase F) — soft-delete/restore
+      produk & transaksi (`app/components/sampah/SampahModule.tsx`, RPC
+      `soft_delete_product`/`restore_product`/`soft_delete_transaction`/
+      `restore_transaction` di migration `014_activity_logs_and_trash.sql`) +
+      halaman Log Aktivitas (`app/components/log-aktivitas/LogAktivitasModule.tsx`,
+      tabel `activity_logs`). Akses admin+supervisor (migration
+      `015_trash_supervisor_access.sql`, keputusan sadar pemilik project,
+      menyimpang PRD §5). **Migration 014 & 015 sudah dieksekusi ke production
+      dan diverifikasi lewat pengujian browser langsung oleh pemilik project**
+      (sesi #10/#11) — satu-satunya task yang statusnya benar-benar
+      terverifikasi end-to-end sejauh ini di file ini, bukan cuma lolos
+      type-check. (Entri ini seharusnya sudah ditambahkan sejak sesi #11,
+      baru ditambal sesi #12 — lihat catatan "PROGRESS.md basi" di sesi #12.)
+- [x] **T-10 — Pengaturan Admin** (PRD §17 Fase G, §4.1, §11) — sub-tab "Toko
+      & Struk" (`PengaturanTokoTab.tsx`, edit `settings` dari T-01) +
+      "Pengaturan Admin" (`PengaturanAdminTab.tsx`, kelola user: ubah role,
+      aktifkan/nonaktifkan, edit kontak, reset password — migration
+      `016_admin_user_management.sql`/`017_profiles_email.sql`). Akses
+      direvisi dari admin-only jadi **admin+supervisor** (migration
+      `018_pengaturan_supervisor_access.sql` +
+      `019_profiles_update_admin_lock.sql`, sesi #12), dengan pengaman:
+      supervisor tidak bisa sentuh/promosikan akun admin (role, status,
+      MAUPUN kontak — lihat migration 019). ⚠️ **Migration 016/017/018/019
+      SEMUANYA belum dikonfirmasi dieksekusi ke production, dan modul ini
+      belum pernah dibuka di browser sungguhan sama sekali** (baik oleh agent
+      maupun pemilik project) — lihat "Yang HARUS dikonfirmasi" poin 9-11.
+      Jangan baca centang ini sebagai "sudah jalan", cuma "sudah lengkap
+      ditulis & lolos type-check/lint".
 
 ## Sedang dikerjakan
 
@@ -478,36 +618,83 @@ install`+`npm run lint` berhasil jalan penuh (sesi-sesi sebelumnya sering
    - Pastikan "Transaksi Baru" tetap menutup modal & mereset form seperti
      perilaku lama (efeknya seharusnya sama, cuma sekarang dipicu klik
      eksplisit, bukan `setTimeout`).
+9. **Jalankan migration `016_admin_user_management.sql`,
+   `017_profiles_email.sql`, `018_pengaturan_supervisor_access.sql`, dan
+   `019_profiles_update_admin_lock.sql` ke Supabase production — SEMUANYA,
+   berurutan sesuai nomor.** Sampai ini dijalankan, modul Pengaturan (T-10)
+   tidak akan berfungsi sama sekali di production (RPC/kolom/policy yang
+   dipakai kode belum ada atau masih versi lama) — mirip situasi migration
+   `013` di poin 7, tapi untuk 4 file migration sekaligus.
+10. **Konfirmasi apakah 2 query SQL manual (poin 5, entri sesi #12) untuk
+    naikkan role akun pemilik project dari supervisor ke admin sudah
+    dijalankan.** Kalau sudah, akun itu sekarang admin — jangan asumsikan
+    masih supervisor di sesi berikutnya tanpa mengecek dulu.
+11. **Uji modul Pengaturan end-to-end di browser — BELUM PERNAH sama
+    sekali**, baik oleh agent maupun pemilik project:
+    - Login sebagai admin: cek kedua sub-tab, ubah setting toko (PPN dll),
+      ubah role/status user lain (termasuk coba promosikan seseorang jadi
+      admin), edit kontak, kirim reset password.
+    - Login sebagai supervisor (kalau masih ada akun ber-role ini setelah
+      poin 10): pastikan baris admin di tabel user benar-benar terkunci di
+      UI (dropdown, tombol nonaktifkan, Edit, Reset Password semuanya
+      disabled) DAN coba juga panggil `.update()`/RPC langsung lewat
+      Supabase client (bukan cuma lewat UI) ke baris admin — pastikan
+      benar-benar ditolak RLS (migration 019). **Ini yang paling penting
+      diuji**, karena tombol disabled di UI tidak menjamin database juga
+      menolak kalau migration 019 belum dijalankan (lihat poin 9).
 
 ## Task berikutnya (disarankan)
 
-- **Jalankan checklist "Yang HARUS dikonfirmasi" di atas dulu** (build asli,
-  end-to-end `/cek-struk` + Kasir/Riwayat/Dashboard + Laporan + Export/Kirim
-  WA + field HP & Kirim WA di Kasir yang baru dari sesi #9, **DAN migration
-  `013` yang belum dieksekusi**) — sebaiknya sebelum menambah task baru lagi,
-  supaya utang verifikasi tidak menumpuk. **Poin 7 (jalankan migration 013)
-  KHUSUSNYA prioritas tertinggi** — tanpa itu, layar Kasir akan mulai gagal
-  transaksi begitu kode sesi #9 di-deploy.
-- **T-08 (Laporan) sekarang sudah 100% selesai secara kode** (lihat "Task
-  selesai") — task besar berikutnya sesuai urutan PRD §17 adalah **T-09
-  (Sampah + Log Aktivitas, Fase F)**: soft-delete/restore untuk
-  produk/kategori (kolom `deleted_at` sudah dipakai di beberapa tabel, lihat
-  `products` — cek dulu tabel mana saja yang sudah punya kolom ini sebelum
-  asumsi perlu migration baru) + halaman Sampah untuk restore, dan
-  Log Aktivitas mencatat aksi-aksi sensitif (void, retur, opname stok, ubah
-  harga, dll — PRD tidak merinci daftar lengkap aksi yang wajib dicatat,
-  perlu ditentukan/dikonfirmasi dulu sebelum implementasi). Setelah T-09,
-  urutan PRD §17 lanjut ke **T-10 (Pengaturan Admin: user/role/permission +
-  UI Pengaturan)**.
+- **Prioritas tertinggi sekarang: jalankan migration `016`–`019` ke
+  production (poin 9, "Yang HARUS dikonfirmasi") DAN uji modul Pengaturan
+  end-to-end di browser (poin 11)** — T-10 sudah 100% selesai secara kode,
+  tapi migration-nya menumpuk 4 file berurutan yang belum satu pun
+  dikonfirmasi jalan, dan modulnya belum pernah dibuka sama sekali oleh
+  siapa pun. Setelah itu, konfirmasi juga apakah role akun pemilik project
+  sudah dinaikkan ke admin (poin 10) supaya sesi berikutnya tidak salah
+  asumsi soal role akun yang dipakai testing.
+- **Migration `013` (sesi #9, field HP customer) MASIH belum dikonfirmasi
+  jalan** — sudah menggantung sejak sesi #9, disebutkan lagi di sesi
+  #10/#11, dan sesi #12 ini TIDAK menambah info baru soal ini. Jangan lupakan
+  ini hanya karena perhatian sekarang tertuju ke T-10 — lihat poin 7 di
+  "Yang HARUS dikonfirmasi".
+- Setelah checklist verifikasi T-10 & migration lama beres: **T-10 adalah
+  task terakhir yang tercantum eksplisit di urutan PRD §17** sejauh yang
+  diketahui sesi ini — cek PRD §17 langsung untuk task/fase berikutnya
+  (kalau ada) sebelum mulai kerjaan baru, jangan asumsikan dari file ini
+  saja karena PROGRESS.md beberapa kali terbukti basi soal urutan task
+  (lihat catatan "PROGRESS.md basi" di beberapa sesi, termasuk sesi #12).
 - Beres-beres lint pra-eksisting (13 error dari sesi #8, salah satunya di
   `TransactionDetailModal.tsx` — sudah tercatat sejak poin 4/"Yang HARUS
   dikonfirmasi" #2 di histori sesi #8, TIDAK bertambah karena perubahan sesi
-  #9; 1 error TAMBAHAN pra-eksisting juga ada di `PaymentModal.tsx` per
-  sesi #9 — lihat poin 5 di entri sesi #9) — bukan blocker, tapi bikin
-  `npm run lint` tidak bisa dipakai sebagai sinyal "ada regresi baru" selama
-  masih penuh dengan error lama yang bercampur.
+  #9 maupun #12; 1 error TAMBAHAN pra-eksisting juga ada di
+  `PaymentModal.tsx` per sesi #9 — lihat poin 5 di entri sesi #9) — bukan
+  blocker, tapi bikin `npm run lint` tidak bisa dipakai sebagai sinyal "ada
+  regresi baru" selama masih penuh dengan error lama yang bercampur.
 
 ## Catatan penting untuk sesi berikutnya
+
+**File yang dibuat/diubah sesi #12:**
+
+- `app/components/layout/Sidebar.tsx` — menu "Pengaturan" (grup
+  "Administrasi") `roles` diganti `["admin"]` → `["admin", "supervisor"]`
+  (lihat poin 1, entri sesi #12).
+- `app/components/pengaturan/PengaturanModule.tsx` — gate akses
+  `canAccessSettings` diganti admin-only → admin+supervisor, pesan "Akses
+  Ditolak" disesuaikan (lihat poin 2).
+- `app/components/pengaturan/PengaturanAdminTab.tsx` — pengaman UI untuk
+  baris admin kalau pemanggil supervisor: dropdown role, tombol nonaktifkan,
+  Edit, dan Reset Password semuanya `disabled` + tooltip; opsi "Admin"
+  disembunyikan dari dropdown role untuk supervisor lewat fungsi baru
+  `getRoleOptionsFor()` (lihat poin 3).
+- `supabase/migrations/019_profiles_update_admin_lock.sql` — **baru**.
+  Menutup celah RLS `profiles_update_admin_supervisor` untuk kolom
+  full_name/email yang tidak lewat trigger role/is_active (lihat poin 4).
+  **BELUM DIEKSEKUSI ke production.**
+- Tidak ada perubahan ke `hooks/useAdminUsers.ts`, `PengaturanTokoTab.tsx`,
+  migration `016`/`017`/`018` — semuanya dari sesi sebelumnya (yang tidak
+  sempat menulis PROGRESS.md, lihat peringatan di entri sesi #12 di atas)
+  dan sudah benar dari awal, sesi ini murni menyambung yang kurang.
 
 **File yang dibuat/diubah sesi #9:**
 

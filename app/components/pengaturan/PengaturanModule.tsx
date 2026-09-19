@@ -15,10 +15,14 @@
 // file ini tetap jadi "shell" tipis (gate akses + tab switcher), sama seperti
 // pola LaporanModule.tsx yang memisah isi tiap sub-tab.
 //
-// Akses: admin ONLY — beda dari SampahModule.tsx/LogAktivitasModule.tsx yang
-// dilonggarkan ke admin+supervisor (migration 015). Menu ini SENGAJA TIDAK
-// ikut dilonggarkan, lihat komentar di Sidebar.tsx grup "Administrasi" —
-// PRD §5 baris `settings` tidak pernah disentuh migration 015 sama sekali.
+// Akses: admin+supervisor — REVISI migration 018 (semula admin ONLY). Pemilik
+// project MINTA LANGSUNG akses supervisor untuk keperluan pengujian, alasan
+// sama seperti migration 015 (Sampah/Log Aktivitas). Beda dari migration 015:
+// backend (RLS `settings`, trigger & RPC `profiles`) menambah 2 pengaman
+// supervisor tidak bisa menyentuh/membuat akun admin — lihat komentar header
+// `018_pengaturan_supervisor_access.sql` dan PengaturanAdminTab.tsx (UI
+// mencerminkan pengaman yang sama supaya tombol tidak menjanjikan aksi yang
+// akan ditolak backend).
 //
 // Pola gate: sama persis dengan LogAktivitasModule.tsx (cabang isAuthLoading
 // dulu, baru cabang !canAccess, keduanya SETELAH semua hook dipanggil sesuai
@@ -40,9 +44,10 @@ const TABS: { key: PengaturanTab; label: string; icon: typeof Store }[] = [
 
 export default function PengaturanModule() {
   const { user, isLoading: isAuthLoading } = useAuth();
-  // Admin only — lihat catatan header di atas, sengaja TIDAK sama dengan
-  // SampahModule.tsx/LogAktivitasModule.tsx.
-  const canAccessSettings = user?.role === "admin";
+  // Admin+supervisor — lihat catatan header di atas (migration 018). Sekarang
+  // sama polanya dengan SampahModule.tsx/LogAktivitasModule.tsx (migration 015).
+  const canAccessSettings =
+    user?.role === "admin" || user?.role === "supervisor";
 
   const [activeTab, setActiveTab] = useState<PengaturanTab>("toko");
 
@@ -65,7 +70,7 @@ export default function PengaturanModule() {
         </div>
         <h3 className="text-sm font-semibold">Akses Ditolak</h3>
         <p className="mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-          Modul Pengaturan hanya untuk admin.
+          Modul Pengaturan hanya untuk admin dan supervisor.
         </p>
       </div>
     );
