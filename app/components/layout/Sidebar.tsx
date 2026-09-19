@@ -21,9 +21,17 @@ import {
   Trash2,
   ClipboardList,
   Settings,
+  Bell,
+  BellOff,
+  Loader2,
   type LucideIcon,
 } from "lucide-react";
 import { useAuth, type UserRole } from "@/hooks/useAuth";
+// ── TAMBAHAN (T-12) ── Dipanggil DI SINI SAJA (satu-satunya titik panggil di
+// seluruh app, lihat catatan header hooks/useFcmToken.ts) — bukan per-device
+// admin-only, jadi tombolnya harus terlihat SEMUA role, bukan di
+// PengaturanModule.tsx (yang admin+supervisor only).
+import { useFcmToken } from "@/hooks/useFcmToken";
 
 export interface SidebarMenuItem {
   key: string;
@@ -191,6 +199,71 @@ function filterMenuGroups(
     .filter((group) => group.items.length > 0);
 }
 
+/**
+ * ── TAMBAHAN (T-12) ── Status + tombol aktifkan notifikasi push, ditaruh di
+ * footer Sidebar (bukan Pengaturan) supaya terlihat SEMUA role — ini
+ * pengaturan per-device kasir, bukan pengaturan toko.
+ *
+ * Kalau `status` "unsupported" atau "missing_config" (env Firebase belum
+ * diisi — lihat lib/firebase/client.ts), SENGAJA tidak dirender apa-apa:
+ * menampilkan tombol yang pasti gagal cuma membingungkan kasir yang tidak
+ * bisa berbuat apa-apa soal itu (butuh env var diisi pemilik project, bukan
+ * aksi dari layar ini).
+ */
+function NotificationStatus() {
+  const { status, requestPermission } = useFcmToken();
+
+  if (status === "unsupported" || status === "missing_config") return null;
+
+  if (status === "granted") {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 text-xs text-zinc-500 dark:text-zinc-400">
+        <Bell className="h-3.5 w-3.5 text-lco-teal" />
+        Notifikasi aktif
+      </div>
+    );
+  }
+
+  if (status === "checking") {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 text-xs text-zinc-500 dark:text-zinc-400">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Mengaktifkan notifikasi...
+      </div>
+    );
+  }
+
+  if (status === "denied") {
+    // Browser TIDAK akan menampilkan prompt lagi begitu ditolak — satu-satunya
+    // jalan adalah user ubah manual dari pengaturan browser, tombol di sini
+    // percuma dipanggil ulang (lihat catatan header lib/firebase/client.ts).
+    return (
+      <div className="px-3 py-2 text-xs text-zinc-400 dark:text-zinc-500">
+        <div className="flex items-center gap-2">
+          <BellOff className="h-3.5 w-3.5" />
+          Notifikasi diblokir browser
+        </div>
+        <p className="mt-0.5 text-[11px] leading-snug">
+          Aktifkan lewat pengaturan izin situs di browser.
+        </p>
+      </div>
+    );
+  }
+
+  // status "idle" atau "error" — tombol untuk minta izin/coba lagi.
+  return (
+    <button
+      onClick={() => void requestPermission()}
+      className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-zinc-600 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+    >
+      <Bell className="h-3.5 w-3.5" />
+      {status === "error"
+        ? "Coba aktifkan notifikasi lagi"
+        : "Aktifkan Notifikasi"}
+    </button>
+  );
+}
+
 interface SidebarProps {
   activeMenu: string;
   onMenuChange: (menu: string) => void;
@@ -207,37 +280,48 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
   const visibleGroups = filterMenuGroups(MENU_GROUPS, user?.role);
 
   return (
-    <aside className="hidden w-64 border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 md:flex md:flex-col">
-      <div className="border-b border-zinc-200 p-5 dark:border-zinc-800">
-        <h1 className="rounded-xl text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-          LCO POS
-        </h1>
+    <aside className="hidden w-64 flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 md:flex">
+      {/* ── TAMBAHAN (T-12) ── Dibungkus flex-1 overflow-y-auto supaya daftar
+          menu bisa scroll sendiri kalau kepanjangan, TANPA ikut menggeser
+          footer notifikasi di bawah keluar layar. */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="border-b border-zinc-200 p-5 dark:border-zinc-800">
+          <h1 className="rounded-xl text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+            LCO POS
+          </h1>
+        </div>
+
+        {visibleGroups.map((group) => (
+          <div key={group.label} className="p-3 pt-3 first:pt-3">
+            <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+              {group.label}
+            </p>
+
+            <nav className="flex flex-col gap-1">
+              {group.items.map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  onClick={() => onMenuChange(key)}
+                  className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-150 ${
+                    activeMenu === key
+                      ? "bg-zinc-100 text-lco-teal dark:bg-zinc-900"
+                      : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                </button>
+              ))}
+            </nav>
+          </div>
+        ))}
       </div>
 
-      {visibleGroups.map((group) => (
-        <div key={group.label} className="p-3 pt-3 first:pt-3">
-          <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-            {group.label}
-          </p>
-
-          <nav className="flex flex-col gap-1">
-            {group.items.map(({ key, label, icon: Icon }) => (
-              <button
-                key={key}
-                onClick={() => onMenuChange(key)}
-                className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-150 ${
-                  activeMenu === key
-                    ? "bg-zinc-100 text-lco-teal dark:bg-zinc-900"
-                    : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                {label}
-              </button>
-            ))}
-          </nav>
-        </div>
-      ))}
+      {/* ── TAMBAHAN (T-12) ── Footer notifikasi, di luar area scroll di atas
+          supaya selalu terlihat. */}
+      <div className="border-t border-zinc-200 p-2 dark:border-zinc-800">
+        <NotificationStatus />
+      </div>
     </aside>
   );
 }

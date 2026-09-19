@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ── TAMBAHAN ── scripts/migrate.ts sempat berisi service_role key asli
+# hardcoded (2 project Supabase) — key sudah WAJIB di-rotate dari Dashboard
+# terlepas dari baris ini (.gitignore tidak menghapus riwayat commit lama).
+# Kalau butuh script migrasi data lagi ke depan, baca URL/key dari env var
+# (mis. process.env.OLD_SUPABASE_URL), JANGAN ditulis langsung di kode.
+scripts/migrate.ts

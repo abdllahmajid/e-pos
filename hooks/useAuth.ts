@@ -97,6 +97,13 @@ export function useAuth(): UseAuthResult {
   }
 
   async function signOut() {
+    // WAJIB sebelum signOut(), bukan sesudah — sesi masih perlu valid supaya
+    // RPC clear_my_fcm_token tahu auth.uid(). Lihat hooks/useFcmToken.ts.
+    try {
+      await supabase.rpc("clear_my_fcm_token");
+    } catch {
+      // Jangan sampai gagal hapus token menghambat proses logout.
+    }
     await supabase.auth.signOut();
     setUser(null);
   }

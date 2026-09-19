@@ -86,11 +86,30 @@ function getFirebaseApp(): FirebaseApp {
   return cachedApp;
 }
 
+/** `true` kalau semua env var Firebase yang WAJIB untuk `getMessaging()` sudah
+ * diisi. `getMessaging()` SDK Firebase melempar exception langsung (bukan
+ * mengembalikan null) kalau `projectId`/`appId`/dst. kosong — jadi wajib
+ * dicek DULU di sini sebelum app diinisialisasi, supaya env yang belum
+ * lengkap (mis. sebelum project Firebase dibuat) menghasilkan "fitur ini
+ * nonaktif dulu" (reason `missing_vapid_key`/status `missing_config` di
+ * pemanggil), BUKAN error runtime yang menjatuhkan komponen React yang
+ * memanggilnya. */
+function hasFirebaseConfig(): boolean {
+  return Boolean(
+    firebaseConfig.apiKey &&
+      firebaseConfig.projectId &&
+      firebaseConfig.appId &&
+      firebaseConfig.messagingSenderId
+  );
+}
+
 /** Cek dukungan browser LALU kembalikan instance Messaging, atau `null` kalau
- * tidak didukung / dipanggil di server. Semua fungsi publik lain di bawah
- * WAJIB lewat fungsi ini dulu, jangan panggil `getMessaging()` langsung. */
+ * tidak didukung / dipanggil di server / env Firebase belum diisi. Semua
+ * fungsi publik lain di bawah WAJIB lewat fungsi ini dulu, jangan panggil
+ * `getMessaging()` langsung. */
 async function getMessagingInstance(): Promise<Messaging | null> {
   if (typeof window === "undefined") return null;
+  if (!hasFirebaseConfig()) return null;
   const supported = await isSupported().catch(() => false);
   if (!supported) return null;
   return getMessaging(getFirebaseApp());
