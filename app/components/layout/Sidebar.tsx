@@ -10,6 +10,7 @@
 // (Stok & Opname, Laporan, dst. sesuai PRD §4.1), cukup tambah entri di MENU_GROUPS
 // di bawah — tidak perlu sentuh page.tsx sama sekali.
 
+import { useState } from "react";
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -24,6 +25,7 @@ import {
   Bell,
   BellOff,
   Loader2,
+  LogOut,
   type LucideIcon,
 } from "lucide-react";
 import { useAuth, type UserRole } from "@/hooks/useAuth";
@@ -264,6 +266,14 @@ function NotificationStatus() {
   );
 }
 
+// ── TAMBAHAN (logout) ── Label role untuk ditampilkan di footer Sidebar.
+const ROLE_LABELS: Record<UserRole, string> = {
+  admin: "Admin",
+  supervisor: "Supervisor",
+  kasir: "Kasir",
+  qc: "QC",
+};
+
 interface SidebarProps {
   activeMenu: string;
   onMenuChange: (menu: string) => void;
@@ -276,8 +286,30 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
   // (bukan lewat prop baru dari page.tsx) supaya page.tsx tidak perlu
   // berubah sama sekali, konsisten dengan komentar header file ini
   // ("tidak perlu sentuh page.tsx sama sekali" untuk urusan menu).
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const visibleGroups = filterMenuGroups(MENU_GROUPS, user?.role);
+
+  // ── TAMBAHAN (logout) ── `signOut()` di hooks/useAuth.ts sudah ada dan sudah
+  // menghapus token FCM SEBELUM mengakhiri sesi, tapi sebelumnya tidak ada
+  // komponen yang memanggilnya. Setelah sesi berakhir kita pindah halaman
+  // dengan reload penuh (bukan router.push) supaya semua state di memori —
+  // keranjang, data shift, cache hook — ikut hilang dan tidak bocor ke user
+  // berikutnya di tablet kasir yang dipakai bergantian.
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState("");
+
+  async function handleSignOut() {
+    if (isSigningOut) return;
+    setIsSigningOut(true);
+    setSignOutError("");
+    try {
+      await signOut();
+      window.location.assign("/login");
+    } catch {
+      setSignOutError("Gagal keluar. Periksa koneksi lalu coba lagi.");
+      setIsSigningOut(false);
+    }
+  }
 
   return (
     <aside className="hidden w-64 flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 md:flex">
@@ -321,6 +353,40 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
           supaya selalu terlihat. */}
       <div className="border-t border-zinc-200 p-2 dark:border-zinc-800">
         <NotificationStatus />
+
+        {/* ── TAMBAHAN (logout) ── Identitas user + tombol Keluar. */}
+        <div className="mt-1 border-t border-zinc-200 px-3 pt-3 pb-1 dark:border-zinc-800">
+          {user && (
+            <div className="mb-2 min-w-0">
+              <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                {user.full_name || user.email || "Pengguna"}
+              </p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                {ROLE_LABELS[user.role] ?? user.role}
+              </p>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => void handleSignOut()}
+            disabled={isSigningOut}
+            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-lco-coral transition-colors duration-150 hover:bg-lco-coral/10 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSigningOut ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <LogOut className="h-4 w-4" />
+            )}
+            {isSigningOut ? "Keluar..." : "Keluar"}
+          </button>
+
+          {signOutError && (
+            <p className="mt-1 px-3 text-[11px] leading-snug text-lco-coral">
+              {signOutError}
+            </p>
+          )}
+        </div>
       </div>
     </aside>
   );

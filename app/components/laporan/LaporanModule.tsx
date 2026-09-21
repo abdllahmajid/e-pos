@@ -434,13 +434,13 @@ function HarianBulananTab({
         <table className="w-full text-left text-sm">
           <thead className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">
             <tr>
-              <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+              <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-200">
                 Tanggal
               </th>
-              <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+              <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-200">
                 Omzet
               </th>
-              <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+              <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-200">
                 Transaksi
               </th>
             </tr>

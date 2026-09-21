@@ -15,7 +15,97 @@
 > per langkah**, diserahkan sebagai file yang bisa diunduh — bukan banyak
 > kode sekaligus di dalam chat.
 
-## Status terakhir diperbarui
+## Status MVP terkini (sesi #19, 2026-09-21) — BACA INI DULU
+
+**Ringkasan: semua item MVP PRD §12 (fase 1.0) sudah dilaporkan berjalan oleh
+pemilik project. Sisa pekerjaan = fase 1.1/2.0 (T-12, T-13), bukan MVP.**
+
+Dikonfirmasi pemilik project sesi ini (laporan lisan, tanpa rincian skenario
+kecuali disebut):
+
+- Widget Dashboard "Shift belum ditutup" (`profiles_directory`) — diuji, jalan.
+- T-10, skenario admin vs supervisor di layar Pengaturan — diuji, jalan.
+- `supabase/schema.sql` dari project Supabase kosong sampai `npm run dev` — diuji, jalan.
+- RLS `profiles` (migration `023` + `024`) — jalan; pemilik bisa login & akses normal.
+- **Migration `025_products_categories_rls.sql` (baru sesi ini)** — dijalankan &
+  diuji, jalan. RLS `products` & `categories` sekarang AKTIF (SELECT semua user
+  aktif; INSERT/UPDATE admin+supervisor; `categories` DELETE admin+supervisor;
+  `products` tanpa policy DELETE — hapus lewat RPC `soft_delete_product`).
+  Keputusan "RLS products/categories nonaktif" sudah TIDAK berlaku.
+- T-08 (Export Excel/PDF, Kirim WA) — pemilik menjawab "sudah saya uji, dan
+  bisa" atas daftar uji yang diberikan agent (Excel 4 sheet, PDF tabel panjang,
+  Kirim WA dari HP & desktop, dengan/tanpa No. HP). **Rincian per skenario tidak
+  disebut** — kalau ada bug terkait, jangan anggap semua kombinasi sudah dicoba.
+
+Dikerjakan agent sesi ini:
+
+1. `supabase/migrations/025_products_categories_rls.sql` — lihat di atas. Agent
+   TIDAK bisa menjalankannya (sandbox tanpa Postgres); yang menguji pemilik.
+2. `app/components/produk/ProdukModule.tsx` — flag baru `canManageProducts`
+   (admin+supervisor). Untuk kasir: tombol "Tambah Produk", kolom Aksi
+   (Edit/Hapus), dan tab "Kategori" tidak tampil. Alasan: PRD §5 (kasir hanya
+   lihat produk) + RLS `025` menolak tulis dari kasir, jadi tanpa ini kasir
+   melihat error database mentah. **Belum diuji di browser** (`npm install`/
+   `tsc` tidak bisa dijalankan di sandbox sesi ini — tidak ada jaringan);
+   perubahan hanya kondisi render, diperiksa manual.
+3. **`supabase/schema.sql` — isi migration `025` sudah ditambahkan** di bagian
+   paling akhir (setelah 024), jadi clone dari nol kini juga mendapat RLS
+   `products`/`categories`. Urutannya penting: `025` memakai
+   `public.current_user_role()` dari 024 dan berhenti dengan pesan jelas kalau
+   function itu belum ada. **Belum diuji dari project Supabase kosong** (agent
+   tidak punya Postgres/Supabase) — uji ulang clone-dari-nol sebelum dianggap
+   final. Aturan tetap berlaku: setiap migration baru WAJIB ikut ditambahkan
+   manual ke akhir file ini.
+
+4. **Tombol Keluar (logout) — ditemukan pemilik project: aplikasi TIDAK punya
+   tombol logout sama sekali.** Ternyata `signOut()` di `hooks/useAuth.ts` sudah
+   ada (dan sudah memanggil RPC `clear_my_fcm_token` SEBELUM mengakhiri sesi),
+   tapi tidak ada satu komponen pun yang memanggilnya. Perbaikan:
+   `app/components/layout/Sidebar.tsx` — footer sekarang menampilkan nama + role
+   user dan tombol "Keluar" (state loading, pesan error kalau gagal). Setelah
+   `signOut()` berhasil, pindah ke `/login` dengan `window.location.assign`
+   (reload penuh, bukan `router.push`) supaya keranjang/shift/cache hook di
+   memori hilang — penting untuk tablet kasir yang dipakai bergantian. Tidak ada
+   dialog konfirmasi (shift yang masih terbuka tetap terbuka atas nama kasir itu
+   dan dilanjutkan saat login lagi — memang begitu desain T-04). **Belum diuji di
+   browser** (agent tanpa jaringan/`tsc`).
+5. **Temuan terkait, BELUM diperbaiki:** `Sidebar.tsx` memakai `hidden ... md:flex`
+   dan `page.tsx` tidak punya navigasi lain, jadi di layar < 768px (HP) TIDAK ADA
+   menu sama sekali — dan tombol Keluar ikut tidak terlihat. PRD §9.7 menargetkan
+   tablet 10" + desktop (mobile "minimal untuk laporan"), jadi tablet aman, tapi
+   HP tidak bisa navigasi. Perlu keputusan pemilik: tambah menu mobile (hamburger)
+   atau cukup dinyatakan tidak didukung.
+
+Koreksi terhadap catatan lama:
+
+- `public/manifest.json` **TIDAK 0 byte** di zip terbaru (771 byte). Baris
+  "PWA manifest ❌ 0 byte" di tabel T-12 di bawah sudah usang — cek isinya
+  (kecocokan dengan `layout.tsx`) sebelum menganggap PWA selesai.
+- `hooks/useFcmToken.ts` **sudah ada** di zip (tabel T-12 menulis "belum ada").
+  Belum diaudit apakah sudah di-wire ke layar. Komentar headernya menyebut
+  "migration `023_fcm_token_rpc.sql`" — nomor itu SALAH/usang: RPC-nya ada di
+  `022_profiles_fcm_token.sql`; `023` adalah perbaikan RLS `profiles`.
+
+Utang teknis yang DISENGAJA ditunda (bukan blocker MVP):
+
+- Kasir masih bisa membaca kolom `cost_price` lewat API langsung (RLS per-baris,
+  bukan per-kolom). PRD §5 `harga_modal` hanya supervisor/admin. Solusi: view
+  atau tabel terpisah untuk harga modal.
+- Form Edit Produk menulis `stock` langsung ke `products` tanpa baris
+  `stock_movements` (di luar aturan T-05 "setiap perubahan stok wajib
+  tercatat"). Perbaikan: ubah stok hanya lewat RPC `adjust_stock`.
+- Bug baris Retur tanpa rincian item (lihat bagian di bawah) — tetap belum
+  diperbaiki atas keputusan pemilik.
+- Lint pra-eksisting; `npm run build` dari mesin pemilik belum dikonfirmasi
+  hijau end-to-end.
+
+Langkah berikutnya (fase 1.1/2.0): T-12 (audit `useFcmToken.ts`, isi
+`firebaseConfig` di service worker, tentukan event notifikasi, cron
+`daily-summary`), lalu T-13. PRD §15 (checkbox) belum diperbarui.
+
+---
+
+## Status sesi #18 (sebelumnya; sebagian sudah dikoreksi di atas)
 
 2026-09-20, sesi #18. **Bukan task T-xx dari PRD §17 — sesi ini di luar
 rencana, diminta pemilik project mendadak karena 2 akun (GitHub lama +

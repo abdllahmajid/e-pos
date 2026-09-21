@@ -2915,3 +2915,120 @@ create policy profiles_update_admin_supervisor
 
 comment on policy profiles_update_admin_supervisor on public.profiles is
   'Admin bebas UPDATE profiles siapa pun; supervisor boleh KECUALI baris yang role-nya admin (migration 020, ditulis ulang migration 024 pakai current_user_role() untuk hindari infinite recursion — logika akses tidak berubah).';
+
+-- Migration 025: aktifkan RLS di `products` dan `categories`.
+--
+-- ── Kenapa ──
+-- Dua tabel ini satu-satunya yang masih tanpa RLS (semua tabel lain sudah
+-- aktif). Artinya siapa pun yang punya anon key (kunci itu memang tampil di
+-- browser) bisa membaca, mengubah harga/stok, atau menghapus produk &
+-- kategori lewat REST API tanpa login. PRD §9.3: "RLS aktif di semua tabel".
+--
+-- ── Aturan yang dipasang (mengikuti perilaku aplikasi saat ini) ──
+--   SELECT : semua user login yang aktif (kasir perlu daftar produk di
+--            layar Kasir; Dashboard membaca stok menipis).
+--   INSERT : admin + supervisor.
+--   UPDATE : admin + supervisor.
+--   DELETE : products -> TIDAK ADA policy (hapus produk lewat RPC
+--            soft_delete_product yang SECURITY DEFINER, tidak terpengaruh).
+--            categories -> admin + supervisor (KategoriModule memang
+--            memanggil .delete() langsung).
+--
+-- ── Yang TIDAK terpengaruh ──
+--   * RPC SECURITY DEFINER (create_transaction, return_transaction,
+--     void_transaction, adjust_stock, soft_delete_product, restore_product,
+--     get_transaction_by_receipt/`/cek-struk`) -> bypass RLS, tetap jalan.
+--   * Route API yang memakai service role -> bypass RLS.
+--
+-- ── Batasan yang perlu diketahui ──
+--   * RLS itu per-baris, bukan per-kolom: kasir yang login masih bisa
+--     membaca kolom `cost_price` lewat API langsung. Menyembunyikannya
+--     butuh view/kolom terpisah (di luar migration ini).
+--   * Kasir yang membuka Produk/Kategori dan menekan Simpan sekarang akan
+--     ditolak database ("row-level security policy"). Tombolnya belum
+--     disembunyikan di UI untuk role kasir.
+--
+-- Prasyarat: migration 024 (function public.current_user_role()).
+-- Idempotent: aman dijalankan berulang.
+
+-- 0. Pengaman: hentikan kalau prasyarat belum ada.
+do $$
+begin
+  if to_regprocedure('public.current_user_role()') is null then
+    raise exception
+      'Function public.current_user_role() tidak ditemukan. Jalankan migration 024 dulu.';
+  end if;
+end
+$$;
+
+-- ── products ─────────────────────────────────────────────────────────────
+alter table public.products enable row level security;
+
+drop policy if exists products_select_active_users on public.products;
+create policy products_select_active_users
+  on public.products
+  for select
+  to authenticated
+  using (public.current_user_role() is not null);
+
+drop policy if exists products_insert_admin_supervisor on public.products;
+create policy products_insert_admin_supervisor
+  on public.products
+  for insert
+  to authenticated
+  with check (public.current_user_role() in ('admin', 'supervisor'));
+
+drop policy if exists products_update_admin_supervisor on public.products;
+create policy products_update_admin_supervisor
+  on public.products
+  for update
+  to authenticated
+  using (public.current_user_role() in ('admin', 'supervisor'))
+  with check (public.current_user_role() in ('admin', 'supervisor'));
+
+-- ── categories ───────────────────────────────────────────────────────────
+alter table public.categories enable row level security;
+
+drop policy if exists categories_select_active_users on public.categories;
+create policy categories_select_active_users
+  on public.categories
+  for select
+  to authenticated
+  using (public.current_user_role() is not null);
+
+drop policy if exists categories_insert_admin_supervisor on public.categories;
+create policy categories_insert_admin_supervisor
+  on public.categories
+  for insert
+  to authenticated
+  with check (public.current_user_role() in ('admin', 'supervisor'));
+
+drop policy if exists categories_update_admin_supervisor on public.categories;
+create policy categories_update_admin_supervisor
+  on public.categories
+  for update
+  to authenticated
+  using (public.current_user_role() in ('admin', 'supervisor'))
+  with check (public.current_user_role() in ('admin', 'supervisor'));
+
+drop policy if exists categories_delete_admin_supervisor on public.categories;
+create policy categories_delete_admin_supervisor
+  on public.categories
+  for delete
+  to authenticated
+  using (public.current_user_role() in ('admin', 'supervisor'));
+
+-- ── Cek hasil (jalankan terpisah setelah migration) ──────────────────────
+-- select tablename, rowsecurity from pg_tables
+--  where schemaname = 'public' and tablename in ('products', 'categories');
+--   -> keduanya rowsecurity = true
+--
+-- select tablename, policyname, cmd from pg_policies
+--  where schemaname = 'public' and tablename in ('products', 'categories')
+--  order by 1, 3;
+--   -> products: 1 select + 1 insert + 1 update
+--   -> categories: 1 select + 1 insert + 1 update + 1 delete
+--
+-- ── Rollback darurat (kalau layar Kasir/Produk mendadak kosong) ──────────
+-- alter table public.products disable row level security;
+-- alter table public.categories disable row level security;

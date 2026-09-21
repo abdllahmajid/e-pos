@@ -72,8 +72,16 @@ export default function ProdukModule() {
   // disamakan supaya tidak ada tombol yang sengaja disembunyikan padahal
   // backend-nya sudah mengizinkan).
   const { user } = useAuth();
-  const canDeleteProduct =
+  //
+  // ── TAMBAHAN (migration 025) ── `canManageProducts` mengatur tombol
+  // Tambah/Edit produk + tab Kategori. Kasir hanya boleh LIHAT produk (PRD §5
+  // baris `produk`). Selaras dengan RLS `products`/`categories` (migration
+  // 025: tulis cuma admin+supervisor) — tombol disembunyikan supaya kasir tidak
+  // melihat error database mentah. Selama profil belum termuat (`user` null)
+  // nilainya false, jadi tombol muncul sesudah role diketahui, bukan sebaliknya.
+  const canManageProducts =
     user?.role === "admin" || user?.role === "supervisor";
+  const canDeleteProduct = canManageProducts;
 
   const { products, isLoading, error, refetch } = useProducts();
 
@@ -239,7 +247,7 @@ export default function ProdukModule() {
             </p>
           </div>
 
-          {activeTab === "produk" && (
+          {activeTab === "produk" && canManageProducts && (
             <button
               type="button"
               onClick={openForm}
@@ -255,7 +263,9 @@ export default function ProdukModule() {
           {(
             [
               { key: "produk", label: "Daftar Produk" },
-              { key: "kategori", label: "Kategori" },
+              ...(canManageProducts
+                ? [{ key: "kategori", label: "Kategori" }]
+                : []),
             ] as { key: ProdukTab; label: string }[]
           ).map((tab) => (
             <button
@@ -275,7 +285,7 @@ export default function ProdukModule() {
           ))}
         </div>
 
-        {activeTab === "kategori" ? (
+        {activeTab === "kategori" && canManageProducts ? (
           <KategoriModule />
         ) : (
           <>
@@ -370,10 +380,12 @@ export default function ProdukModule() {
                   <p className="mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
                     {search
                       ? "Coba gunakan nama produk, SKU, atau barcode yang berbeda."
-                      : "Tambahkan produk agar produk dapat digunakan di Kasir."}
+                      : canManageProducts
+                        ? "Tambahkan produk agar produk dapat digunakan di Kasir."
+                        : "Belum ada produk. Minta admin atau supervisor menambahkannya."}
                   </p>
 
-                  {!search && (
+                  {!search && canManageProducts && (
                     <button
                       type="button"
                       onClick={openForm}
@@ -417,9 +429,11 @@ export default function ProdukModule() {
                           Status
                         </th>
 
-                        <th className="px-4 py-3 text-right text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                          Aksi
-                        </th>
+                        {canManageProducts && (
+                          <th className="px-4 py-3 text-right text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                            Aksi
+                          </th>
+                        )}
                       </tr>
                     </thead>
 
@@ -514,32 +528,34 @@ export default function ProdukModule() {
                               </span>
                             </td>
 
-                            <td className="px-4 py-3 text-right">
-                              <div className="inline-flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => openEditForm(product)}
-                                  title="Edit produk"
-                                  className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
-                                >
-                                  <Pencil className="h-3.5 w-3.5" />
-                                  Edit
-                                </button>
-
-                                {/* Hapus (T-09): admin+supervisor sejak migration 015 (lihat komentar di atas). */}
-                                {canDeleteProduct && (
+                            {canManageProducts && (
+                              <td className="px-4 py-3 text-right">
+                                <div className="inline-flex items-center gap-2">
                                   <button
                                     type="button"
-                                    onClick={() => openDeleteConfirm(product)}
-                                    title="Hapus produk (pindah ke Sampah)"
-                                    className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-lco-coral transition-colors duration-150 hover:bg-lco-coral/10 dark:border-zinc-700"
+                                    onClick={() => openEditForm(product)}
+                                    title="Edit produk"
+                                    className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
                                   >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                    Hapus
+                                    <Pencil className="h-3.5 w-3.5" />
+                                    Edit
                                   </button>
-                                )}
-                              </div>
-                            </td>
+
+                                  {/* Hapus (T-09): admin+supervisor sejak migration 015 (lihat komentar di atas). */}
+                                  {canDeleteProduct && (
+                                    <button
+                                      type="button"
+                                      onClick={() => openDeleteConfirm(product)}
+                                      title="Hapus produk (pindah ke Sampah)"
+                                      className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-lco-coral transition-colors duration-150 hover:bg-lco-coral/10 dark:border-zinc-700"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                      Hapus
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            )}
                           </tr>
                         );
                       })}
