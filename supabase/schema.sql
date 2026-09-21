@@ -22,7 +22,7 @@ SET row_security = off;
 -- Name: public; Type: SCHEMA; Schema: -; Owner: -
 --
 
-CREATE SCHEMA public;
+CREATE SCHEMA IF NOT EXISTS public;
 
 
 --
@@ -2682,3 +2682,56 @@ COMMENT ON POLICY transactions_select_authenticated ON public.transactions IS 'S
 --
 
 
+
+-- ==========================================================
+-- Seed default `settings` (PRD §17 T-01 / migration 005).
+-- TIDAK ikut ter-dump oleh `pg_dump --schema-only` (itu perintah dump
+-- struktur saja, isi baris apa pun termasuk seed default ini otomatis
+-- terbuang, apa pun sumbernya) — ditambahkan manual di sini supaya
+-- instalasi baru langsung punya baris yang dibutuhkan `hooks/useSettings.ts`
+-- (updateSetting() memakai .update().eq("key", ...) — kalau baris belum
+-- ada, update itu "berhasil" tapi 0 baris kena, jadi kelihatan seperti
+-- "tidak tersimpan").
+-- ==========================================================
+insert into public.settings (key, value, description) values
+  ('nama_toko',          '"Langitan.co"'::jsonb,                        'Nama toko, tampil di header struk/nota.'),
+  ('alamat',             '""'::jsonb,                                   'Alamat toko, tampil di footer struk/nota.'),
+  ('telepon',            '""'::jsonb,                                   'Nomor telepon toko, tampil di struk/nota.'),
+  ('footer_struk',       '"Terima kasih atas kunjungan Anda"'::jsonb,    'Teks footer struk/nota.'),
+  ('ppn_enabled',        'false'::jsonb,                                'Aktifkan baris PPN di transaksi (PaymentModal) & struk. Default off sesuai PRD §4.2.'),
+  ('ppn_rate',           '11'::jsonb,                                   'Persentase PPN, dipakai kalau ppn_enabled = true.'),
+  ('rounding',           '100'::jsonb,                                  'Pembulatan kembalian tunai ke kelipatan ini (rupiah). Belum dipakai di T-01, disiapkan untuk T-02/T-03.'),
+  ('shift_default_cash', '0'::jsonb,                                    'Modal awal kas default saat kasir buka shift. Dipakai mulai T-04.'),
+  ('print_default',      '"nota"'::jsonb,                               'Format cetak default: "struk" (thermal) atau "nota" (A6/A5). Dipakai mulai T-03.'),
+  ('paper_nota',         '"A6"'::jsonb,                                 'Ukuran kertas nota: "A6" atau "A5". Dipakai mulai T-03.'),
+  ('paper_thermal',      '"80mm"'::jsonb,                               'Ukuran kertas thermal: "58mm" atau "80mm". Dipakai mulai T-03.'),
+  ('show_cost_price',    'false'::jsonb,                                'Tampilkan harga modal di layar yang butuh permission harga_modal (PRD §5).')
+on conflict (key) do nothing;
+
+-- ==========================================================
+-- Storage bucket "payment-proofs" (migration 006).
+-- Schema `storage` sengaja dikecualikan `pg_dump` (dianggap milik platform
+-- Supabase, bukan milik user) — bucket & policy-nya ditambah manual di
+-- sini, kalau tidak, upload bukti pembayaran (PaymentModal) akan gagal
+-- di instalasi baru walau semua tabel `public` sudah benar.
+-- ==========================================================
+insert into storage.buckets (id, name, public)
+values ('payment-proofs', 'payment-proofs', true)
+on conflict (id) do nothing;
+
+drop policy if exists "payment_proofs_storage_select" on storage.objects;
+create policy "payment_proofs_storage_select"
+  on storage.objects for select
+  using (bucket_id = 'payment-proofs');
+
+drop policy if exists "payment_proofs_storage_insert" on storage.objects;
+create policy "payment_proofs_storage_insert"
+  on storage.objects for insert
+  with check (
+    bucket_id = 'payment-proofs'
+    and exists (
+      select 1 from public.profiles
+      where profiles.id = auth.uid()
+        and profiles.is_active = true
+    )
+  );

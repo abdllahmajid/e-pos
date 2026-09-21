@@ -17,51 +17,175 @@
 
 ## Status terakhir diperbarui
 
-2026-09-19, sesi #17 (nomor diperkirakan — header `020_*.sql` menyebut
-"sesi #16", tapi sesi itu tidak punya entri sama sekali di file ini; lihat
-"Koreksi terhadap catatan lama"). **T-12 (FCM/PWA/cron) ternyata SUDAH
-SEBAGIAN dikerjakan sebelum sesi ini tanpa pernah tercatat; sesi ini
-menambah migration `022` (kolom token + RPC) dan merapikan PROGRESS.md.**
+2026-09-20, sesi #18. **Bukan task T-xx dari PRD §17 — sesi ini di luar
+rencana, diminta pemilik project mendadak karena 2 akun (GitHub lama +
+Supabase lama) kena banned Google dan sesi dashboard-nya bisa hilang
+kapan saja.** Hasil: struktur database production berhasil diselamatkan
+ke repo dalam bentuk `supabase/schema.sql`, dan proses setup project ini
+sekarang bisa dilakukan orang lain dari nol lewat `README.md` tanpa perlu
+tahu isi 22 file migration. **Migration `022`/T-12 TIDAK tersentuh sesi
+ini** — semua status di bagian "Sedang dikerjakan — T-12" dan "Yang HARUS
+dikonfirmasi" di bawah masih berlaku apa adanya dari sesi #17, BELUM
+diverifikasi ulang.
 
 Yang dikerjakan sesi ini:
 
-1. **Audit isi zip vs catatan lama.** Hasilnya di "Koreksi terhadap catatan
-   lama" dan tabel T-12 di "Sedang dikerjakan".
-2. **`supabase/migrations/022_profiles_fcm_token.sql` — baru.** Kolom
-   `profiles.fcm_token` + `fcm_token_updated_at`, partial unique index pada
-   `fcm_token`, RPC `save_my_fcm_token(p_token)` (simpan token pemanggil DAN
-   cabut token yang sama dari profil user lain — tablet kasir dipakai
-   bergantian, tanpa ini notifikasi kasir A muncul di layar kasir B) dan
-   `clear_my_fcm_token(p_token default null)` (untuk logout; kalau `p_token`
-   diisi, hanya menghapus bila cocok, supaya logout di satu perangkat tidak
-   mematikan perangkat lain). Kolom & nama sudah cocok dengan yang dibaca
-   `lib/notifications/sendPush.ts`. Batasan yang DISENGAJA: **satu token per
-   profil** (perangkat terakhir yang mendaftar yang menang) — multi-perangkat
-   butuh tabel `fcm_tokens` terpisah, belum dibangun. Detail keputusan di
-   komentar header file itu.
-3. **Diuji di Postgres 16 sandbox** (bukan Supabase asli; `auth.uid()` dan
-   role `anon`/`authenticated` di-stub): jalan dua kali tanpa error
-   (idempotent); token pindah dari kasir A ke B pada perangkat yang sama;
-   token kosong/pendek/>4096 karakter, akun nonaktif, dan tanpa sesi
-   ditolak; `.update()` langsung dengan token milik profil lain ditolak
-   index unik; `anon` tidak bisa menjalankan RPC; pengaman role migration
-   018 tetap menolak kasir menaikkan role sendiri.
-4. **Pemilik project melaporkan (sesi #17): semua migration yang tadinya
-   menggantung sudah dijalankan ke production dan "berjalan normal".**
-   ⚠️ Rinciannya TIDAK diberikan (nomor migration mana saja, dan skenario
-   apa yang dicoba). Dicatat sebagai: `013`, `016`, `017`, `018`, `019`
-   (`hold_orders`), `020`, dan `022` sudah dijalankan — **ini interpretasi
-   agent atas kata "semua", belum dikonfirmasi per nomor**. Lihat "Yang HARUS
-   dikonfirmasi" poin 1 untuk query pengecekan cepat.
-5. **Selisih hasil sandbox vs production yang BELUM terjelaskan** — lihat
-   bagian "Selisih sandbox vs production: rekursi RLS `profiles`" di bawah.
-   Tidak ada perbaikan yang dibuat karena production dilaporkan normal.
-6. **Verifikasi kode:** sesi ini HANYA menyentuh SQL (`022`) dan file
-   catatan ini — tidak ada `.ts`/`.tsx` yang diubah. `npm install`/`tsc`/
-   `eslint` **tidak dijalankan** (baseline dari sesi #15 tetap: 1 error
-   pra-eksisting `app/layout.tsx` `LayoutProps`, lint pra-eksisting seperti
-   dicatat sesi #13). PRD §15 (checkbox) **belum diperbarui** — hanya
-   PROGRESS.md yang diminta sesi ini.
+1. **Ditemukan: `scripts/setup-database.sql` (skrip setup lama) TIDAK
+   sinkron dengan struktur asli.** Skrip itu membuat tipe `user_role`
+   (`admin, kasir, owner, supervisor`) dan tabel `profiles` dengan
+   `id UUID DEFAULT gen_random_uuid()` (tidak terhubung `auth.users`) —
+   sedangkan migration `002_setup_profiles_and_roles.sql` membuat ULANG
+   tipe `public.user_role` (isi enum beda: `admin, supervisor, kasir, qc`)
+   dan tabel `profiles` dengan `id` sebagai FK ke `auth.users(id)`. Tidak
+   ada `DROP TYPE`/`DROP TABLE` di file manapun di antara keduanya —
+   artinya pernah ada langkah manual (drop tabel lama) yang tidak pernah
+   tercatat di migration manapun. **Kesimpulan yang diambil sesi ini:**
+   file-file migration di repo tidak bisa dipakai sebagai sumber
+   kebenaran struktur database 100% akurat; kemungkinan ada celah serupa
+   yang belum ketemu di bagian lain. Karena itu pendekatan yang dipilih
+   BUKAN menyusun ulang SQL dari file migration, tapi mengambil struktur
+   langsung dari database production yang sedang berjalan.
+2. **Dump struktur asli dari Supabase production** pakai `pg_dump
+--schema-only --schema=public --no-owner --no-privileges` (BUKAN
+   `supabase db dump` — perintah itu butuh Docker/Podman terpasang untuk
+   menjalankan `pg_dump` di dalam container, pemilik project tidak punya
+   keduanya; `pg_dump` langsung dipakai sebagai gantinya, hasilnya
+   ekuivalen). Kendala yang dilalui pemilik project sebelum berhasil:
+   `brew install libpq` gagal 2x (`openssl@3` tidak ada bottle untuk Mac
+   Intel, lalu `brew update` gagal karena masalah jaringan) — akhirnya
+   `pg_dump` versi 18.6 didapat lewat cara lain di Mac-nya (bukan
+   Homebrew). Password koneksi mengandung karakter `@` yang bikin
+   `pg_dump` salah parse host dari connection-string biasa — diatasi
+   dengan `PGPASSWORD=... pg_dump -h ... -U postgres -d postgres` (flag
+   terpisah, bukan digabung ke satu URL).
+3. **Struktur production yang TERKONFIRMASI ada (dari hasil dump
+   sungguhan, bukan dugaan dari migration file):** 12 tabel — `products`,
+   `categories`, `transactions`, `transaction_items`, `payments`,
+   **`payment_proofs`** (tabel tersendiri — sebelumnya diasumsikan cuma
+   kolom di `payments` dari baca migration `006`, ternyata jadi tabel
+   terpisah di production, kemungkinan hasil perubahan yang juga tidak
+   tercatat di migration manapun), `profiles`, `stock_movements`,
+   `settings`, `activity_logs`, **`shift_sessions`** (bukan `shifts` yang
+   mungkin diasumsikan dari migration `007_shift_sessions.sql` — namanya
+   memang `shift_sessions`, sesuai judul filenya), `held_orders`. Plus 16
+   function/RPC. ⚠️ **Isi kolom/RLS policy per tabel BELUM diverifikasi
+   satu-satu** — cuma nama tabel & jumlah function yang dicek (`grep`),
+   bukan `\d` per tabel. Kalau sesi berikutnya butuh detail kolom
+   `payment_proofs` atau perbedaan lain vs asumsi migration file, baca
+   langsung dari `supabase/schema.sql` di repo (itu isinya persis dump
+   production, paling akurat yang ada).
+4. **Dibersihkan 2 baris `\restrict ...` / `\unrestrict ...`** dari hasil
+   dump — itu perintah khusus `psql` (fitur baru `pg_dump`/`psql` versi
+   18), BUKAN SQL; kalau dibiarkan, bakal error saat ditempel ke SQL
+   Editor Supabase (yang cuma jalankan SQL murni, bukan meta-command
+   `psql`).
+5. **`supabase/schema.sql` — baru, jadi source of truth untuk setup
+   database dari nol.** Isi = dump production yang sudah dibersihkan +
+   ditambah manual di baris paling bawah: bucket Storage `payment-proofs`
+   - 2 policy-nya (select, insert), disalin dari migration `006` — sengaja
+     ditambah manual karena `pg_dump` defaultnya TIDAK menyertakan schema
+     `storage` sama sekali (dianggap schema bawaan platform Supabase, bukan
+     punya user). **Kalau nanti ada bucket Storage lain ditambahkan di masa
+     depan, WAJIB ditambah manual juga ke file ini** — dump otomatis
+     selanjutnya tidak akan menangkapnya.
+6. **`scripts/setup-database.sql` dihapus** (`git rm`) — isinya sudah
+   terbukti drift dari struktur asli (lihat poin 1), dibiarkan ada
+   berisiko bikin kontributor baru pakai file yang salah.
+7. **`README.md` ditulis ulang total** — sebelumnya isinya 100%
+   boilerplate `create-next-app` default, tidak pernah disesuaikan sejak
+   project ini dimulai. Sekarang berisi: quick start (clone → install →
+   jalankan `supabase/schema.sql` di SQL Editor project Supabase baru →
+   buat akun admin pertama manual lewat dashboard + 1 query `insert into
+profiles` karena app ini tidak punya halaman signup publik → isi
+   `.env.local`, daftar lengkap semua env var yang benar-benar dipakai
+   kode, dicek pakai `grep -rhoE "process\.env\.[A-Z_0-9]+"` bukan ditebak
+   → `npm run dev`), penjelasan `supabase/schema.sql` (setup) vs
+   `supabase/migrations/` (riwayat, bukan untuk instalasi baru), link ke
+   `MIGRASI-DATABASE.md`, dan daftar dokumen project.
+8. **`MIGRASI-DATABASE.md` — baru**, panduan disaster-recovery terpisah:
+   cara dump ulang struktur dari project manapun ke project Supabase lain
+   kalau situasi serupa (akun kena banned/hilang akses) terjadi lagi di
+   masa depan. Detail teknis `pg_dump` (termasuk workaround Docker &
+   `PGPASSWORD`) didokumentasikan di sini, README cuma menaut ke file ini.
+9. **Sudah di-commit & push ke GitHub oleh pemilik project**, commit
+   `637c108` (`main`), 4 file berubah: `supabase/schema.sql` baru,
+   `README.md` diubah, `MIGRASI-DATABASE.md` baru, `scripts/setup-database.sql`
+   dihapus.
+10. **Bug ditemukan saat uji coba clone: Pengaturan tidak tersimpan.**
+    Akar masalah: `pg_dump --schema-only` (dipakai untuk `schema.sql`)
+    **tidak menyertakan isi baris tabel apa pun**, termasuk 12 baris
+    default `settings` yang aslinya di-_insert_ migration `005`.
+    `hooks/useSettings.ts` → `updateSetting()` memakai
+    `.update({...}).eq("key", dbKey)` — kalau baris `key` itu belum ada
+    sama sekali, `.update()` "kena" 0 baris dan **Supabase tidak
+    melempar error untuk itu**, jadi kelihatan berhasil padahal tidak
+    menulis apa-apa. Dicek ulang ke semua 22 migration: **cuma `settings`
+    yang punya masalah ini** (insert lain ada di dalam function/RPC jadi
+    ikut ke-dump, atau backfill `insert...select` yang memang seharusnya
+    kosong di DB baru). **Diperbaiki**: 12 baris seed + blok Storage
+    bucket `payment-proofs` (poin 11 di bawah — ternyata **dua-duanya**
+    belum masuk ke `supabase/schema.sql` yang ter-commit di poin 9,
+    walau instruksi append sudah diberikan sebelumnya — root cause
+    persisnya kenapa append gagal tidak diselidiki lebih jauh, cuma
+    dikonfirmasi hasilnya lewat file yang di-upload ulang pemilik
+    project) ditambahkan manual ke `schema.sql` versi final, diserahkan
+    ke pemilik project sebagai file terpisah untuk menimpa yang di repo.
+    **Belum dikonfirmasi pemilik project sudah commit versi final ini.**
+11. **⚠️ TEMUAN BARU, BELUM DIPERBAIKI — RLS nonaktif di 3 tabel:
+    `profiles`, `products`, `categories`.** Ditemukan saat mengecek file
+    `schema.sql` yang di-upload ulang pemilik project (hasil `pg_dump`
+    sungguhan): dari 12 tabel, cuma 9 yang punya baris
+    `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` (`activity_logs`,
+    `held_orders`, `payment_proofs`, `payments`, `settings`,
+    `shift_sessions`, `stock_movements`, `transaction_items`,
+    `transactions`). **`profiles` TIDAK termasuk** — padahal py punya 2
+    policy yang dirancang untuk membatasi akses
+    (`profiles_select_admin_supervisor`, `profiles_update_admin_supervisor`,
+    hasil migration `002`/`016`/`018`/`020`). Karena RLS tidak pernah
+    diaktifkan, **policy itu tidak pernah benar-benar berlaku di
+    production** — siapa pun yang login (role apa saja) berpotensi
+    bisa baca/ubah tabel `profiles` bebas lewat panggilan langsung
+    Supabase client, termasuk kolom `role` sendiri, melewati semua UI.
+    **Ini kemungkinan besar jawaban atas "Selisih sandbox vs production:
+    rekursi RLS `profiles`" yang menggantung sejak sesi #17** — bukan
+    karena policy-nya aman dari rekursi, tapi karena RLS-nya memang
+    tidak aktif sama sekali, jadi policy (termasuk yang berpola
+    rekursif) tidak pernah benar-benar dievaluasi. **Belum diperbaiki
+    dengan sengaja** — kalau RLS `profiles` diaktifkan begitu saja tanpa
+    tambahan policy "boleh lihat baris sendiri", user role kasir/qc
+    (bukan admin/supervisor) akan **gagal login sama sekali**
+    (`hooks/useAuth.ts` fetch profil sendiri lewat
+    `.from("profiles").select(...).eq("id", authUserId).single()` —
+    tanpa policy own-row, query itu pulang 0 baris untuk non-admin/
+    supervisor). `products`/`categories` tidak punya policy sama sekali
+    di 19 policy yang ada — kemungkinan besar ini memang disengaja
+    (katalog produk perlu bisa dibaca luas), tapi belum pernah
+    dikonfirmasi ke pemilik project apakah ini keputusan sadar atau
+    ikut lolos tanpa dicek. **Perlu sesi/keputusan desain tersendiri**
+    sebelum diperbaiki — lihat "Task berikutnya".
+12. **Verifikasi kode:** sesi ini HANYA mengubah file dokumentasi & SQL
+    (`supabase/schema.sql`, `README.md`, `MIGRASI-DATABASE.md`,
+    hapus `scripts/setup-database.sql`) — tidak ada `.ts`/`.tsx` yang
+    disentuh. `npm install`/`tsc`/`eslint` **tidak relevan untuk sesi ini**
+    dan tidak dijalankan. PRD §15 (checkbox) **belum diperbarui** — task
+    sesi ini toh tidak ada nomornya di PRD §17.
+
+<details>
+<summary>Ringkasan sesi #17 (2026-09-19) — diciutkan, isi lengkap tetap di
+riwayat git kalau perlu detail penuh</summary>
+
+T-12 (FCM/PWA/cron) ditemukan sudah sebagian dikerjakan sebelum sesi #17
+tanpa pernah tercatat; sesi itu menambah migration `022` (kolom
+`fcm_token` + RPC `save_my_fcm_token`/`clear_my_fcm_token`), diuji di
+sandbox Postgres 16 (idempotent, validasi token, RLS role `anon` ditolak).
+Pemilik project melaporkan "semua migration yang menggantung sudah
+dijalankan ke production" tanpa rincian per nomor (lihat "Yang HARUS
+dikonfirmasi" poin 1). Ditemukan juga selisih rekursi RLS `profiles`
+antara sandbox vs klaim production normal, belum terjelaskan (lihat
+"Selisih sandbox vs production" di bawah). Sesi itu hanya menyentuh SQL +
+PROGRESS.md, tidak ada `.ts`/`.tsx` yang diubah.
+
+</details>
 
 ## Koreksi terhadap catatan lama (baca dulu)
 
@@ -120,7 +244,11 @@ Legenda: ✅ = kode lengkap DAN dilaporkan jalan oleh pemilik project;
   - Bagian 1 Hold order/"Tunda": `hooks/useHoldOrders.ts`, migration
     `019_hold_orders.sql` (**rekonstruksi** dari kode TS, bukan file
     asli — bisa ada detail kecil yang meleset). Migration dilaporkan
-    sudah dijalankan.
+    sudah dijalankan. **Update sesi #18:** tabel `held_orders`
+    **dikonfirmasi benar-benar ada di production** (muncul di dump
+    `pg_dump` sungguhan, lihat `supabase/schema.sql`) — tapi kolom & RLS
+    policy persisnya belum dicek satu-satu vs isi file `019` di repo,
+    cuma keberadaan tabelnya yang terverifikasi.
   - Bagian 2 Split payment: migration `021` + `PaymentModal.tsx` +
     `KasirModule.tsx`. ✅ **Dikonfirmasi jalan sesi #15** (kombinasi
     spesifik yang dicoba tidak dirinci).
@@ -132,6 +260,13 @@ Legenda: ✅ = kode lengkap DAN dilaporkan jalan oleh pemilik project;
 - ⏳ T-12 — SEBAGIAN, lihat "Sedang dikerjakan".
 - ⬜ T-13 — Backup `/api/backup`, mode offline IndexedDB, sinkron
   Warehouse, multi-unit: belum ada jejak kode.
+- ✅ _(di luar penomoran T-xx PRD — infra/tooling, sesi #18)_ —
+  `supabase/schema.sql` (setup database sekali-jalan dari dump production
+  sungguhan), `MIGRASI-DATABASE.md` (panduan disaster-recovery),
+  `README.md` ditulis ulang total (sebelumnya boilerplate). Sudah
+  di-commit & push (`637c108`), **belum diverifikasi end-to-end** (belum
+  ada yang coba clone repo dari nol pakai `README.md` sampai berhasil
+  `npm run dev`). Lihat "Yang HARUS dikonfirmasi" poin 6 (baru).
 
 ## Sedang dikerjakan — T-12 (FCM, cron harian, PWA)
 
@@ -170,6 +305,15 @@ Status per bagian (dicek langsung ke isi zip, sesi #17):
       and pg_get_function_arguments(p.oid) ilike '%p_payments%';       -- 1 baris
    ```
    Untuk 013–015 ada juga `scripts/check_migrations_013_014_015.sql`.
+   **Update sesi #18:** baris pertama query di atas (`held_orders` ada?)
+   sudah TERJAWAB YA — tabel itu dikonfirmasi ada lewat dump `pg_dump`
+   sungguhan (lihat `supabase/schema.sql`). Baris lainnya (policy
+   `profiles`, kolom `fcm_token`, parameter `create_transaction`) BELUM
+   dicek ulang sesi ini — nama tabelnya saja yang dikonfirmasi, bukan isi
+   kolom/policy/function di dalamnya. Kalau butuh jawaban pasti untuk
+   baris-baris itu, jalankan langsung query di atas ke production, atau
+   `grep` isi lengkap `supabase/schema.sql` di repo (lebih cepat, tidak
+   perlu akses database).
 2. **Env Firebase & Console** (lihat baris terakhir tabel T-12): sudah ada
    project Firebase? 7 var `NEXT_PUBLIC_FIREBASE_*` (termasuk
    `..._VAPID_KEY`) dan 3 var `FIREBASE_ADMIN_*` sudah diisi di `.env.local`
@@ -201,6 +345,15 @@ Status per bagian (dicek langsung ke isi zip, sesi #17):
    hijau end-to-end. `npm run lint` masih penuh error pra-eksisting (pola
    `react-hooks/set-state-in-effect`, `no-explicit-any`) — bukan sinyal
    regresi; jangan "perbaiki semua" tanpa diminta.
+6. **(Baru, sesi #18) `supabase/schema.sql` + `README.md` belum pernah
+   dicoba end-to-end oleh siapa pun.** Perlu: buat project Supabase kosong
+   yang benar-benar baru, ikuti `README.md` dari awal (tempel
+   `supabase/schema.sql` ke SQL Editor → buat akun admin → isi
+   `.env.local` → `npm run dev`), pastikan tidak ada error SQL saat
+   `schema.sql` dijalankan (termasuk memastikan tidak ada sisa baris
+   `\restrict`/`\unrestrict` yang kelolos) dan aplikasi benar-benar bisa
+   login + transaksi pertama berhasil. Belum dilakukan karena agent sesi
+   ini tidak punya akses ke Supabase pemilik project.
 
 ## Selisih sandbox vs production: rekursi RLS `profiles` (BELUM TERJELASKAN)
 
@@ -246,8 +399,38 @@ create policy "profiles_select_admin_supervisor" on public.profiles for select
 Jadikan migration bernomor berikutnya (`023`, idempotent) kalau dipakai —
 jangan ditempel manual tanpa file, supaya rantai migration tetap utuh.
 
+⚠️ **Catatan sesi #18:** `supabase/schema.sql` (dibuat sesi ini, dipakai
+untuk setup instalasi baru lewat `README.md`) adalah dump apa adanya dari
+production — kalau bug rekursi RLS `profiles` di atas memang masih aktif
+di production (belum dipastikan, lihat paragraf di atas), maka **instalasi
+BARU lewat `schema.sql` akan mewarisi bug yang sama**. Belum dicek apakah
+`schema.sql` hasil dump mengandung pola `exists (select 1 from profiles
+p ...)` yang rekursif ini atau sudah bentuk lain — cek dengan
+`grep -A5 "profiles_select_admin_supervisor" supabase/schema.sql`.
+
 ## Task berikutnya (disarankan, satu file per langkah)
 
+0. **⚠️ PRIORITAS TERTINGGI — aktifkan RLS `profiles` dengan aman.**
+   Lihat temuan sesi #18 poin 11 di atas. Yang perlu dirancang SEBELUM
+   `ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY` dijalankan:
+   - Policy baru "select own row" (mis. `using (id = auth.uid())`) supaya
+     kasir/qc tetap bisa login (`hooks/useAuth.ts` butuh baca baris
+     sendiri).
+   - Cek juga apakah butuh "update own row" terbatas (mis. cuma
+     `full_name`, bukan `role`/`is_active` — kolom itu sudah dijaga
+     trigger `enforce_profiles_role_change`, tapi trigger itu jalan
+     SETELAH RLS mengizinkan baris kena UPDATE, jadi tetap butuh policy
+     UPDATE own-row yang benar supaya tidak kebuka lebar).
+   - Setelah policy baru siap, uji di sandbox dulu (pola sesi #17: 3
+     role berbeda, termasuk kasir mencoba `.update()` field `role`
+     miliknya sendiri — harus ditolak) sebelum disentuh ke production.
+   - `products`/`categories` RLS nonaktif: **konfirmasi ke pemilik
+     project dulu** apakah ini keputusan sadar — jangan diaktifkan
+     sepihak tanpa policy yang jelas (bisa bikin katalog produk kosong
+     total di layar Kasir kalau RLS diaktifkan tanpa policy SELECT).
+   - Migration bernomor berikutnya (`023`, idempotent) kalau dieksekusi
+     — dan **update `supabase/schema.sql` juga**, jangan cuma migration,
+     supaya instalasi baru dari GitHub ikut dapat perbaikan ini.
 1. **`hooks/useFcmToken.ts`** — minta izin, ambil token lewat
    `requestFcmPermissionAndToken()`, simpan lewat RPC `save_my_fcm_token`,
    hapus lewat `clear_my_fcm_token(p_token)` saat logout, dan pasang
