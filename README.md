@@ -15,7 +15,7 @@ Aplikasi kasir (POS) berbasis Next.js + Supabase untuk Langitan.co. Lihat
 ### 1. Clone & install
 
 ```bash
-git clone <url-repo-ini>
+git clone https://github.com/storelangitanco/lco-pos.git
 cd lco-pos
 npm install
 ```
