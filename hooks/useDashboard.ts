@@ -683,14 +683,20 @@ async function loadStaleShifts(todayStart: Date): Promise<ActionGroup | null> {
 
   if (rows.length === 0) return null;
 
-  // Nama kasir diambil terpisah dari `profiles` — pola yang sama dengan
-  // hooks/useStock.ts (FK `cashier_id` tidak seragam antar jalur pembuatan tabel).
+  // Nama kasir diambil dari VIEW `profiles_directory` (migration 023),
+  // BUKAN dari tabel `profiles` langsung — sejak migration 024, RLS
+  // `profiles` cuma mengizinkan SELECT baris milik sendiri untuk role
+  // selain admin/supervisor, sedangkan widget ini juga tampil untuk kasir
+  // (PRD §5: dashboard "view" ✔ semua role) dan perlu menampilkan nama
+  // KASIR LAIN yang shift-nya belum ditutup. `profiles_directory` sengaja
+  // cuma expose kolom `id, full_name` user aktif (bukan `role`/`email`/
+  // `fcm_token` yang sensitif), jadi aman diakses semua role login.
   const cashierIds = Array.from(new Set(rows.map((row) => row.cashier_id)));
   const nameById = new Map<string, string>();
 
   if (cashierIds.length > 0) {
     const { data: profiles } = await supabase
-      .from("profiles")
+      .from("profiles_directory")
       .select("id, full_name")
       .in("id", cashierIds);
 

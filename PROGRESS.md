@@ -169,6 +169,83 @@ profiles` karena app ini tidak punya halaman signup publik → isi
     disentuh. `npm install`/`tsc`/`eslint` **tidak relevan untuk sesi ini**
     dan tidak dijalankan. PRD §15 (checkbox) **belum diperbarui** — task
     sesi ini toh tidak ada nomornya di PRD §17.
+13. **Lanjutan sesi ini (masih 2026-09-20) — RLS `profiles` diperbaiki
+    LANGSUNG di production**, atas permintaan pemilik project ("coba
+    perbaiki RLS dahulu"). **Ditemukan fakta baru yang mengubah kesimpulan
+    poin 11 di atas:** `migration 002_setup_profiles_and_roles.sql` (file
+    ASLI, bukan rekonstruksi) ternyata **SUDAH mengaktifkan RLS sejak awal**
+    dan sudah punya `profiles_select_own`/`profiles_update_own`
+    (`using (auth.uid() = id)`). Production sekarang TIDAK punya RLS aktif
+    DAN kedua policy itu sudah hilang — tidak ada satu migration pun
+    (001-022) yang men-DROP atau men-DISABLE itu. **Kesimpulan baru:** ini
+    bukan "RLS memang belum sempat dikerjakan", tapi **regresi tak
+    tercatat** — desain aslinya benar, sesuatu yang tidak pernah masuk
+    migration file mematikannya di suatu titik. Dugaan (bukan fakta
+    terkonfirmasi): orang sebelumnya kena error rekursi (lihat poin 15 di
+    bawah — bug yang SAMA persis baru dialami ulang sesi ini) saat
+    menambah policy admin/supervisor (migration 016/018), dan
+    "memperbaikinya" dengan mematikan RLS total alih-alih memperbaiki
+    policy-nya.
+14. **`supabase/migrations/023_profiles_enable_rls.sql` — baru.** Isi:
+    pulihkan `profiles_select_own`/`profiles_update_own` (persis migration
+    002), tambah VIEW BARU `public.profiles_directory` (cuma kolom
+    `id, full_name`, cuma user `is_active=true`, `security_invoker=true`,
+    `grant select ... to authenticated`) untuk kebutuhan lintas-user
+    non-sensitif (Dashboard butuh tampilkan nama kasir LAIN di widget
+    "Shift belum ditutup", dan Dashboard boleh diakses kasir per PRD §5 —
+    `profiles_select_own` saja tidak cukup untuk itu), lalu
+    `ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY` (tanpa FORCE,
+    supaya trigger `enforce_profiles_role_change` yang `SECURITY DEFINER`
+    tetap jalan lewat exemption pemilik tabel).
+15. **⚠️ Migration `023` menyebabkan `infinite recursion detected in
+policy for relation "profiles"` saat pemilik project coba login
+    setelah dijalankan — app sempat 100% tidak bisa diakses (SQL Editor
+    Supabase sendiri TIDAK terdampak, karena itu jalan lewat koneksi penuh
+    bukan role `authenticated`).** Analisis di komentar migration `023`
+    soal "policy `profiles_select_own` memutus rekursi lewat OR" **KELIRU**
+    — itu benar secara logika murni, tapi Postgres punya pengaman anti-
+    rekursi yang menolak pola `EXISTS (SELECT 1 FROM profiles p WHERE ...)`
+    di DALAM policy tabel `profiles` sendiri **di level query rewrite**,
+    TERLEPAS dari apakah secara logika sebenarnya bisa selesai. Bug pola
+    ini **sudah ada sejak migration 016/018** (isi policy
+    `profiles_select_admin_supervisor`/`profiles_update_admin_supervisor`
+    memang begitu) — cuma baru kelihatan sekarang karena RLS-nya baru
+    hidup lagi lewat migration 023 (mendukung dugaan poin 13: kemungkinan
+    besar INI bug yang sama yang dialami orang sebelumnya, dan cara
+    "perbaikan" waktu itu adalah mematikan RLS total).
+16. **`supabase/migrations/024_profiles_fix_recursion.sql` — baru,
+    perbaikan DARURAT, dijalankan langsung ke production oleh pemilik
+    project malam itu juga.** Pola resmi yang direkomendasikan dokumentasi
+    Supabase untuk kasus ini: bungkus pengecekan role pemanggil ke
+    function baru `public.current_user_role()` (`SECURITY DEFINER`, baca
+    `profiles` bypass RLS karena privilese pemilik function bukan
+    pemanggil), lalu `profiles_select_admin_supervisor`/
+    `profiles_update_admin_supervisor` ditulis ulang untuk manggil function
+    itu, bukan subquery langsung ke `profiles`. Logika akses (siapa boleh
+    apa) **tidak berubah sama sekali** dari migration 016/018/020, cuma
+    cara pengecekannya. `profiles_select_own`/`profiles_update_own`
+    (migration 023) TIDAK diubah — pola itu memang tidak bermasalah.
+    **Dikonfirmasi pemilik project: setelah migration 024 dijalankan,
+    login & akses normal kembali** (belum dirinci role apa saja yang
+    dicoba — minimal admin, sesuai laporan "rolenya admin").
+17. **`hooks/useDashboard.ts` — 1 query diubah.** Bagian `loadStaleShifts()`
+    (widget "Shift belum ditutup") yang tadinya `.from("profiles")` untuk
+    ambil nama kasir lain, diubah ke `.from("profiles_directory")` (view
+    baru migration 023) — supaya kasir yang melihat Dashboard (PRD §5:
+    dashboard "view" ✔ semua role) tetap bisa lihat nama kasir lain di
+    widget itu, walau RLS `profiles` sekarang membatasi SELECT ke baris
+    sendiri untuk role selain admin/supervisor. **Belum dikonfirmasi
+    pemilik project sudah coba tampilan Dashboard-nya langsung** (baru
+    dikirim file-nya, belum ada laporan hasil).
+18. **`supabase/schema.sql` — ditambah isi migration `023` + `024` di
+    baris paling bawah** (pola sama seperti seed `settings`/bucket Storage
+    sebelumnya: `DROP POLICY IF EXISTS` + `CREATE POLICY`/`CREATE OR
+REPLACE FUNCTION`/`CREATE OR REPLACE VIEW` di akhir file aman
+    dijalankan sekali jalan berurutan). **Belum dikonfirmasi pemilik
+    project sudah commit versi ini** — kalau belum, `schema.sql` di GitHub
+    masih versi SEBELUM perbaikan RLS ini, artinya instalasi baru dari
+    GitHub akan mengalami PERSIS bug rekursi yang sama di poin 15.
+    Prioritaskan commit ini di atas segalanya.
 
 <details>
 <summary>Ringkasan sesi #17 (2026-09-19) — diciutkan, isi lengkap tetap di
@@ -263,10 +340,18 @@ Legenda: ✅ = kode lengkap DAN dilaporkan jalan oleh pemilik project;
 - ✅ _(di luar penomoran T-xx PRD — infra/tooling, sesi #18)_ —
   `supabase/schema.sql` (setup database sekali-jalan dari dump production
   sungguhan), `MIGRASI-DATABASE.md` (panduan disaster-recovery),
-  `README.md` ditulis ulang total (sebelumnya boilerplate). Sudah
-  di-commit & push (`637c108`), **belum diverifikasi end-to-end** (belum
-  ada yang coba clone repo dari nol pakai `README.md` sampai berhasil
-  `npm run dev`). Lihat "Yang HARUS dikonfirmasi" poin 6 (baru).
+  `README.md` ditulis ulang total (sebelumnya boilerplate). Commit awal
+  `637c108`. **Belum diverifikasi end-to-end** (belum ada yang coba clone
+  repo dari nol pakai `README.md` sampai berhasil `npm run dev`). Lihat
+  "Yang HARUS dikonfirmasi" poin 6.
+- ✅ _(lanjutan sesi #18, hari sama)_ — RLS `profiles` diperbaiki di
+  PRODUCTION (bukan cuma repo): migration `023` (restore desain awal
+  migration 002) sempat memicu insiden rekursi RLS, diperbaiki migration
+  `024` (function `SECURITY DEFINER`). **Dikonfirmasi pemilik project:
+  login & akses normal setelah `024`.** `hooks/useDashboard.ts` disesuaikan
+  (`profiles_directory`), `supabase/schema.sql` ditambah isi kedua
+  migration — **commit ke GitHub belum dikonfirmasi**, lihat detail poin
+  13-18 di atas & "Task berikutnya" poin 1-2.
 
 ## Sedang dikerjakan — T-12 (FCM, cron harian, PWA)
 
@@ -355,7 +440,55 @@ Status per bagian (dicek langsung ke isi zip, sesi #17):
    login + transaksi pertama berhasil. Belum dilakukan karena agent sesi
    ini tidak punya akses ke Supabase pemilik project.
 
-## Selisih sandbox vs production: rekursi RLS `profiles` (BELUM TERJELASKAN)
+## Selisih sandbox vs production: rekursi RLS `profiles` — ✅ TERSELESAIKAN (sesi #18)
+
+**Riwayat singkat** (detail penuh di entri sesi #18 poin 13-18 di atas):
+ditemukan sesi #17 di sandbox, dilaporkan "tidak masalah" di production
+(sesi #17), ternyata production sebenarnya RLS-nya **mati total** (baru
+ketahuan sesi #18 lewat dump asli), dicoba diaktifkan ulang (migration
+`023`) — **memicu error yang SAMA PERSIS seperti temuan sandbox sesi #17
+di atas**, app pemilik project sempat 100% tidak bisa diakses beberapa
+menit, diperbaiki migration `024`.
+
+⚠️ **Pelajaran proses, dicatat jujur supaya tidak terulang:** fix yang
+BENAR untuk error ini (function `SECURITY DEFINER` membungkus pengecekan
+role, lihat blok kode di bawah — punya sesi #17) **sudah ada tertulis
+persis di bagian ini dari awal**, lengkap dengan instruksi "jadikan
+migration `023` kalau dipakai". Sesi #18 tetap menulis migration `023`
+TANPA fix ini (cuma restore `profiles_select_own`/`profiles_update_own` +
+enable RLS polos), berasumsi itu sudah cukup berdasarkan pemahaman keliru
+soal cara Postgres meng-OR policy — **padahal jawabannya sudah tertulis
+di bagian yang sama, cuma tidak dibaca ulang sebelum eksekusi.** Sesi
+berikutnya: baca SELURUH `PROGRESS.md` yang relevan sebelum eksekusi
+perubahan ke production, bukan cuma bagian "Status terakhir".
+
+**Fix final yang benar-benar dipakai (migration `024`, function-nya
+dinamai `current_user_role()`** — bukan `auth_user_role()` seperti draf
+sesi #17 di bawah, nama beda tapi logika identik):
+
+```sql
+create or replace function public.current_user_role()
+returns public.user_role language sql stable security definer
+set search_path = public as
+$$ select role from public.profiles where id = auth.uid() and is_active = true $$;
+
+drop policy if exists profiles_select_admin_supervisor on public.profiles;
+create policy profiles_select_admin_supervisor on public.profiles for select
+  to authenticated
+  using (public.current_user_role() in ('admin', 'supervisor'));
+-- + profiles_update_admin_supervisor pola sama, lihat migration 024 untuk detail lengkap
+```
+
+**Status sekarang:** sudah dikonfirmasi pemilik project bisa login &
+akses normal setelah migration `024` (production). `supabase/schema.sql`
+**sudah ditambah isi migration `023`+`024`** — tapi **belum dikonfirmasi
+pemilik project commit ke GitHub**, cek dulu sebelum anggap ini benar-benar
+selesai end-to-end. `products`/`categories` RLS nonaktif **masih belum
+disentuh** — bukan bagian dari fix ini, masih perlu keputusan desain
+terpisah (lihat "Task berikutnya" poin 1).
+
+<details>
+<summary>Draf asli sesi #17 (referensi historis — fix final pakai migration 024, bukan draf ini persis)</summary>
 
 Ditemukan sesi #17 saat menguji migration `022`. **Hasil di sandbox:**
 dengan migration `002` + `005` + `016` diterapkan ke Postgres 16 kosong,
@@ -369,19 +502,10 @@ Migration `018`/`020` memakai pola subquery yang sama di policy UPDATE
 
 **Hasil di production (laporan pemilik project, sesi #17):** semua migration
 dijalankan dan aplikasi "berjalan normal". Ini **bertentangan** dengan hasil
-sandbox kalau 016–020 memang sudah aktif di sana. **Penyebab selisih belum
-diketahui** — bisa karena migration tidak benar-benar aktif seperti
-dugaan, atau ada perbedaan lingkungan (versi Postgres/Supabase, riwayat
-policy dari `scripts/setup-database.sql`, dst.); tidak ada yang diverifikasi.
-**Tidak ada perbaikan dibuat**, karena bukti terkuat (aplikasi berjalan)
-menunjukkan production tidak bermasalah. Poin 1 di "Yang HARUS dikonfirmasi"
-(query daftar policy) sekaligus menjawab apakah policy 016 benar-benar aktif.
-
-**Kalau suatu saat muncul error `infinite recursion detected in policy for
-relation "profiles"` (login gagal / role tidak terbaca)**, perbaikan yang
-sudah diuji di sandbox (rekursi hilang; kasir hanya melihat barisnya
-sendiri, supervisor melihat semua tapi tetap tidak bisa mengubah baris
-admin — peran admin sendiri tidak diuji terpisah):
+sandbox kalau 016–020 memang sudah aktif di sana. **Penjelasan yang
+sekarang diketahui (sesi #18):** RLS `profiles` memang mati total di
+production saat itu, jadi 016-020 tidak pernah benar-benar dievaluasi —
+bukan "tidak masalah", tapi "tidak pernah diuji sungguhan".
 
 ```sql
 create or replace function public.auth_user_role()
@@ -396,61 +520,43 @@ create policy "profiles_select_admin_supervisor" on public.profiles for select
   using (public.auth_user_role() in ('admin', 'supervisor'));
 ```
 
-Jadikan migration bernomor berikutnya (`023`, idempotent) kalau dipakai —
-jangan ditempel manual tanpa file, supaya rantai migration tetap utuh.
-
-⚠️ **Catatan sesi #18:** `supabase/schema.sql` (dibuat sesi ini, dipakai
-untuk setup instalasi baru lewat `README.md`) adalah dump apa adanya dari
-production — kalau bug rekursi RLS `profiles` di atas memang masih aktif
-di production (belum dipastikan, lihat paragraf di atas), maka **instalasi
-BARU lewat `schema.sql` akan mewarisi bug yang sama**. Belum dicek apakah
-`schema.sql` hasil dump mengandung pola `exists (select 1 from profiles
-p ...)` yang rekursif ini atau sudah bentuk lain — cek dengan
-`grep -A5 "profiles_select_admin_supervisor" supabase/schema.sql`.
+</details>
 
 ## Task berikutnya (disarankan, satu file per langkah)
 
-0. **⚠️ PRIORITAS TERTINGGI — aktifkan RLS `profiles` dengan aman.**
-   Lihat temuan sesi #18 poin 11 di atas. Yang perlu dirancang SEBELUM
-   `ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY` dijalankan:
-   - Policy baru "select own row" (mis. `using (id = auth.uid())`) supaya
-     kasir/qc tetap bisa login (`hooks/useAuth.ts` butuh baca baris
-     sendiri).
-   - Cek juga apakah butuh "update own row" terbatas (mis. cuma
-     `full_name`, bukan `role`/`is_active` — kolom itu sudah dijaga
-     trigger `enforce_profiles_role_change`, tapi trigger itu jalan
-     SETELAH RLS mengizinkan baris kena UPDATE, jadi tetap butuh policy
-     UPDATE own-row yang benar supaya tidak kebuka lebar).
-   - Setelah policy baru siap, uji di sandbox dulu (pola sesi #17: 3
-     role berbeda, termasuk kasir mencoba `.update()` field `role`
-     miliknya sendiri — harus ditolak) sebelum disentuh ke production.
-   - `products`/`categories` RLS nonaktif: **konfirmasi ke pemilik
-     project dulu** apakah ini keputusan sadar — jangan diaktifkan
-     sepihak tanpa policy yang jelas (bisa bikin katalog produk kosong
-     total di layar Kasir kalau RLS diaktifkan tanpa policy SELECT).
-   - Migration bernomor berikutnya (`023`, idempotent) kalau dieksekusi
-     — dan **update `supabase/schema.sql` juga**, jangan cuma migration,
-     supaya instalasi baru dari GitHub ikut dapat perbaikan ini.
-1. **`hooks/useFcmToken.ts`** — minta izin, ambil token lewat
+1. **Konfirmasi `schema.sql` (dengan migration `023`+`024` di dalamnya)
+   sudah di-commit pemilik project ke GitHub.** Kalau belum, ini prioritas
+   di atas segalanya — instalasi baru dari GitHub sekarang akan kena bug
+   rekursi yang sama persis kalau `schema.sql` masih versi lama.
+2. **Konfirmasi `hooks/useDashboard.ts` (patch `profiles_directory`)
+   sudah dicoba** — widget "Shift belum ditutup" harus tetap tampilkan
+   nama kasir lain dengan benar, terutama saat dilihat sebagai role kasir
+   (bukan cuma admin).
+3. **`products`/`categories` RLS masih nonaktif — belum disentuh sesi
+   ini.** Perlu konfirmasi ke pemilik project apakah ini keputusan sadar
+   (katalog produk perlu dibaca luas) sebelum diaktifkan sepihak — kalau
+   diaktifkan tanpa policy SELECT yang tepat, bisa bikin katalog produk
+   kosong total di layar Kasir.
+4. **`hooks/useFcmToken.ts`** — minta izin, ambil token lewat
    `requestFcmPermissionAndToken()`, simpan lewat RPC `save_my_fcm_token`,
    hapus lewat `clear_my_fcm_token(p_token)` saat logout, dan pasang
    `listenForegroundMessages()` (cleanup saat unmount). Belum di-wire ke
    layar manapun.
-2. **`public/manifest.json`** — isi (saat ini 0 byte). Cocokkan dengan
+5. **`public/manifest.json`** — isi (saat ini 0 byte). Cocokkan dengan
    `layout.tsx`: `themeColor #124540`, `lang: "id-ID"`, ikon 192/512/
    512-maskable yang sudah ada.
-3. **Isi `firebaseConfig` di `public/firebase-messaging-sw.js`** — manual
+6. **Isi `firebaseConfig` di `public/firebase-messaging-sw.js`** — manual
    oleh pemilik project dari Firebase Console (bukan dikarang agent).
-4. **Wiring hook ke aplikasi** (mis. `app/page.tsx`) + tentukan dengan
+7. **Wiring hook ke aplikasi** (mis. `app/page.tsx`) + tentukan dengan
    pemilik project **event mana yang memicu notifikasi** (PRD §4.10 hanya
    menyebut stok menipis, piutang jatuh tempo, transaksi nominal besar —
    tanpa ambang/penerima).
-5. **`/api/cron/daily-summary`** + `vercel.json` (cron 1×/hari — batas plan
+8. **`/api/cron/daily-summary`** + `vercel.json` (cron 1×/hari — batas plan
    gratis, PRD §7). Panggil `sendPushToUser()` lewat import biasa, bukan
    `fetch` ke endpoint sendiri (alasan di header `sendPush.ts`).
-6. Perbarui **PRD §15** (checkbox) — belum dikerjakan sesi #17.
-7. Setelah T-12: T-13 (`/api/backup`, offline, dst.) — cek PRD §17 langsung,
-   jangan andalkan file ini saja (PROGRESS.md berkali-kali terbukti basi).
+9. Perbarui **PRD §15** (checkbox) — belum dikerjakan sesi #17.
+10. Setelah T-12: T-13 (`/api/backup`, offline, dst.) — cek PRD §17 langsung,
+    jangan andalkan file ini saja (PROGRESS.md berkali-kali terbukti basi).
 
 ## Bug ditemukan (BELUM diperbaiki, bukan blocker) — baris Retur tidak punya rincian item
 

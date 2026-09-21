@@ -2734,4 +2734,184 @@ create policy "payment_proofs_storage_insert"
       where profiles.id = auth.uid()
         and profiles.is_active = true
     )
+  );-- Migration 023: pulihkan RLS `profiles` yang mati diam-diam.
+--
+-- ── Temuan (sesi #18, lewat pg_dump sungguhan ke production) ──
+-- `profiles` di production TIDAK punya RLS aktif sama sekali, dan policy
+-- `profiles_select_own`/`profiles_update_own` (auth.uid() = id) yang
+-- ADA di migration 002 (baca file itu, bagian bawah) TIDAK ADA lagi di
+-- production. Tidak ada satu migration pun (001-022) yang men-DROP policy
+-- itu atau menjalankan `DISABLE ROW LEVEL SECURITY` — artinya ada langkah
+-- manual yang tidak pernah tercatat. Dugaan paling masuk akal (BUKAN
+-- fakta terkonfirmasi, tidak ada log untuk memastikan): saat policy
+-- `profiles_select_admin_supervisor` ditambahkan (migration 016/018,
+-- polanya `EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() ...)`
+-- — query ke tabel yang sama dari dalam policy-nya sendiri), seseorang
+-- sempat kena error "infinite recursion detected in policy for relation
+-- profiles" dan "memperbaikinya" dengan mematikan RLS sepenuhnya alih-alih
+-- menyadari bahwa `profiles_select_own` yang SUDAH ADA sejak migration 002
+-- seharusnya memutus rekursi itu (lihat penjelasan di bawah).
+--
+-- Akibat production berjalan tanpa RLS `profiles` selama ini: siapa pun
+-- yang login (role apa saja) berpotensi baca/ubah baris profil siapa saja
+-- lewat panggilan langsung Supabase client, termasuk kolom `role` miliknya
+-- sendiri — melewati semua pembatasan yang dibangun migration 002/016/018/020.
+-- Juga menjelaskan kenapa `migration 022` (FCM token) tetap "jalan" walau
+-- komentarnya eksplisit mengasumsikan `profiles_update_own` masih ada untuk
+-- client menyimpan token sendiri — bukan karena didesain benar, tapi karena
+-- RLS mati total.
+--
+-- ── Kenapa restore `profiles_select_own` TIDAK memicu rekursi lagi ──
+-- Postgres meng-OR-kan semua policy SELECT pada tabel yang sama. Policy
+-- `profiles_select_admin_supervisor` butuh subquery SELECT ke `profiles`
+-- untuk baris milik pemanggil sendiri (`p.id = auth.uid()`) — begitu
+-- `profiles_select_own` ada, baris ITU langsung terlihat lewat policy
+-- own-row yang sama sekali tidak rekursif (`id = auth.uid()` polos, tanpa
+-- subquery ke `profiles` lagi), jadi subquery admin-check tidak pernah
+-- perlu "menunggu" hasil dari dirinya sendiri. Ini pola standar yang
+-- direkomendasikan dokumentasi Supabase untuk kasus persis begini.
+--
+-- ── Kenapa trigger `enforce_profiles_role_change` (migration 016/018)
+--    tetap aman dijalankan setelah RLS ini diaktifkan ──
+-- Fungsinya `SECURITY DEFINER`, dan pemilik fungsi (role yang menjalankan
+-- migration, biasa `postgres`) otomatis DIKECUALIKAN dari RLS kecuali
+-- `FORCE ROW LEVEL SECURITY` diset di tabelnya — migration ini SENGAJA
+-- tidak memakai FORCE, supaya trigger tetap bisa baca role/is_active
+-- pemanggil tanpa terhalang. Sudah dicek: trigger ini sendiri sudah
+-- didesain dengan asumsi itu (lihat komentar header migration 018).
+--
+-- ── Kenapa ditambah `profiles_directory` (baru, bukan bagian migration 002) ──
+-- Widget "Shift belum ditutup" di Dashboard (`hooks/useDashboard.ts`) dan
+-- laporan shift (`hooks/useReports.ts`) perlu menampilkan NAMA kasir lain,
+-- bukan cuma baris milik sendiri — dan PRD §5 bilang Dashboard boleh
+-- diakses kasir juga (bukan cuma admin/supervisor). `profiles_select_own`
+-- saja tidak cukup untuk kasus ini, tapi memberi akses SELECT penuh ke
+-- semua kolom `profiles` (termasuk `role`, `email`, `fcm_token`) ke semua
+-- user login juga berlebihan. Solusinya: view read-only yang cuma expose
+-- `id` + `full_name` untuk user aktif, RLS tidak berlaku untuk kolom
+-- (Postgres RLS itu row-level, bukan column-level) jadi cara paling bersih
+-- adalah lewat VIEW, bukan menambah kolom sensitif ke policy tabel utama.
+-- **Butuh 1 perubahan kode menyusul**: `hooks/useDashboard.ts` baris ~693
+-- perlu diubah dari `.from("profiles")` ke `.from("profiles_directory")`
+-- untuk lookup nama kasir lain — belum dilakukan di migration ini, file
+-- terpisah.
+--
+-- Idempotent: aman dijalankan berkali-kali (DROP POLICY IF EXISTS,
+-- CREATE OR REPLACE VIEW, ENABLE ROW LEVEL SECURITY tidak error kalau
+-- sudah aktif).
+
+-- 1. Pulihkan policy own-row yang hilang (persis migration 002).
+drop policy if exists profiles_select_own on public.profiles;
+create policy profiles_select_own
+  on public.profiles
+  for select
+  to authenticated
+  using (auth.uid() = id);
+
+drop policy if exists profiles_update_own on public.profiles;
+create policy profiles_update_own
+  on public.profiles
+  for update
+  to authenticated
+  using (auth.uid() = id);
+
+-- 2. View directory ringan — cuma id + nama, cuma user aktif, cuma kolom
+--    yang memang perlu terlihat lintas-user untuk kebutuhan UI (bukan
+--    data sensitif). `security_invoker = true` supaya view ini tunduk ke
+--    privilege PEMANGGIL (RLS `profiles` tetap berlaku saat view ini
+--    dievaluasi), bukan privilege pembuat view.
+create or replace view public.profiles_directory
+  with (security_invoker = true) as
+select id, full_name
+from public.profiles
+where is_active = true;
+
+grant select on public.profiles_directory to authenticated;
+
+-- 3. Aktifkan kembali RLS yang mati diam-diam. TANPA FORCE (lihat
+--    penjelasan trigger di atas).
+alter table public.profiles enable row level security;
+
+-- Migration 024: perbaikan DARURAT "infinite recursion detected in policy
+-- for relation profiles" — muncul begitu migration 023 mengaktifkan RLS
+-- `profiles` lagi.
+--
+-- ── Akar masalah sebenarnya (bukan yang saya jelaskan di migration 023) ──
+-- `profiles_select_admin_supervisor` dan `profiles_update_admin_supervisor`
+-- (migration 016/018) isinya `EXISTS (SELECT 1 FROM public.profiles p
+-- WHERE p.id = auth.uid() ...)` — query LANGSUNG ke tabel yang sama dari
+-- DALAM policy tabel itu sendiri. Postgres punya pengaman anti-rekursi yang
+-- menolak pola ini di level query rewrite, TERLEPAS dari apakah secara
+-- logika sebenarnya bisa selesai (penjelasan migration 023 soal
+-- "profiles_select_own memutus siklus lewat OR" itu KELIRU — itu benar
+-- secara logika murni, tapi Postgres tidak mengevaluasi selogis itu untuk
+-- kasus tabel yang sama dirujuk dari dalam policy-nya sendiri).
+--
+-- Bug pola ini SUDAH ADA sejak migration 016/018 dibuat — cuma baru
+-- kelihatan sekarang karena sebelumnya RLS `profiles` mati total (lihat
+-- migration 023), jadi policy ini tidak pernah benar-benar dievaluasi
+-- Postgres. Dugaan kemungkinan besar: orang sebelumnya (yang mematikan RLS,
+-- lihat migration 023) kena error PERSIS ini juga saat pertama kali
+-- menambah policy admin/supervisor, dan "solusinya" waktu itu mematikan
+-- RLS sepenuhnya alih-alih memperbaiki pola policy-nya.
+--
+-- ── Perbaikan ──
+-- Pola resmi yang direkomendasikan dokumentasi Supabase untuk kasus ini:
+-- bungkus pengecekan role pemanggil ke function `SECURITY DEFINER`.
+-- Function begini dieksekusi dengan privilese PEMILIK function (bukan
+-- privilese pemanggil), yang secara default DIKECUALIKAN dari RLS —
+-- jadi query di DALAM function tidak pernah melalui rewrite RLS lagi,
+-- memutus rantai rekursi di titik itu (bukan "memutus lewat OR" seperti
+-- klaim keliru migration 023).
+--
+-- `profiles_select_own`/`profiles_update_own` (migration 023) TIDAK
+-- bermasalah dan TIDAK diubah di sini — pola itu aman (auth.uid() = id
+-- polos, tidak ada subquery ke `profiles` lagi di dalamnya).
+--
+-- Idempotent: aman dijalankan berkali-kali.
+
+-- 1. Function SECURITY DEFINER — baca role pemanggil, bypass RLS.
+create or replace function public.current_user_role()
+returns public.user_role
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select role
+  from public.profiles
+  where id = auth.uid()
+    and is_active = true;
+$$;
+
+comment on function public.current_user_role() is
+  'Baca role user yang sedang login, bypass RLS (SECURITY DEFINER) — dipakai policy profiles_select_admin_supervisor/profiles_update_admin_supervisor supaya tidak query langsung ke profiles dari dalam policy profiles sendiri (itu penyebab "infinite recursion detected"). Return NULL kalau user tidak aktif/tidak ditemukan.';
+
+-- 2. Tulis ulang policy SELECT admin/supervisor pakai function di atas.
+drop policy if exists profiles_select_admin_supervisor on public.profiles;
+create policy profiles_select_admin_supervisor
+  on public.profiles
+  for select
+  to authenticated
+  using (public.current_user_role() in ('admin', 'supervisor'));
+
+-- 3. Tulis ulang policy UPDATE admin/supervisor — logika sama persis
+--    dengan sebelumnya (admin bebas; supervisor boleh KECUALI menyentuh
+--    baris yang role-nya admin, migration 020), cuma sumber pengecekan
+--    role-nya lewat function, bukan subquery langsung.
+drop policy if exists profiles_update_admin_supervisor on public.profiles;
+create policy profiles_update_admin_supervisor
+  on public.profiles
+  for update
+  to authenticated
+  using (
+    public.current_user_role() = 'admin'
+    or (role <> 'admin' and public.current_user_role() = 'supervisor')
+  )
+  with check (
+    public.current_user_role() = 'admin'
+    or (role <> 'admin' and public.current_user_role() = 'supervisor')
   );
+
+comment on policy profiles_update_admin_supervisor on public.profiles is
+  'Admin bebas UPDATE profiles siapa pun; supervisor boleh KECUALI baris yang role-nya admin (migration 020, ditulis ulang migration 024 pakai current_user_role() untuk hindari infinite recursion — logika akses tidak berubah).';
