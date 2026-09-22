@@ -101,7 +101,7 @@ export default function LCOPOS() {
           sekarang cuma shell: simpan state menu aktif + render modul yang dipilih. */}
       <Sidebar activeMenu={activeMenu} onMenuChange={setActiveMenu} />
 
-      <main className="flex-1 overflow-hidden">
+      <main className="min-h-0 flex-1 overflow-hidden">
         {activeMenu === "dashboard" && (
           <DashboardModule onNavigate={setActiveMenu} />
         )}

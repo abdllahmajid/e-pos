@@ -10,7 +10,7 @@
 // (Stok & Opname, Laporan, dst. sesuai PRD §4.1), cukup tambah entri di MENU_GROUPS
 // di bawah — tidak perlu sentuh page.tsx sama sekali.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -28,6 +28,8 @@ import {
   Moon,
   Loader2,
   LogOut,
+  Menu,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { useAuth, type UserRole } from "@/hooks/useAuth";
@@ -324,6 +326,39 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
   const { user, signOut } = useAuth();
   const visibleGroups = filterMenuGroups(MENU_GROUPS, user?.role);
 
+  // ── TAMBAHAN (responsif) ── Di bawah breakpoint `md` (tablet portrait &
+  // HP), sidebar sebelumnya `hidden` total — tidak ada cara buka menu sama
+  // sekali di perangkat itu. Sekarang jadi drawer off-canvas: tersembunyi di
+  // luar layar (`-translate-x-full`) sampai `mobileOpen` true, dibuka lewat
+  // tombol hamburger mengambang (di bawah) dan ditutup lewat tombol X di
+  // header drawer, klik overlay gelap, atau otomatis begitu satu menu
+  // dipilih. Di `md` ke atas, drawer ini balik jadi sidebar statis seperti
+  // semula (lihat className `<aside>` — `md:translate-x-0 md:static`
+  // menimpa state ini, jadi `mobileOpen` tidak berpengaruh sama sekali di
+  // desktop/tablet landscape besar).
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Kunci scroll body selagi drawer terbuka di mobile, supaya konten di
+  // belakang overlay tidak ikut ter-scroll (pola standar untuk off-canvas
+  // drawer). Dibersihkan lagi begitu drawer ditutup / komponen unmount.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileOpen]);
+
+  // Bungkus onMenuChange: selain memanggil handler asli dari page.tsx, juga
+  // tutup drawer di mobile begitu satu menu dipilih — supaya kasir tidak
+  // perlu tap X manual tiap habis pindah menu. Tidak berdampak apa-apa di
+  // desktop (mobileOpen memang tidak pernah true di sana).
+  function handleMenuSelect(key: string) {
+    onMenuChange(key);
+    setMobileOpen(false);
+  }
+
   // ── TAMBAHAN (logout) ── `signOut()` di hooks/useAuth.ts sudah ada dan sudah
   // menghapus token FCM SEBELUM mengakhiri sesi, tapi sebelumnya tidak ada
   // komponen yang memanggilnya. Setelah sesi berakhir kita pindah halaman
@@ -347,89 +382,133 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
   }
 
   return (
-    <aside className="hidden w-64 flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 md:flex">
-      {/* ── TAMBAHAN (T-12) ── Dibungkus flex-1 overflow-y-auto supaya daftar
+    <>
+      {/* ── TAMBAHAN (responsif) ── Tombol hamburger, hanya tampil di bawah
+          `md` (mobile/tablet portrait) dan hanya saat drawer TERTUTUP —
+          begitu drawer terbuka, tombol tutup (X) di header drawer mengambil
+          alih perannya supaya tidak ada dua tombol toggle tumpang tindih. */}
+      {!mobileOpen && (
+        <button
+          type="button"
+          onClick={() => setMobileOpen(true)}
+          aria-label="Buka menu"
+          className="fixed left-3 top-3 z-30 inline-flex h-11 w-11 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-700 shadow-md active:scale-95 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 md:hidden"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+      )}
+
+      {/* ── TAMBAHAN (responsif) ── Overlay gelap di belakang drawer, hanya
+          dirender (dan hanya menutup akses klik ke konten di baliknya)
+          selagi drawer terbuka. `md:hidden` memastikan ini tidak pernah
+          muncul di desktop/tablet besar, walau `mobileOpen` somehow true. */}
+      {mobileOpen && (
+        <div
+          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+        />
+      )}
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-zinc-200 bg-white transition-transform duration-200 ease-in-out dark:border-zinc-800 dark:bg-zinc-950 md:static md:z-auto md:w-64 md:translate-x-0 md:transition-none ${
+          mobileOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        {/* ── TAMBAHAN (T-12) ── Dibungkus flex-1 overflow-y-auto supaya daftar
           menu bisa scroll sendiri kalau kepanjangan, TANPA ikut menggeser
           footer notifikasi di bawah keluar layar. */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="border-b border-zinc-200 p-5 dark:border-zinc-800">
-          <h1 className="rounded-xl text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-            LCO POS
-          </h1>
-        </div>
-
-        {visibleGroups.map((group) => (
-          <div key={group.label} className="p-3 pt-3 first:pt-3">
-            <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-              {group.label}
-            </p>
-
-            <nav className="flex flex-col gap-1">
-              {group.items.map(({ key, label, icon: Icon }) => (
-                <button
-                  key={key}
-                  onClick={() => onMenuChange(key)}
-                  className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors duration-150 ${
-                    // ── PERUBAHAN (theme-guide.md §6.6) ── Item aktif sebelumnya
-                    // `bg-zinc-100 text-lco-teal` (netral + aksen) — panduan tema
-                    // resmi §6.6 minta item aktif pakai wash brand-nya sendiri
-                    // (green di light mode, teal di dark mode) + font-semibold,
-                    // bukan background abu-abu netral.
-                    activeMenu === key
-                      ? "bg-lco-green/10 font-semibold text-lco-green dark:bg-lco-teal/15 dark:text-lco-teal"
-                      : "font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  {label}
-                </button>
-              ))}
-            </nav>
+        <div className="flex-1 overflow-y-auto">
+          <div className="flex items-center justify-between border-b border-zinc-200 p-5 dark:border-zinc-800">
+            <h1 className="rounded-xl text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+              LCO POS
+            </h1>
+            {/* ── TAMBAHAN (responsif) ── Tombol tutup drawer, cuma tampil di
+                mobile/tablet portrait (`md:hidden`) — di desktop sidebar
+                memang selalu terbuka, tidak butuh tombol tutup. */}
+            <button
+              type="button"
+              onClick={() => setMobileOpen(false)}
+              aria-label="Tutup menu"
+              className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100 md:hidden"
+            >
+              <X className="h-5 w-5" />
+            </button>
           </div>
-        ))}
-      </div>
 
-      {/* ── TAMBAHAN (T-12) ── Footer notifikasi, di luar area scroll di atas
-          supaya selalu terlihat. */}
-      <div className="border-t border-zinc-200 p-2 dark:border-zinc-800">
-        {/* ── TAMBAHAN (dark mode toggle, sidebar) ── */}
-        <ThemeToggle />
-        <NotificationStatus />
+          {visibleGroups.map((group) => (
+            <div key={group.label} className="p-3 pt-3 first:pt-3">
+              <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                {group.label}
+              </p>
 
-        {/* ── TAMBAHAN (logout) ── Identitas user + tombol Keluar. */}
-        <div className="mt-1 border-t border-zinc-200 px-3 pt-3 pb-1 dark:border-zinc-800">
-          {user && (
-            <div className="mb-2 min-w-0">
-              <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                {user.full_name || user.email || "Pengguna"}
-              </p>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                {ROLE_LABELS[user.role] ?? user.role}
-              </p>
+              <nav className="flex flex-col gap-1">
+                {group.items.map(({ key, label, icon: Icon }) => (
+                  <button
+                    key={key}
+                    onClick={() => handleMenuSelect(key)}
+                    className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors duration-150 ${
+                      // ── PERUBAHAN (theme-guide.md §6.6) ── Item aktif sebelumnya
+                      // `bg-zinc-100 text-lco-teal` (netral + aksen) — panduan tema
+                      // resmi §6.6 minta item aktif pakai wash brand-nya sendiri
+                      // (green di light mode, teal di dark mode) + font-semibold,
+                      // bukan background abu-abu netral.
+                      activeMenu === key
+                        ? "bg-lco-green/10 font-semibold text-lco-green dark:bg-lco-teal/15 dark:text-lco-teal"
+                        : "font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {label}
+                  </button>
+                ))}
+              </nav>
             </div>
-          )}
-
-          <button
-            type="button"
-            onClick={() => void handleSignOut()}
-            disabled={isSigningOut}
-            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-lco-coral transition-colors duration-150 hover:bg-lco-coral/10 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isSigningOut ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <LogOut className="h-4 w-4" />
-            )}
-            {isSigningOut ? "Keluar..." : "Keluar"}
-          </button>
-
-          {signOutError && (
-            <p className="mt-1 px-3 text-[11px] leading-snug text-lco-coral">
-              {signOutError}
-            </p>
-          )}
+          ))}
         </div>
-      </div>
-    </aside>
+
+        {/* ── TAMBAHAN (T-12) ── Footer notifikasi, di luar area scroll di atas
+          supaya selalu terlihat. */}
+        <div className="border-t border-zinc-200 p-2 dark:border-zinc-800">
+          {/* ── TAMBAHAN (dark mode toggle, sidebar) ── */}
+          <ThemeToggle />
+          <NotificationStatus />
+
+          {/* ── TAMBAHAN (logout) ── Identitas user + tombol Keluar. */}
+          <div className="mt-1 border-t border-zinc-200 px-3 pt-3 pb-1 dark:border-zinc-800">
+            {user && (
+              <div className="mb-2 min-w-0">
+                <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                  {user.full_name || user.email || "Pengguna"}
+                </p>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                  {ROLE_LABELS[user.role] ?? user.role}
+                </p>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => void handleSignOut()}
+              disabled={isSigningOut}
+              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-lco-coral transition-colors duration-150 hover:bg-lco-coral/10 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSigningOut ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <LogOut className="h-4 w-4" />
+              )}
+              {isSigningOut ? "Keluar..." : "Keluar"}
+            </button>
+
+            {signOutError && (
+              <p className="mt-1 px-3 text-[11px] leading-snug text-lco-coral">
+                {signOutError}
+              </p>
+            )}
+          </div>
+        </div>
+      </aside>
+    </>
   );
 }

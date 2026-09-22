@@ -35,6 +35,23 @@
 //    itu nilai retur melebihi penjualan — itu kondisi nyata, bukan bug, jadi
 //    ditampilkan apa adanya alih-alih dipaksa nol.
 //
+// 5. CHART TIDAK PERNAH DI-UNMOUNT SETELAH DATA PERTAMA KALI ADA (fix layout
+//    shift). Sebelumnya `isLoading ? <spinner ukuran beda> : <div className="h-64">
+//    <ResponsiveContainer>...`  — ini membongkar total elemen chart tiap kali
+//    refetch, dan ResponsiveContainer butuh siklus ekstra untuk mengukur ulang
+//    dirinya lewat ResizeObserver saat di-mount lagi. Proses remeasure inilah
+//    yang bikin hero section "terdorong" naik/turun tiap klik Muat Ulang.
+//    Solusinya: state `hasLoadedOnce` membedakan dua kondisi —
+//      - Loading PERTAMA KALI (belum pernah ada data): tampilkan skeleton
+//        placeholder dengan tinggi yang SAMA PERSIS dengan chart aslinya
+//        (h-64 / h-48), supaya tidak ada reflow begitu chart asli terpasang.
+//      - Loading saat REFETCH (sudah pernah ada data): chart TIDAK dibongkar.
+//        Data lama tetap tampil, cuma diredupkan dikit + overlay spinner kecil
+//        di tengahnya. ResponsiveContainer tidak pernah unmount lagi setelah
+//        titik ini, jadi tidak ada remeasure yang memicu layout shift.
+//    Pola yang sama diterapkan di tiga tempat: bar chart, pie chart, dan
+//    Action List — ketiganya sebelumnya punya masalah identik.
+//
 // Yang SENGAJA belum ada di sini (bukan bug, scope task lain):
 // - Notifikasi push FCM untuk isi Action List — "Jangan dulu" eksplisit (fase 1.1).
 // - Filter tanggal custom & export — itu modul Laporan (T-08).
@@ -193,6 +210,17 @@ function actionCta(kind: ActionGroup["kind"]): string {
     default:
       return "Buka Kas & Shift";
   }
+}
+
+// ── Overlay loading kecil untuk refetch (fix layout shift, keputusan #5) ─────
+// Dipakai di atas konten yang SUDAH pernah tampil, jadi tidak pernah membongkar
+// elemen di baliknya — cuma menumpuk spinner tipis dengan `absolute inset-0`.
+function RefetchOverlay() {
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-md bg-white/60 backdrop-blur-[1px] dark:bg-zinc-950/60">
+      <Loader2 className="h-5 w-5 animate-spin text-lco-teal" />
+    </div>
+  );
 }
 
 // ── Kartu stat ───────────────────────────────────────────────────────────────
@@ -393,6 +421,23 @@ export default function DashboardModule({ onNavigate }: DashboardModuleProps) {
     return () => clearInterval(timer);
   }, []);
 
+  // ── TAMBAHAN (fix layout shift, keputusan #5) ── Menandai apakah data
+  // pertama kali sudah pernah berhasil dimuat. Sekali `true`, tidak pernah
+  // kembali `false` lagi — jadi refetch berikutnya (klik "Muat Ulang") tidak
+  // akan membongkar chart, hanya menumpuk overlay spinner tipis di atasnya.
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+
+  useEffect(() => {
+    if (!isLoading) setHasLoadedOnce(true);
+  }, [isLoading]);
+
+  // Loading yang dimaksud "pertama kali, belum ada apa-apa untuk ditampilkan".
+  // Hanya kondisi INI yang boleh mengganti chart dengan skeleton kosong.
+  const isInitialLoading = isLoading && !hasLoadedOnce;
+  // Loading di atas data yang sudah ada (refetch) — chart tetap terpasang,
+  // cuma dapat overlay spinner tipis (lihat RefetchOverlay).
+  const isRefetching = isLoading && hasLoadedOnce;
+
   // Potong deret harian sesuai rentang yang dipilih — tanpa query ulang.
   const chartData: DailyPoint[] = useMemo(
     () => daily.slice(-range),
@@ -438,19 +483,24 @@ export default function DashboardModule({ onNavigate }: DashboardModuleProps) {
   );
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto bg-zinc-100 p-4 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 md:p-6">
-      {/* ---------------- Hero: tanggal & jam real-time ----------------
-          ── PERBAIKAN (permintaan user, theme-guide.md §4.1) ── Sebelumnya
-          hero cuma teks di atas background halaman polos (zinc-100/950) —
-          §4.1 "Brand Gradient" secara eksplisit menyebut hero dashboard
-          sebagai salah satu tempat resminya (satu paket sama panel kiri
-          halaman login yang sudah dipakai), jadi polanya disamakan persis:
-          gradient lco-green → lco-teal + lingkaran dekoratif lco-teal/putih
-          transparan yang nyerempet keluar frame, teks putih. Ini SATU-
-          SATUNYA elemen besar per layar yang boleh pakai wash berani
-          (§6.4) — kartu-kartu di bawahnya tetap wash tipis/netral supaya
-          hero ini yang menonjol. */}
-      <div className="relative mb-6 overflow-hidden rounded-2xl bg-gradient-to-br from-lco-green to-lco-teal px-5 py-6 text-white md:px-8 md:py-7">
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-zinc-100 p-4 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 md:p-6">
+      {/* ---------------- Hero: tanggal & jam real-time ---------------- */}
+      {/* ── FIX (layout shift: hero tersusut & terpotong) ── Root wrapper di atas
+          adalah `flex flex-col overflow-y-auto` (lihat baris return utama). Div
+          Hero ini punya `overflow-hidden` untuk membungkus lingkaran dekoratif —
+          tapi menurut spesifikasi Flexbox, begitu sebuah flex-item diberi
+          `overflow` selain `visible`, ukuran minimum otomatisnya berubah jadi 0
+          (bukan konten intrinsiknya). Akibatnya, saat total tinggi konten
+          (setelah chart & action list asli dimuat) melebihi tinggi kontainer,
+          Hero — satu-satunya section dengan overflow-hidden langsung di
+          wrapper-nya — jadi satu-satunya yang "boleh" disusutkan algoritma flex,
+          alih-alih membiarkan kontainer luar yang scroll (overflow-y-auto) yang
+          menangani kelebihan tinggi seperti seharusnya. Karena Hero sendiri
+          overflow-hidden, bagian yang tidak muat itu ke-crop — persis gejala
+          "hero terdorong ke atas & terpotong". `shrink-0` mengunci Hero supaya
+          selalu memakai tinggi konten aslinya dan mengecualikannya dari
+          perhitungan shrink flex. */}
+      <div className="relative mb-6 shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br from-lco-green to-lco-teal px-5 py-6 text-white md:px-8 md:py-7">
         <div
           aria-hidden
           className="pointer-events-none absolute -top-20 -right-16 h-56 w-56 rounded-full bg-lco-teal/25"
@@ -531,12 +581,6 @@ export default function DashboardModule({ onNavigate }: DashboardModuleProps) {
           </div>
         </div>
 
-        {/* ── TAMBAHAN (permintaan user) ── 4 kartu "Hari Ini" dipindah ke
-            dalam hero (sebelumnya grid terpisah di bawah, di atas background
-            halaman polos) — data sama persis dari `today` (hook useDashboard),
-            cuma wadahnya sekarang kartu kaca (`bg-white/10`) di atas gradient
-            supaya konsisten "satu elemen besar" per §6.4, bukan dua blok
-            terpisah yang bersaing. */}
         <div className="relative mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <HeroStat
             label="Omzet"
@@ -631,56 +675,64 @@ export default function DashboardModule({ onNavigate }: DashboardModuleProps) {
             </div>
           </div>
 
-          {isLoading ? (
+          {/* ── FIX (keputusan #5) ── Sebelumnya `isLoading ? spinner-h64 :
+              <div className="h-64">chart</div>` — chart dibongkar total tiap
+              refetch. Sekarang skeleton HANYA di loading pertama kali; setelah
+              itu chart tetap terpasang selamanya dan cuma dapat overlay. */}
+          {isInitialLoading ? (
             <div className="flex h-64 items-center justify-center text-zinc-400">
               <Loader2 className="h-5 w-5 animate-spin" />
             </div>
           ) : (
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={chartData}
-                  margin={{ top: 4, right: 4, bottom: 0, left: 4 }}
-                >
-                  <XAxis
-                    dataKey="label"
-                    tickLine={false}
-                    axisLine={false}
-                    // Rentang 30 hari: label diselang-seling supaya tidak tumpang tindih.
-                    interval={range === 30 ? 4 : 0}
-                    tick={{ fontSize: 10, fill: CHART_COLORS.zinc }}
-                  />
-                  <YAxis
-                    tickLine={false}
-                    axisLine={false}
-                    width={48}
-                    tick={{ fontSize: 10, fill: CHART_COLORS.zinc }}
-                    tickFormatter={(value: number) =>
-                      value === 0
-                        ? "0"
-                        : `${Math.round(value / 1000).toLocaleString("id-ID")}k`
-                    }
-                  />
-                  <Tooltip
-                    cursor={{ fill: "rgba(73, 191, 180, 0.08)" }}
-                    content={<ChartTooltip valueLabel="Omzet bersih" />}
-                  />
-                  <Bar dataKey="revenue" radius={[3, 3, 0, 0]}>
-                    {chartData.map((point) => (
-                      <Cell
-                        key={point.date}
-                        // Hari dengan omzet negatif (retur > penjualan) ditandai
-                        // coral supaya langsung kelihatan, bukan disembunyikan.
-                        fill={
-                          point.revenue < 0
-                            ? CHART_COLORS.coral
-                            : CHART_COLORS.teal
-                        }
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+            <div className="relative h-64">
+              {isRefetching && <RefetchOverlay />}
+              <div
+                className={`h-full transition-opacity duration-150 ${
+                  isRefetching ? "opacity-40" : "opacity-100"
+                }`}
+              >
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={chartData}
+                    margin={{ top: 4, right: 4, bottom: 0, left: 4 }}
+                  >
+                    <XAxis
+                      dataKey="label"
+                      tickLine={false}
+                      axisLine={false}
+                      interval={range === 30 ? 4 : 0}
+                      tick={{ fontSize: 10, fill: CHART_COLORS.zinc }}
+                    />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      width={48}
+                      tick={{ fontSize: 10, fill: CHART_COLORS.zinc }}
+                      tickFormatter={(value: number) =>
+                        value === 0
+                          ? "0"
+                          : `${Math.round(value / 1000).toLocaleString("id-ID")}k`
+                      }
+                    />
+                    <Tooltip
+                      cursor={{ fill: "rgba(73, 191, 180, 0.08)" }}
+                      content={<ChartTooltip valueLabel="Omzet bersih" />}
+                    />
+                    <Bar dataKey="revenue" radius={[3, 3, 0, 0]}>
+                      {chartData.map((point) => (
+                        <Cell
+                          key={point.date}
+                          fill={
+                            point.revenue < 0
+                              ? CHART_COLORS.coral
+                              : CHART_COLORS.teal
+                          }
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             </div>
           )}
         </div>
@@ -693,82 +745,92 @@ export default function DashboardModule({ onNavigate }: DashboardModuleProps) {
           </p>
           <p className="mt-1 text-[11px] text-zinc-500">30 hari terakhir</p>
 
-          {isLoading ? (
+          {/* ── FIX (keputusan #5) ── Sama seperti bar chart: skeleton cuma di
+              loading pertama kali. Kondisi "belum ada penjualan" tetap dicek
+              setelahnya, tapi sekarang tidak akan pernah salah tampil sebagai
+              "belum ada penjualan" saat sebenarnya masih memuat data awal. */}
+          {isInitialLoading ? (
             <div className="flex h-48 items-center justify-center text-zinc-400">
               <Loader2 className="h-5 w-5 animate-spin" />
             </div>
           ) : pieData.length === 0 ? (
-            <div className="flex h-48 flex-col items-center justify-center text-center text-zinc-400">
+            <div className="relative flex h-48 flex-col items-center justify-center text-center text-zinc-400">
+              {isRefetching && <RefetchOverlay />}
               <Inbox className="mb-2 h-5 w-5" />
               <p className="text-xs">Belum ada penjualan</p>
             </div>
           ) : (
-            <>
-              <div className="h-40">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={pieData}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius="55%"
-                      outerRadius="85%"
-                      paddingAngle={1}
-                      stroke="none"
-                      isAnimationActive={false}
-                    >
-                      {pieData.map((slice, index) => (
-                        <Cell
-                          key={`${slice.categoryId ?? "none"}-${index}`}
-                          // Warna kategori dari database dipakai kalau ada,
-                          // supaya konsisten dengan tampilan di modul Produk.
-                          fill={
-                            slice.color ??
-                            PIE_FALLBACK[index % PIE_FALLBACK.length]
-                          }
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      content={<ChartTooltip valueLabel="Nilai penjualan" />}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Legenda dibuat manual — legenda bawaan recharts tidak bisa
-                  menampilkan angka dengan font-mono tabular-nums (§16.3). */}
-              <ul className="mt-3 space-y-1.5">
-                {pieData.map((slice, index) => {
-                  const persen =
-                    pieTotal > 0
-                      ? Math.round((slice.value / pieTotal) * 100)
-                      : 0;
-
-                  return (
-                    <li
-                      key={`${slice.categoryId ?? "none"}-legend-${index}`}
-                      className="flex items-center gap-2 text-xs"
-                    >
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-sm"
-                        style={{
-                          backgroundColor:
-                            slice.color ??
-                            PIE_FALLBACK[index % PIE_FALLBACK.length],
-                        }}
+            <div className="relative">
+              {isRefetching && <RefetchOverlay />}
+              <div
+                className={`transition-opacity duration-150 ${
+                  isRefetching ? "opacity-40" : "opacity-100"
+                }`}
+              >
+                <div className="h-40">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={pieData}
+                        dataKey="value"
+                        nameKey="name"
+                        innerRadius="55%"
+                        outerRadius="85%"
+                        paddingAngle={1}
+                        stroke="none"
+                        isAnimationActive={false}
+                      >
+                        {pieData.map((slice, index) => (
+                          <Cell
+                            key={`${slice.categoryId ?? "none"}-${index}`}
+                            fill={
+                              slice.color ??
+                              PIE_FALLBACK[index % PIE_FALLBACK.length]
+                            }
+                          />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        content={<ChartTooltip valueLabel="Nilai penjualan" />}
                       />
-                      <span className="flex-1 truncate text-zinc-600 dark:text-zinc-400">
-                        {slice.name}
-                      </span>
-                      <span className="font-mono tabular-nums text-zinc-400">
-                        {persen}%
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </>
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Legenda dibuat manual — legenda bawaan recharts tidak bisa
+                    menampilkan angka dengan font-mono tabular-nums (§16.3). */}
+                <ul className="mt-3 space-y-1.5">
+                  {pieData.map((slice, index) => {
+                    const persen =
+                      pieTotal > 0
+                        ? Math.round((slice.value / pieTotal) * 100)
+                        : 0;
+
+                    return (
+                      <li
+                        key={`${slice.categoryId ?? "none"}-legend-${index}`}
+                        className="flex items-center gap-2 text-xs"
+                      >
+                        <span
+                          className="h-2 w-2 shrink-0 rounded-sm"
+                          style={{
+                            backgroundColor:
+                              slice.color ??
+                              PIE_FALLBACK[index % PIE_FALLBACK.length],
+                          }}
+                        />
+                        <span className="flex-1 truncate text-zinc-600 dark:text-zinc-400">
+                          {slice.name}
+                        </span>
+                        <span className="font-mono tabular-nums text-zinc-400">
+                          {persen}%
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -778,14 +840,17 @@ export default function DashboardModule({ onNavigate }: DashboardModuleProps) {
         Perlu Perhatian
       </p>
 
-      {isLoading ? (
+      {/* ── FIX (keputusan #5) ── Pola sama: skeleton (tinggi kira-kira setara
+          kartu action, dipakai `py-10` seperti aslinya) cuma di loading
+          pertama kali; refetch berikutnya menumpuk overlay di atas grid yang
+          sudah ada, tanpa membongkar dan memasang ulang gridnya. */}
+      {isInitialLoading ? (
         <div className="flex items-center justify-center rounded-xl border border-zinc-200 bg-white py-10 text-zinc-400 dark:border-zinc-800 dark:bg-zinc-950">
           <Loader2 className="h-5 w-5 animate-spin" />
         </div>
       ) : actions.length === 0 ? (
-        // Kelompok kosong memang tidak dikirim hook — jadi daftar kosong berarti
-        // benar-benar tidak ada yang perlu ditindak, bukan gagal memuat.
-        <div className="flex flex-col items-center justify-center rounded-xl border border-zinc-200 bg-white py-10 text-center dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="relative flex flex-col items-center justify-center rounded-xl border border-zinc-200 bg-white py-10 text-center dark:border-zinc-800 dark:bg-zinc-950">
+          {isRefetching && <RefetchOverlay />}
           <Inbox className="mb-2 h-5 w-5 text-zinc-300 dark:text-zinc-700" />
           <p className="text-sm text-zinc-500">Tidak ada yang perlu ditindak</p>
           <p className="mt-0.5 text-[11px] text-zinc-400">
@@ -793,14 +858,21 @@ export default function DashboardModule({ onNavigate }: DashboardModuleProps) {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 pb-2 md:grid-cols-2 lg:grid-cols-3">
-          {actions.map((group) => (
-            <ActionCard
-              key={group.kind}
-              group={group}
-              onNavigate={onNavigate}
-            />
-          ))}
+        <div className="relative pb-2">
+          {isRefetching && <RefetchOverlay />}
+          <div
+            className={`grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 transition-opacity duration-150 ${
+              isRefetching ? "opacity-40" : "opacity-100"
+            }`}
+          >
+            {actions.map((group) => (
+              <ActionCard
+                key={group.kind}
+                group={group}
+                onNavigate={onNavigate}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>

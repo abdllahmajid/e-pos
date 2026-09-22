@@ -17,6 +17,7 @@ import {
   X,
   PlayCircle,
   Camera,
+  ArrowLeft,
 } from "lucide-react";
 import BarcodeScanModal, { type ScanFeedback } from "./BarcodeScanModal";
 import PaymentModal from "./PaymentModal";
@@ -124,6 +125,15 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     null,
   );
   const [cart, setCart] = useState<CartItem[]>([]);
+  // ── TAMBAHAN (responsif HP/tablet) ── Di layar sempit (di bawah breakpoint
+  // `md`), panel Produk & panel Keranjang tidak lagi ditumpuk vertikal (itu
+  // yang bikin kasir harus scroll ~2 layar penuh untuk sampai ke keranjang).
+  // Sebagai gantinya keduanya jadi 2 "layar" yang di-toggle lewat state ini —
+  // tombol mengambang "Lihat Keranjang" di layar Produk, tombol kembali di
+  // layar Keranjang. Di `md` ke atas (tablet lanskap/desktop) state ini
+  // diabaikan sepenuhnya lewat class `md:flex` — kedua panel selalu tampil
+  // berdampingan seperti sebelumnya.
+  const [mobileView, setMobileView] = useState<"products" | "cart">("products");
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isSavingTransaction, setIsSavingTransaction] = useState(false);
   const [transactionError, setTransactionError] = useState<string | null>(null);
@@ -276,6 +286,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       setLastCustomerPhone(extra?.customerPhone ?? null);
 
       setCart(clearCart());
+      setMobileView("products");
       await refetch();
       return { paymentId: result.payment_id };
     } catch (err) {
@@ -366,6 +377,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       setLastCustomerPhone(extra?.customerPhone ?? null);
 
       setCart(clearCart());
+      setMobileView("products");
       await refetch();
       return { payments: result.payments };
     } catch (err) {
@@ -423,6 +435,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     try {
       await holdOrder(cart, holdLabel);
       setCart(clearCart());
+      setMobileView("products");
       setIsHoldModalOpen(false);
     } catch (err) {
       setHoldModalError(
@@ -457,6 +470,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     try {
       const result = await resumeHeldOrder(id, products);
       setCart(result.cart);
+      setMobileView("cart");
       setTransactionError(null);
       setResumeNotice(
         result.skippedItems.length > 0
@@ -606,9 +620,22 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   }
 
   return (
-    <div className="h-full flex flex-col md:flex-row bg-zinc-100 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-      <div className="flex-1 flex flex-col h-full border-r border-zinc-200 dark:border-zinc-800">
-        <div className="p-5 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 flex flex-col gap-4 z-10">
+    <div className="h-full flex flex-col md:flex-row bg-zinc-100 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden">
+      {/* ── PERBAIKAN (responsif HP/tablet) ── Sebelumnya panel ini punya
+          `h-full` DI DALAM parent yang juga `flex-col` di layar sempit —
+          artinya panel ini (dan panel Keranjang di bawah) sama-sama memaksa
+          tinggi 100% layar, lalu ditumpuk vertikal, jadi total tingginya ~2x
+          tinggi layar (kasir harus scroll sangat jauh untuk sampai ke
+          keranjang & tombol Bayar). Sekarang: `min-h-0` (bukan `h-full`) agar
+          panel ini benar-benar mengambil SISA tinggi yang tersedia dari flex
+          parent, dan class `hidden`/`flex` + `md:flex` di bawah membuat di
+          bawah `md` hanya SATU panel yang tampil sekaligus (tab "Produk" vs
+          "Keranjang" lewat `mobileView`), sementara `md` ke atas kedua panel
+          selalu tampil berdampingan seperti semula. */}
+      <div
+        className={`${mobileView === "products" ? "flex" : "hidden"} md:flex flex-1 flex-col min-h-0 border-r border-zinc-200 dark:border-zinc-800`}
+      >
+        <div className="p-4 sm:p-5 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 flex flex-col gap-4 z-10">
           <div className="relative flex items-center gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-400" />
@@ -667,13 +694,18 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5">
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5">
           {filteredProducts.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center text-zinc-400 text-xs">
               Tidak ada produk yang cocok.
             </div>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
+            // ── PERBAIKAN (responsif HP/tablet) ── Kolom disesuaikan per lebar
+            // layar: 2 kolom di HP kecil, 3 di HP besar/tablet potret, turun
+            // ke 2 lagi persis di breakpoint `md` (saat panel Keranjang mulai
+            // tampil di sebelah, jatah lebar panel ini otomatis menyempit),
+            // lalu naik lagi ke 3-4 kolom seiring layar makin lebar.
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
               {filteredProducts.map((product) => {
                 const inCartQty =
                   cart.find((item) => item.product.id === product.id)?.qty || 0;
@@ -731,15 +763,55 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
             </div>
           )}
         </div>
+
+        {/* ── TAMBAHAN (responsif HP) ── Hanya tampil di bawah breakpoint
+            `md` (di `md` ke atas keranjang sudah kelihatan di sebelah, jadi
+            tombol ini tidak perlu). Ini pengganti scroll panjang ke bawah —
+            kasir cukup tap untuk pindah ke layar Keranjang. */}
+        {cart.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setMobileView("cart")}
+            className="md:hidden shrink-0 flex items-center justify-between gap-3 mx-4 mb-4 px-4 py-3 rounded-xl bg-lco-teal hover:opacity-90 text-white shadow-lg transition-opacity duration-150"
+          >
+            <span className="flex items-center gap-2 text-sm font-semibold">
+              <ShoppingCart className="w-4 h-4" />
+              {getCartItemCount(cart)} item
+            </span>
+            <span className="flex items-center gap-1.5 text-sm font-semibold">
+              <span className="font-mono tabular-nums">
+                {formatRupiah(grandTotal)}
+              </span>
+              <span className="text-xs font-medium underline underline-offset-2">
+                Lihat Keranjang
+              </span>
+            </span>
+          </button>
+        )}
       </div>
 
-      <div className="w-full md:w-[400px] flex flex-col bg-white dark:bg-zinc-950 h-full">
-        <div className="p-5 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
-          <h2 className="font-semibold text-base tracking-tight flex items-center gap-2 text-zinc-900 dark:text-zinc-100">
-            <ShoppingCart className="w-5 h-5 text-lco-teal" />
-            Keranjang
-          </h2>
-          <div className="flex items-center gap-2">
+      <div
+        className={`${mobileView === "cart" ? "flex" : "hidden"} md:flex w-full md:w-[320px] lg:w-[380px] xl:w-[420px] flex-col min-h-0 bg-white dark:bg-zinc-950`}
+      >
+        <div className="p-4 sm:p-5 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {/* ── TAMBAHAN (responsif HP) ── Tombol kembali ke layar Produk;
+                disembunyikan di `md` ke atas karena di sana panel Produk
+                sudah selalu terlihat di sebelah. */}
+            <button
+              type="button"
+              onClick={() => setMobileView("products")}
+              title="Kembali ke Produk"
+              className="md:hidden shrink-0 p-1.5 -ml-1 rounded-md text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors duration-150"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <h2 className="font-semibold text-base tracking-tight flex items-center gap-2 text-zinc-900 dark:text-zinc-100 truncate">
+              <ShoppingCart className="w-5 h-5 text-lco-teal shrink-0" />
+              Keranjang
+            </h2>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
             {/* ── TAMBAHAN (T-11 bagian 1) ── Lihat & lanjutkan pesanan yang ditunda. */}
             <button
               onClick={openHeldList}
@@ -757,7 +829,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3 bg-zinc-50/50 dark:bg-zinc-900/30">
+        <div className="flex-1 min-h-0 overflow-y-auto p-3 bg-zinc-50/50 dark:bg-zinc-900/30">
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center p-6">
               <div className="w-16 h-16 bg-zinc-50 dark:bg-zinc-900 rounded-full flex items-center justify-center mb-4 border border-zinc-200 dark:border-zinc-800">
@@ -848,7 +920,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
           </div>
         )}
 
-        <div className="p-5 bg-white dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-800 z-10">
+        <div className="p-4 sm:p-5 bg-white dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-800 z-10">
           <div className="space-y-1.5 mb-5 text-sm">
             <div className="flex justify-between text-zinc-500">
               <span className="text-xs">Subtotal</span>

@@ -872,7 +872,7 @@ export default function PaymentModal({
 
           {!isSplit && (
             <>
-              <div className="grid grid-cols-4 gap-2 mb-6">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-6">
                 {METHODS.map(({ value, label, icon: Icon }) => (
                   <button
                     key={value}
@@ -893,7 +893,7 @@ export default function PaymentModal({
               wajib + field HP opsional sendiri di bloknya masing-masing di
               bawah, jadi tidak perlu field nama dobel. */}
               {method !== "TEMPO" && (
-                <div className="grid grid-cols-2 gap-3 mb-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
                   <div>
                     <label className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">
                       Nama Pelanggan{" "}
@@ -1135,7 +1135,7 @@ export default function PaymentModal({
                     (minimal 2)
                   </span>
                 </label>
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {METHODS.map(({ value, label, icon: Icon }) => {
                     const on = splitOn[value];
                     return (
@@ -1346,7 +1346,7 @@ export default function PaymentModal({
 
               {/* Identitas pelanggan — satu set untuk seluruh transaksi. Nama
                   WAJIB kalau ada baris TEMPO (aturan RPC). */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">
                     Nama Pelanggan{" "}
