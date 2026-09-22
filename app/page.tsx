@@ -80,7 +80,16 @@ const PengaturanModule = dynamic(
 );
 
 export default function LCOPOS() {
-  const [activeMenu, setActiveMenu] = useState("kasir");
+  // ── KOREKSI (setelah login diarahkan ke Dashboard) ── Sebelumnya default
+  // "kasir", jadi kasir/admin yang baru login langsung masuk layar POS.
+  // Sekarang default "dashboard" — halaman ini ("/") satu-satunya tempat
+  // yang menyimpan `activeMenu`, dan login/page.tsx (setelah signIn sukses)
+  // selalu redirect ke sini via `router.push("/")`, jadi mengganti default
+  // di sini otomatis membuat SETIAP login mendarat di Dashboard dulu,
+  // bukan langsung ke menu Kasir. Menu "dashboard" sendiri tidak dibatasi
+  // role (lihat MENU_GROUPS di Sidebar.tsx — tidak ada `roles: [...]`),
+  // jadi aman untuk semua role (admin/supervisor/kasir/qc).
+  const [activeMenu, setActiveMenu] = useState("dashboard");
 
   // ── TAMBAHAN (T-04) ── dipakai KasirModule untuk pindah ke menu Kas & Shift
   // saat kasir belum buka shift (lihat layar blokir di KasirModule.tsx).

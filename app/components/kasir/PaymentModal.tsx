@@ -41,6 +41,25 @@ import {
 // manual lagi.
 import type { ReceiptData } from "@/lib/pos/printLogic";
 
+// ── TAMBAHAN (bug: preview tidak sama dengan hasil cetak) ── Duplikat kecil
+// dari METHOD_LABELS/formatMethod() di printLogic.ts (tidak diexport dari
+// sana, dan sengaja tidak diimport langsung supaya PaymentModal tetap tidak
+// punya dependency RUNTIME ke printLogic.ts — lihat catatan di atas soal
+// `import type` ReceiptData). Kalau labelnya diubah di printLogic.ts, ubah
+// juga di sini supaya preview & hasil cetak tetap sama persis.
+const PREVIEW_METHOD_LABELS: Record<string, string> = {
+  tunai: "Tunai",
+  CASH: "Tunai",
+  transfer: "Transfer Bank",
+  BANK_TRANSFER: "Transfer Bank",
+  QRIS: "QRIS",
+  TEMPO: "Tempo / Piutang",
+};
+
+function formatMethodLabel(method: string): string {
+  return PREVIEW_METHOD_LABELS[method] ?? method.toUpperCase();
+}
+
 type PaymentModalProps = {
   isOpen: boolean;
   onClose: () => void;
@@ -555,19 +574,66 @@ export default function PaymentModal({
               </div>
               <div className="max-h-[38vh] overflow-y-auto px-4 py-3">
                 <div className="font-mono text-[11px] leading-relaxed text-zinc-800">
-                  <p className="text-center font-semibold text-xs mb-0.5 text-zinc-900">
-                    {receipt.receiptNo}
+                  {/* ── KOREKSI (bug: preview tidak sama dengan hasil cetak) ──
+                      Sebelumnya preview langsung mulai dari No. Struk, tanpa
+                      pernah menampilkan nama toko/alamat/telepon (dari
+                      Pengaturan > Toko) ataupun tanggal & metode pembayaran —
+                      padahal semua itu ADA di template HTML yang benar-benar
+                      dicetak (lihat printThermalReceipt() di printLogic.ts).
+                      Blok di bawah ini disusun mengikuti urutan yang sama
+                      persis dengan template cetak: nama toko -> alamat ->
+                      telepon -> No. Struk/Waktu/Kasir/Pelanggan/Metode ->
+                      item -> total -> footer. ── */}
+                  <p className="text-center font-bold text-sm mb-0.5 text-zinc-900">
+                    {receipt.storeName || "Langitan.co"}
                   </p>
-                  {(receipt.cashierName || receipt.customerName) && (
-                    <div className="text-center text-[10px] text-zinc-500 mb-2 space-y-0.5">
-                      {receipt.cashierName && (
-                        <p>Kasir: {receipt.cashierName}</p>
-                      )}
-                      {receipt.customerName && (
-                        <p>Pelanggan: {receipt.customerName}</p>
-                      )}
-                    </div>
+                  {receipt.storeAddress && (
+                    <p className="text-center text-zinc-600">
+                      {receipt.storeAddress}
+                    </p>
                   )}
+                  {receipt.storePhone && (
+                    <p className="text-center text-zinc-600 mb-1">
+                      {receipt.storePhone}
+                    </p>
+                  )}
+
+                  <div className="border-t border-dashed border-zinc-300 my-2" />
+
+                  <div className="space-y-0.5">
+                    <div className="flex justify-between">
+                      <span>No. Struk</span>
+                      <span>{receipt.receiptNo}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Waktu</span>
+                      <span>
+                        {new Date(
+                          receipt.createdAt ?? Date.now(),
+                        ).toLocaleString("id-ID", {
+                          day: "2-digit",
+                          month: "2-digit",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Kasir</span>
+                      <span>{receipt.cashierName ?? "-"}</span>
+                    </div>
+                    {receipt.customerName && (
+                      <div className="flex justify-between">
+                        <span>Pelanggan</span>
+                        <span>{receipt.customerName}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span>Metode</span>
+                      <span>{formatMethodLabel(receipt.method)}</span>
+                    </div>
+                  </div>
 
                   <div className="border-t border-dashed border-zinc-300 my-2" />
 
@@ -628,7 +694,7 @@ export default function PaymentModal({
 
                   <div className="space-y-1">
                     <div className="flex justify-between">
-                      <span>Bayar ({receipt.method})</span>
+                      <span>Bayar</span>
                       <span className="tabular-nums">
                         {formatRp(receipt.paidAmount ?? 0)}
                       </span>
@@ -640,6 +706,15 @@ export default function PaymentModal({
                       </span>
                     </div>
                   </div>
+
+                  {/* ── TAMBAHAN (bug: preview tidak sama dengan hasil cetak) ──
+                      Footer struk (Pengaturan > Toko > footerStruk) dulu tidak
+                      pernah ditampilkan di preview, padahal selalu ada di
+                      bagian bawah struk fisik. ── */}
+                  <div className="border-t border-dashed border-zinc-300 my-2" />
+                  <p className="text-center text-zinc-600">
+                    {receipt.footerText || "Terima kasih atas kunjungan Anda"}
+                  </p>
                 </div>
               </div>
             </div>
@@ -1387,7 +1462,7 @@ export default function PaymentModal({
             ) : !isSplit && method === "TEMPO" && !isPayable ? (
               "Lengkapi Nama & Jatuh Tempo"
             ) : (
-              "Proses Pembayaran & Cetak"
+              "Proses Pembayaran"
             )}
           </button>
         </div>

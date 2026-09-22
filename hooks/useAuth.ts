@@ -4,6 +4,16 @@ import { useEffect, useState } from "react";
 // ⚠️ GANTI path ini setelah kamu ketemu lokasi asli file Supabase client di project kamu.
 import { createClient } from "@/lib/supabase/client";
 
+// ── KOREKSI (bug: "selalu rendering" / risiko rate limit auth) ── Dipindah
+// ke scope MODUL (dipanggil sekali saat file ini pertama kali diimpor),
+// bukan di dalam badan `useAuth()` seperti sebelumnya (artinya dulu
+// terpanggil ulang di SETIAP render tiap komponen yang pakai hook ini).
+// Sekarang `createClient()` sendiri sudah singleton (lihat catatan di
+// lib/supabase/client.ts), jadi baris ini aman dipindah — tidak lagi
+// membuat instance GoTrueClient baru sama sekali, cuma mengambil referensi
+// ke instance singleton yang sama dipakai semua hook lain di app ini.
+const supabase = createClient();
+
 // Harus sinkron dengan enum Postgres `user_role` di migration 002_setup_profiles_and_roles.sql
 export type UserRole = "admin" | "supervisor" | "kasir" | "qc";
 
@@ -27,7 +37,6 @@ export function useAuth(): UseAuthResult {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const supabase = createClient();
 
   async function loadProfile(authUserId: string, email: string | null) {
     const { data, error: profileError } = await supabase

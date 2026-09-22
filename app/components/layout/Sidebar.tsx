@@ -369,10 +369,15 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
                 <button
                   key={key}
                   onClick={() => onMenuChange(key)}
-                  className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-150 ${
+                  className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors duration-150 ${
+                    // ── PERUBAHAN (theme-guide.md §6.6) ── Item aktif sebelumnya
+                    // `bg-zinc-100 text-lco-teal` (netral + aksen) — panduan tema
+                    // resmi §6.6 minta item aktif pakai wash brand-nya sendiri
+                    // (green di light mode, teal di dark mode) + font-semibold,
+                    // bukan background abu-abu netral.
                     activeMenu === key
-                      ? "bg-zinc-100 text-lco-teal dark:bg-zinc-900"
-                      : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                      ? "bg-lco-green/10 font-semibold text-lco-green dark:bg-lco-teal/15 dark:text-lco-teal"
+                      : "font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
                   }`}
                 >
                   <Icon className="h-4 w-4" />

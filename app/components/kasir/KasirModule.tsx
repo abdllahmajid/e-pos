@@ -231,7 +231,19 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       });
 
       const receiptData: ReceiptData = {
+        // ── KOREKSI (bug: data Pengaturan Toko/Struk tidak muncul di struk
+        // baru) ── Field ini sebelumnya tidak pernah diisi di sini, jadi
+        // printLogic.ts selalu jatuh ke fallback hardcode-nya ("Langitan.co",
+        // tanpa alamat/telepon, footer default) walau kasir sudah mengisi
+        // Pengaturan > Toko. TransactionDetailModal.tsx (cetak ulang dari
+        // Riwayat Transaksi) sudah benar mengisi 4 field ini dari
+        // `posSettings` — disamakan di sini.
+        storeName: posSettings.namaToko,
+        storeAddress: posSettings.alamat,
+        storePhone: posSettings.telepon,
+        footerText: posSettings.footerStruk,
         receiptNo: result.receipt_no,
+        createdAt: new Date().toISOString(),
         cashierName: user?.full_name ?? user?.email ?? null,
         customerName: extra?.customerName,
         items: cart.map((item) => ({
@@ -322,7 +334,14 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         .join(" + ");
 
       const receiptData: ReceiptData = {
+        // ── KOREKSI (bug: data Pengaturan Toko/Struk tidak muncul di struk
+        // baru) ── Sama seperti di handleConfirmPayment di atas.
+        storeName: posSettings.namaToko,
+        storeAddress: posSettings.alamat,
+        storePhone: posSettings.telepon,
+        footerText: posSettings.footerStruk,
         receiptNo: result.receipt_no,
+        createdAt: new Date().toISOString(),
         cashierName: user?.full_name ?? user?.email ?? null,
         customerName: extra?.customerName,
         items: cart.map((item) => ({

@@ -88,14 +88,24 @@ const CHART_COLORS = {
   teal: "#49bfb4",
   green: "#124540",
   coral: "#f4435e",
-  mustard: "#e4e596",
+  // ── KOREKSI (theme-guide.md §7) ── Sebelumnya "#e4e596" (kuning pucat,
+  // tidak match hex manapun di app/globals.css) — token resmi lco-mustard
+  // adalah #E45742. Nilai lama membuat grafik & pie diam-diam memakai warna
+  // di luar 5 palet resmi (pelanggaran §0.1) tanpa ada yang sadar karena
+  // hasilnya masih "kelihatan oranye-ish".
+  mustard: "#E45742",
   zinc: "#a1a1aa",
 } as const;
 
-/** Urutan warna irisan pie saat kategori tidak punya warna sendiri di database. */
+/**
+ * Urutan warna irisan pie saat kategori tidak punya warna sendiri di database.
+ * Urutan mengikuti CHART_SERIES di theme-guide.md §7 (green → teal → mustard
+ * → coral, zinc terakhir khusus label/"Lainnya") supaya konsisten dengan
+ * palet chart resmi di seluruh app, bukan urutan teal-dulu yang sebelumnya.
+ */
 const PIE_FALLBACK = [
-  CHART_COLORS.teal,
   CHART_COLORS.green,
+  CHART_COLORS.teal,
   CHART_COLORS.mustard,
   CHART_COLORS.coral,
   CHART_COLORS.zinc,
@@ -144,6 +154,24 @@ function severityTextClass(severity: ActionSeverity): string {
   }
 }
 
+/**
+ * ── TAMBAHAN (theme-guide.md §2 & §6.2) ── Badge count di header ActionCard.
+ * Aturan §2 wajib: "danger" harus solid (coral solid + teks putih), "warning"
+ * harus soft (tint + border, BUKAN solid fill) — dua warna itu berdekatan hue
+ * jadi solid-vs-soft ini satu-satunya cara membedakan error vs warning tanpa
+ * nambah warna baru. "info"/default pakai gaya soft teal biasa.
+ */
+function severityBadgeClass(severity: ActionSeverity): string {
+  switch (severity) {
+    case "danger":
+      return "bg-lco-coral text-white";
+    case "warning":
+      return "bg-lco-mustard/15 text-lco-mustard border border-lco-mustard/30";
+    default:
+      return "bg-lco-teal/15 text-lco-teal";
+  }
+}
+
 function actionIcon(kind: ActionGroup["kind"]) {
   switch (kind) {
     case "low_stock":
@@ -183,7 +211,13 @@ function StatCard({
   hint?: string;
 }) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+    // ── PERUBAHAN (theme-guide.md §6.4) ── Sebelumnya `bg-white dark:bg-zinc-950`
+    // polos — dokumen tema secara eksplisit menyebut kartu ringkasan/statistik
+    // Dashboard sebagai kandidat wash brand tipis (§6.4, poin "Card
+    // ringkasan/statistik"). Opacity rendah (/5, /10) dipakai karena kartu ini
+    // berulang (4-7 per layar) — wash lebih berani disediakan untuk elemen
+    // besar/tunggal, bukan grid yang diulang (lihat catatan panduan di §6.4).
+    <div className="rounded-xl border border-lco-teal/20 bg-lco-teal/5 p-4 dark:bg-lco-teal/10">
       <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
         <Icon className="h-3.5 w-3.5" />
         {label}
@@ -198,7 +232,39 @@ function StatCard({
   );
 }
 
-// ── Tooltip grafik (dibuat sendiri supaya ikut tema, bukan tooltip bawaan) ────
+// ── Kartu stat versi "kaca" untuk di dalam hero gradient ───────────────────
+// Sengaja komponen terpisah dari StatCard (bukan varian prop) — background,
+// border, dan warna teks defaultnya dibuat untuk kontras di atas gradient
+// lco-green→lco-teal (§4.1), beda total dari StatCard yang didesain untuk
+// wash tipis di atas background halaman biasa (§6.4).
+function HeroStat({
+  label,
+  value,
+  icon: Icon,
+  valueClass = "text-white",
+  hint,
+}: {
+  label: string;
+  value: string;
+  icon: React.ComponentType<{ className?: string }>;
+  valueClass?: string;
+  hint?: string;
+}) {
+  return (
+    <div className="rounded-xl bg-white/10 px-4 py-3">
+      <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/60">
+        <Icon className="h-3.5 w-3.5" />
+        {label}
+      </p>
+      <p
+        className={`mt-1.5 font-mono text-lg font-semibold leading-none tabular-nums ${valueClass}`}
+      >
+        {value}
+      </p>
+      {hint && <p className="mt-1.5 text-[10px] text-white/50">{hint}</p>}
+    </div>
+  );
+}
 
 interface TooltipPayloadEntry {
   payload?: { label?: string; name?: string; revenue?: number; value?: number };
@@ -260,7 +326,7 @@ function ActionCard({
           {group.title}
         </p>
         <span
-          className={`font-mono text-sm font-semibold tabular-nums ${severityTextClass(group.severity)}`}
+          className={`rounded-full px-2 py-0.5 font-mono text-xs font-semibold tabular-nums ${severityBadgeClass(group.severity)}`}
         >
           {group.count}
         </span>
@@ -373,71 +439,128 @@ export default function DashboardModule({ onNavigate }: DashboardModuleProps) {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-zinc-100 p-4 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 md:p-6">
-      {/* ---------------- Hero: tanggal & jam real-time ---------------- */}
-      <div className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-start">
-        <div>
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-            Utama
-          </p>
-          <h2 className="text-xl font-semibold tracking-tight">
-            {now ? greeting(now.getHours()) : "Dashboard"}
-          </h2>
-          <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
-            <span className="flex items-center gap-1.5">
-              <CalendarDays className="h-3.5 w-3.5" />
-              <span className="font-mono tabular-nums">
-                {now
-                  ? new Intl.DateTimeFormat("id-ID", {
-                      weekday: "long",
-                      day: "numeric",
-                      month: "long",
-                      year: "numeric",
-                    }).format(now)
-                  : "—"}
-              </span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <Clock className="h-3.5 w-3.5" />
-              <span className="font-mono tabular-nums">
-                {now
-                  ? new Intl.DateTimeFormat("id-ID", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                      hour12: false,
-                    }).format(now)
-                  : "--:--:--"}
-              </span>
-            </span>
-          </p>
-        </div>
+      {/* ---------------- Hero: tanggal & jam real-time ----------------
+          ── PERBAIKAN (permintaan user, theme-guide.md §4.1) ── Sebelumnya
+          hero cuma teks di atas background halaman polos (zinc-100/950) —
+          §4.1 "Brand Gradient" secara eksplisit menyebut hero dashboard
+          sebagai salah satu tempat resminya (satu paket sama panel kiri
+          halaman login yang sudah dipakai), jadi polanya disamakan persis:
+          gradient lco-green → lco-teal + lingkaran dekoratif lco-teal/putih
+          transparan yang nyerempet keluar frame, teks putih. Ini SATU-
+          SATUNYA elemen besar per layar yang boleh pakai wash berani
+          (§6.4) — kartu-kartu di bawahnya tetap wash tipis/netral supaya
+          hero ini yang menonjol. */}
+      <div className="relative mb-6 overflow-hidden rounded-2xl bg-gradient-to-br from-lco-green to-lco-teal px-5 py-6 text-white md:px-8 md:py-7">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -top-20 -right-16 h-56 w-56 rounded-full bg-lco-teal/25"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -bottom-24 -left-12 h-64 w-64 rounded-full bg-lco-teal/15"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute top-1/2 right-1/4 h-28 w-28 -translate-y-1/2 rounded-full border border-white/10"
+        />
 
-        <div className="flex items-center gap-3">
-          {lastUpdatedAt && (
-            <p className="hidden text-[11px] text-zinc-400 sm:block">
-              Diperbarui{" "}
-              <span className="font-mono tabular-nums">
-                {new Intl.DateTimeFormat("id-ID", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  hour12: false,
-                }).format(lastUpdatedAt)}
+        <div className="relative flex flex-col justify-between gap-5 md:flex-row md:items-center">
+          <div>
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-lco-teal">
+              Utama
+            </p>
+            <h2 className="text-2xl font-semibold tracking-tight">
+              {now ? greeting(now.getHours()) : "Dashboard"}
+            </h2>
+            <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-white/70">
+              <span className="flex items-center gap-1.5">
+                <CalendarDays className="h-3.5 w-3.5" />
+                <span className="font-mono tabular-nums">
+                  {now
+                    ? new Intl.DateTimeFormat("id-ID", {
+                        weekday: "long",
+                        day: "numeric",
+                        month: "long",
+                        year: "numeric",
+                      }).format(now)
+                    : "—"}
+                </span>
+              </span>
+              <span className="flex items-center gap-1.5">
+                <Clock className="h-3.5 w-3.5" />
+                <span className="font-mono tabular-nums">
+                  {now
+                    ? new Intl.DateTimeFormat("id-ID", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                        hour12: false,
+                      }).format(now)
+                    : "--:--:--"}
+                </span>
               </span>
             </p>
-          )}
-          <button
-            type="button"
-            onClick={refetch}
-            disabled={isLoading}
-            className="flex items-center justify-center gap-2 rounded-md border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-600 transition-colors duration-150 hover:border-lco-teal hover:text-lco-teal disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-400"
-          >
-            {isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4" />
+          </div>
+
+          <div className="flex items-center gap-3">
+            {lastUpdatedAt && (
+              <p className="hidden text-[11px] text-white/60 sm:block">
+                Diperbarui{" "}
+                <span className="font-mono tabular-nums">
+                  {new Intl.DateTimeFormat("id-ID", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false,
+                  }).format(lastUpdatedAt)}
+                </span>
+              </p>
             )}
-            Muat Ulang
-          </button>
+            <button
+              type="button"
+              onClick={refetch}
+              disabled={isLoading}
+              className="flex items-center justify-center gap-2 rounded-md border border-white/25 bg-white/10 px-3 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-white/20 disabled:opacity-50"
+            >
+              {isLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Muat Ulang
+            </button>
+          </div>
+        </div>
+
+        {/* ── TAMBAHAN (permintaan user) ── 4 kartu "Hari Ini" dipindah ke
+            dalam hero (sebelumnya grid terpisah di bawah, di atas background
+            halaman polos) — data sama persis dari `today` (hook useDashboard),
+            cuma wadahnya sekarang kartu kaca (`bg-white/10`) di atas gradient
+            supaya konsisten "satu elemen besar" per §6.4, bukan dua blok
+            terpisah yang bersaing. */}
+        <div className="relative mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <HeroStat
+            label="Omzet"
+            value={formatRupiah(today.revenue)}
+            icon={TrendingUp}
+            valueClass={today.revenue < 0 ? "text-lco-coral" : "text-white"}
+            hint="Sudah dikurangi retur"
+          />
+          <HeroStat
+            label="Transaksi"
+            value={String(today.transactionCount)}
+            icon={Receipt}
+          />
+          <HeroStat
+            label="Item Terjual"
+            value={String(today.itemsSold)}
+            icon={ShoppingBag}
+          />
+          <HeroStat
+            label="Rata-rata"
+            value={formatRupiah(today.averageTicket)}
+            icon={Wallet}
+            hint="Per transaksi"
+          />
         </div>
       </div>
 
@@ -447,36 +570,6 @@ export default function DashboardModule({ onNavigate }: DashboardModuleProps) {
           {error}
         </div>
       )}
-
-      {/* ---------------- Stat hari ini ---------------- */}
-      <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-        Hari Ini
-      </p>
-      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard
-          label="Omzet"
-          value={formatRupiah(today.revenue)}
-          icon={TrendingUp}
-          accentClass={today.revenue < 0 ? "text-lco-coral" : "text-lco-teal"}
-          hint="Sudah dikurangi retur"
-        />
-        <StatCard
-          label="Transaksi"
-          value={String(today.transactionCount)}
-          icon={Receipt}
-        />
-        <StatCard
-          label="Item Terjual"
-          value={String(today.itemsSold)}
-          icon={ShoppingBag}
-        />
-        <StatCard
-          label="Rata-rata"
-          value={formatRupiah(today.averageTicket)}
-          icon={Wallet}
-          hint="Per transaksi"
-        />
-      </div>
 
       {/* ---------------- Stat bulan berjalan ---------------- */}
       <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
