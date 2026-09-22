@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search,
   ShoppingCart,
@@ -72,116 +72,6 @@ const SPLIT_METHOD_LABELS: Record<PaymentMethod, string> = {
   TEMPO: "Tempo",
 };
 
-// ── TAMBAHAN (revisi layar sukses) ── Preview struk yang tampil DI DALAM
-// aplikasi (bukan print preview browser) di layar sukses PaymentModal.
-// Sengaja komponen presentasional biasa (bukan HTML string seperti di
-// printLogic.ts) supaya ikut tema Tailwind/dark-mode KasirModule, dan
-// dikirim ke PaymentModal lewat prop `receiptPreview` sebagai node siap-pakai
-// — PaymentModal sendiri tidak perlu tahu bentuk ReceiptData (lihat catatan
-// di PaymentModal.tsx).
-function ReceiptPreview({ data }: { data: ReceiptData }) {
-  const fmt = (n: number) => Math.round(n).toLocaleString("id-ID");
-  const dateStr = new Date(data.createdAt ?? Date.now()).toLocaleString(
-    "id-ID",
-    {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    },
-  );
-  const discount = data.discount ?? 0;
-  const tax = data.tax ?? 0;
-
-  return (
-    <div className="font-mono text-[11px] leading-relaxed text-zinc-700 dark:text-zinc-300">
-      <div className="text-center font-bold text-sm text-zinc-900 dark:text-zinc-100">
-        Langitan.co
-      </div>
-      <div className="text-center text-zinc-500 mb-2">
-        Store &amp; Merchandise
-      </div>
-      <div className="border-b border-dashed border-zinc-300 dark:border-zinc-700 mb-2" />
-
-      <div className="flex justify-between">
-        <span>No. Struk</span>
-        <span>{data.receiptNo}</span>
-      </div>
-      <div className="flex justify-between">
-        <span>Waktu</span>
-        <span>{dateStr}</span>
-      </div>
-      {data.cashierName && (
-        <div className="flex justify-between">
-          <span>Kasir</span>
-          <span>{data.cashierName}</span>
-        </div>
-      )}
-      {data.customerName && (
-        <div className="flex justify-between">
-          <span>Pelanggan</span>
-          <span>{data.customerName}</span>
-        </div>
-      )}
-      <div className="flex justify-between">
-        <span>Metode</span>
-        <span>{data.method}</span>
-      </div>
-
-      <div className="border-b border-dashed border-zinc-300 dark:border-zinc-700 my-2" />
-
-      {data.items.map((item, idx) => (
-        <div key={idx} className="mb-1">
-          <div>{item.name}</div>
-          <div className="flex justify-between text-zinc-500">
-            <span>
-              {item.qty}x {fmt(item.price)}
-            </span>
-            <span>{fmt(item.subtotal ?? item.qty * item.price)}</span>
-          </div>
-        </div>
-      ))}
-
-      <div className="border-b border-dashed border-zinc-300 dark:border-zinc-700 my-2" />
-
-      <div className="flex justify-between">
-        <span>Subtotal</span>
-        <span>{fmt(data.subtotal)}</span>
-      </div>
-      {discount > 0 && (
-        <div className="flex justify-between">
-          <span>Diskon</span>
-          <span>-{fmt(discount)}</span>
-        </div>
-      )}
-      {tax > 0 && (
-        <div className="flex justify-between">
-          <span>Pajak</span>
-          <span>{fmt(tax)}</span>
-        </div>
-      )}
-      <div className="flex justify-between font-bold text-zinc-900 dark:text-zinc-100">
-        <span>Total</span>
-        <span>{fmt(data.total)}</span>
-      </div>
-      <div className="flex justify-between">
-        <span>Bayar</span>
-        <span>{fmt(data.paidAmount)}</span>
-      </div>
-      <div className="flex justify-between">
-        <span>Kembali</span>
-        <span>{fmt(data.changeAmount)}</span>
-      </div>
-
-      <div className="border-b border-dashed border-zinc-300 dark:border-zinc-700 my-2" />
-      <div className="text-center text-zinc-500">
-        Terima kasih atas kunjungan Anda
-      </div>
-    </div>
-  );
-}
-
 interface KasirModuleProps {
   /** Dipanggil saat kasir menekan tombol "Buka Shift" di layar blokir (lihat di bawah). */
   onNavigateToShift?: () => void;
@@ -203,6 +93,32 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     refetch: refetchHeldOrders,
   } = useHoldOrders();
 
+  // ── PERBAIKAN (BUG: "layar kedip/refresh setelah bayar, sukses tidak
+  // pernah tampil") ── Akar masalahnya: `isLoading` dari useProducts() juga
+  // menyala true saat refetch() manual (dipanggil KasirModule setelah
+  // transaksi sukses, untuk update angka stok) — bukan cuma saat load
+  // pertama kali. Guard di bawah (`if (isLoading || isShiftLoading) return
+  // <spinner full-screen>`) dulu memakai isLoading itu apa adanya, jadi tiap
+  // kali refetch() jalan, SELURUH KasirModule (termasuk <PaymentModal> yang
+  // sedang di layar sukses) ikut dibuang & diganti spinner, lalu di-mount
+  // ULANG dari nol begitu refetch selesai — dan PaymentModal yang baru
+  // di-mount otomatis reset ke layar form (lihat useEffect([isOpen, ...])
+  // di PaymentModal.tsx). Itulah "kedip" yang terlihat: bukan bug print,
+  // bukan bug transaksi (keduanya sudah sukses) — transaksi & cetak sudah
+  // beres, tapi layarnya keburu di-reset paksa oleh loading state produk.
+  //
+  // Perbaikan: `hasLoadedInitial` hanya dipakai untuk menahan spinner
+  // full-screen SEBELUM data pertama kali selesai dimuat. Setelah itu,
+  // walau isLoading/isShiftLoading menyala lagi (mis. karena refetch()
+  // pasca-transaksi), layar utama Kasir & PaymentModal TIDAK di-unmount —
+  // cukup biarkan data lama tampil sampai data baru datang.
+  const [hasLoadedInitial, setHasLoadedInitial] = useState(false);
+  useEffect(() => {
+    if (!isLoading && !isShiftLoading && !hasLoadedInitial) {
+      setHasLoadedInitial(true);
+    }
+  }, [isLoading, isShiftLoading, hasLoadedInitial]);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(
     null,
@@ -221,11 +137,11 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   const [lastCustomerPhone, setLastCustomerPhone] = useState<string | null>(
     null,
   );
-  // ── TAMBAHAN (revisi layar sukses) ── Format cetak yang dipilih kasir untuk
-  // transaksi TERAKHIR, disimpan terpisah dari `lastReceipt` supaya
-  // handlePrintReceipt() tahu mesti panggil printThermalReceipt atau
-  // printA6Nota saat tombol "Cetak" di layar sukses ditekan (cetak sekarang
-  // TIDAK lagi otomatis — lihat handleConfirmPayment/handleConfirmSplitPayment).
+  // ── TAMBAHAN (konsep baru: preview struk + cetak manual) ── Format cetak
+  // yang dipilih kasir di form pembayaran (thermal/nota), dipakai
+  // handlePrintReceipt() saat tombol "Cetak" di layar sukses ditekan —
+  // dipisah dari lastReceipt karena ReceiptData sendiri tidak menyimpan
+  // format kertas.
   const [lastPrintFormat, setLastPrintFormat] = useState<"thermal" | "nota">(
     "thermal",
   );
@@ -332,15 +248,14 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         method,
       };
 
-      // ── KOREKSI (revisi layar sukses) ── Cetak TIDAK lagi dipanggil di sini.
-      // Sebelumnya printA6Nota/printThermalReceipt dipanggil otomatis begitu
-      // transaksi tersimpan, sehingga dialog print browser muncul sendiri
-      // walau kasir tidak minta, dan (karena window.print() memblokir thread
-      // JS tab) sempat membuat layar sukses terasa tidak muncul. Sekarang
-      // format cetak hanya DISIMPAN di sini; pencetakan baru benar-benar
-      // terjadi kalau kasir menekan tombol "Cetak" di layar sukses (lihat
-      // handlePrintReceipt() + prop onPrintReceipt di bawah).
-      setLastPrintFormat(extra?.printFormat ?? "thermal");
+      // ── PERBAIKAN (konsep baru: preview struk + cetak manual) ── Sebelumnya
+      // printThermalReceipt()/printA6Nota() dipanggil OTOMATIS di sini, tepat
+      // setelah transaksi tersimpan. Sekarang TIDAK — cetak hanya dipicu kalau
+      // kasir menekan tombol "Cetak" di layar sukses (lihat handlePrintReceipt
+      // & prop onPrint di <PaymentModal> di bawah). Format yang dipilih kasir
+      // di form pembayaran tetap disimpan (lastPrintFormat) supaya tombol itu
+      // tahu harus cetak thermal atau nota.
+      setLastPrintFormat(extra?.printFormat === "nota" ? "nota" : "thermal");
 
       // ── TAMBAHAN (013) ── Simpan struk + no. HP transaksi ini supaya tombol
       // "Kirim WA" di layar sukses PaymentModal (dipanggil lewat onSendWhatsApp
@@ -424,9 +339,9 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         method: methodLabel,
       };
 
-      // ── KOREKSI (revisi layar sukses) ── Sama seperti handleConfirmPayment
-      // di atas: cetak tidak lagi otomatis, hanya simpan format-nya.
-      setLastPrintFormat(extra?.printFormat ?? "thermal");
+      // ── PERBAIKAN (konsep baru: preview struk + cetak manual) ── Sama seperti
+      // handleConfirmPayment di atas — tidak lagi auto-print di sini.
+      setLastPrintFormat(extra?.printFormat === "nota" ? "nota" : "thermal");
 
       setLastReceipt(receiptData);
       setLastCustomerPhone(extra?.customerPhone ?? null);
@@ -460,12 +375,12 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     return shareReceiptViaWhatsApp(lastReceipt, lastCustomerPhone);
   };
 
-  // ── TAMBAHAN (revisi layar sukses) ── Dipanggil PaymentModal saat kasir
-  // menekan tombol "Cetak" di layar sukses. Ini SATU-SATUNYA tempat yang
-  // memicu dialog print browser sekarang (lihat catatan di
-  // handleConfirmPayment di atas) — sengaja diam-diam return kalau lastReceipt
-  // belum ada, karena tombolnya sendiri baru bisa muncul setelah ada transaksi
-  // sukses (prop onPrintReceipt hanya dikirim di JSX bawah bersamaan dengan itu).
+  // ── TAMBAHAN (konsep baru: preview struk + cetak manual) ── Dipanggil
+  // PaymentModal saat kasir menekan tombol "Cetak" di layar sukses/preview
+  // struk. Sama seperti handleSendWhatsApp di atas — pakai lastReceipt dari
+  // state, karena tombol ini hanya bisa ditekan SETELAH handleConfirmPayment/
+  // handleConfirmSplitPayment selesai mengisinya. Boleh ditekan berkali-kali
+  // (mis. kertas macet / kasir ingin cetak ulang).
   const handlePrintReceipt = () => {
     if (!lastReceipt) return;
     if (lastPrintFormat === "nota") {
@@ -613,7 +528,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   // kunci) sebelum akhirnya "kedip" berubah jadi layar terkunci begitu status shift
   // datang. Sekarang KEDUA sumber loading digabung jadi satu kondisi, supaya layar
   // utama Kasir tidak pernah dirender sebelum status shift benar-benar diketahui.
-  if (isLoading || isShiftLoading) {
+  if (!hasLoadedInitial && (isLoading || isShiftLoading)) {
     return (
       <div className="h-full flex items-center justify-center bg-zinc-100 dark:bg-zinc-950">
         <div className="flex flex-col items-center gap-3 text-zinc-400">
@@ -991,14 +906,9 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         // jadi tombolnya baru bisa terlihat/dipakai mulai dari baris ini.
         onConfirmSplitPayment={handleConfirmSplitPayment}
         onSendWhatsApp={handleSendWhatsApp}
-        // ── TAMBAHAN (revisi layar sukses) ── Preview struk + cetak manual di
-        // layar sukses. `lastReceipt` baru terisi setelah transaksi sukses,
-        // jadi selama belum ada transaksi kedua prop ini otomatis undefined/null
-        // dan PaymentModal menyembunyikan kotak preview & tombol "Cetak".
-        receiptPreview={
-          lastReceipt ? <ReceiptPreview data={lastReceipt} /> : null
-        }
-        onPrintReceipt={lastReceipt ? handlePrintReceipt : undefined}
+        // ── TAMBAHAN (konsep baru: preview struk + cetak manual) ──
+        receipt={lastReceipt}
+        onPrint={handlePrintReceipt}
       />
 
       {/* ── TAMBAHAN (T-11 bagian 1) ── Modal konfirmasi "Tunda". */}

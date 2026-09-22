@@ -28,6 +28,18 @@ import {
   uploadPaymentProofs,
   validateSplitPayments,
 } from "@/lib/pos/transactionApi";
+// ── PERBAIKAN (konsep baru: preview struk + cetak manual) ── Sebelumnya di
+// sini ada tipe `ReceiptPreviewData` yang didefinisikan ULANG secara manual
+// (supaya PaymentModal "tidak perlu tahu" bentuk printLogic.ts) — tapi itu
+// bikin field-nya gampang tidak sinkron dengan `ReceiptData` yang sebenarnya
+// (sudah 2x ketahuan beda: `customerName`, lalu `discount`). Sekarang pakai
+// TYPE-ONLY import langsung dari printLogic.ts: baris `import type` di bawah
+// ini dihapus total oleh compiler saat build (tidak ada kode printLogic.ts
+// yang ikut ter-bundle/dijalankan di sini), jadi PaymentModal tetap tidak
+// punya dependency RUNTIME ke modul cetak — cuma dependency TIPE, supaya
+// TypeScript selalu tahu bentuk data struk yang benar tanpa perlu disalin
+// manual lagi.
+import type { ReceiptData } from "@/lib/pos/printLogic";
 
 type PaymentModalProps = {
   isOpen: boolean;
@@ -76,21 +88,22 @@ type PaymentModalProps = {
    */
   onSendWhatsApp?: () => Promise<{ method: "web-share" | "download-fallback" }>;
   /**
-   * ── TAMBAHAN (revisi layar sukses) ── Preview struk yang ditampilkan di
-   * layar sukses, dirender oleh PARENT (KasirModule, yang tahu bentuk
-   * ReceiptData) dan dikirim sebagai node siap-pakai — PaymentModal sengaja
-   * tetap tidak import printLogic/ReceiptData sendiri (lihat catatan di
-   * onSendWhatsApp di atas), cukup menaruh node ini di dalam kotak preview.
-   * Opsional — kalau tidak dikirim parent, kotak preview disembunyikan.
+   * ── TAMBAHAN (konsep baru: preview struk + cetak manual) ── Data struk
+   * transaksi yang baru saja sukses, untuk ditampilkan sebagai PREVIEW di
+   * sebelah layar sukses. null/undefined selama belum ada transaksi sukses
+   * (tidak akan terjadi di praktik — parent selalu mengisinya sebelum
+   * onConfirmPayment/onConfirmSplitPayment resolve, lihat KasirModule.tsx).
    */
-  receiptPreview?: React.ReactNode;
+  receipt?: ReceiptData | null;
   /**
-   * ── TAMBAHAN (revisi layar sukses) ── Cetak struk (buka dialog print
-   * browser). Dipanggil HANYA saat kasir menekan tombol "Cetak" di layar
-   * sukses — TIDAK lagi dipanggil otomatis setelah pembayaran. Opsional —
-   * kalau tidak dikirim parent, tombol "Cetak" disembunyikan.
+   * ── TAMBAHAN (konsep baru: preview struk + cetak manual) ── Dipanggil saat
+   * kasir menekan tombol "Cetak" di layar sukses. TIDAK lagi dipanggil
+   * otomatis oleh parent setelah transaksi tersimpan — dialog print sistem
+   * hanya boleh muncul atas aksi eksplisit kasir. Boleh ditekan berkali-kali
+   * (cetak ulang). Opsional: kalau parent tidak mengirim prop ini, tombol
+   * "Cetak" disembunyikan.
    */
-  onPrintReceipt?: () => void;
+  onPrint?: () => void;
 };
 
 const METHODS: {
@@ -137,8 +150,8 @@ export default function PaymentModal({
   onConfirmPayment,
   onConfirmSplitPayment,
   onSendWhatsApp,
-  receiptPreview,
-  onPrintReceipt,
+  receipt,
+  onPrint,
 }: PaymentModalProps) {
   const [method, setMethod] = useState<PaymentMethod>("CASH");
   const [paidAmount, setPaidAmount] = useState<number>(0);
@@ -195,10 +208,10 @@ export default function PaymentModal({
   >(null);
   const [waError, setWaError] = useState<string | null>(null);
 
-  // ── TAMBAHAN (revisi layar sukses) ── Status tombol "Cetak" di layar sukses.
-  // Dibuat terpisah supaya klik cetak tidak mengubah status kirim WA, dan
-  // sebaliknya — kasir bisa mencetak ulang / mencoba kirim WA dalam urutan apa pun.
-  const [printStatus, setPrintStatus] = useState<"idle" | "done">("idle");
+  // ── TAMBAHAN (konsep baru: preview struk + cetak manual) ── Status tombol
+  // "Cetak" di layar sukses — bukan untuk memblokir klik ulang (kasir boleh
+  // cetak berkali-kali, mis. kertas macet), hanya untuk label tombol.
+  const [printCount, setPrintCount] = useState(0);
 
   useEffect(() => {
     if (isOpen) {
@@ -222,7 +235,7 @@ export default function PaymentModal({
       setWaStatus("idle");
       setWaMethod(null);
       setWaError(null);
-      setPrintStatus("idle");
+      setPrintCount(0);
     }
   }, [isOpen, defaultPrintFormat]);
 
@@ -494,122 +507,217 @@ export default function PaymentModal({
     onClose();
   }
 
-  // ── TAMBAHAN (revisi layar sukses) ── Tombol "Cetak" di layar sukses. Ini
-  // SATU-SATUNYA jalur yang memicu dialog print browser sekarang — beda dari
-  // sebelumnya yang mencetak otomatis begitu transaksi tersimpan. `onPrintReceipt`
-  // sendiri sinkron (lihat KasirModule.tsx), jadi cukup panggil lalu tandai selesai
-  // supaya kasir dapat konfirmasi visual bahwa struknya sudah dikirim ke printer.
-  function handlePrintReceipt() {
-    if (!onPrintReceipt) return;
-    onPrintReceipt();
-    setPrintStatus("done");
+  // ── TAMBAHAN (konsep baru: preview struk + cetak manual) ── Dipanggil dari
+  // tombol "Cetak" di layar sukses. Cetak sekarang murni aksi manual kasir —
+  // dialog print sistem tidak lagi muncul otomatis setelah bayar.
+  function handlePrintClick() {
+    if (!onPrint) return;
+    onPrint();
+    setPrintCount((c) => c + 1);
   }
 
   if (isSuccess) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/30 p-4">
-        <div className="bg-white dark:bg-zinc-950 rounded-xl p-6 max-w-sm w-full flex flex-col items-center text-center border border-zinc-200 dark:border-zinc-800 max-h-[90vh] overflow-y-auto">
-          <CheckCircle2 className="w-14 h-14 text-lco-green mb-3 shrink-0" />
-          <h2 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100 mb-1">
-            Pembayaran Berhasil!
-          </h2>
-          <p className="text-zinc-500 text-xs mb-4">
-            Transaksi sudah tersimpan. Struk belum tercetak — tekan{" "}
-            <span className="font-medium text-zinc-700 dark:text-zinc-300">
-              Cetak
-            </span>{" "}
-            kalau perlu salinan kertas.
-          </p>
-
-          {/* ── TAMBAHAN (revisi layar sukses) ── Preview struk DARI APLIKASI
-              (bukan print preview browser). Node-nya dirender oleh parent lewat
-              prop `receiptPreview` — lihat catatan di tipe prop di atas. Dibungkus
-              kotak & discroll sendiri supaya modal tetap muat di layar meskipun
-              item belanja banyak. */}
-          {receiptPreview && (
-            <div className="w-full mb-4 rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900/60 p-3 max-h-64 overflow-y-auto text-left">
-              {receiptPreview}
-            </div>
-          )}
+        {/* ── Satu kartu menyatu: konfirmasi sukses di atas, preview struk
+            (selalu putih, seperti kertas struk asli — tidak ikut dark mode)
+            di tengah, lalu tombol aksi di bawah. ── */}
+        <div className="bg-white dark:bg-zinc-950 rounded-xl w-full max-w-sm border border-zinc-200 dark:border-zinc-800 flex flex-col overflow-hidden max-h-[90vh]">
+          <div className="p-6 pb-4 flex flex-col items-center text-center shrink-0">
+            <CheckCircle2 className="w-14 h-14 text-lco-green mb-3" />
+            <h2 className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-100 mb-1">
+              Pembayaran Berhasil!
+            </h2>
+            <p className="text-zinc-500 text-xs">
+              {receipt
+                ? "Cek preview struk di bawah, lalu cetak atau kirim ke pelanggan."
+                : "Kirim struk digital ke pelanggan atau lanjut ke transaksi berikutnya."}
+            </p>
+          </div>
 
           {proofWarning && (
-            <p className="mb-4 w-full text-[11px] text-lco-mustard border border-lco-mustard/40 bg-lco-mustard/10 rounded-md px-3 py-2">
-              {proofWarning}
-            </p>
-          )}
-
-          {/* Cetak & Kirim WA — dua aksi opsional berdampingan, tampil hanya
-              kalau parent mengirim handler-nya. */}
-          {(onPrintReceipt || onSendWhatsApp) && (
-            <div
-              className={`w-full mb-3 grid gap-2 ${
-                onPrintReceipt && onSendWhatsApp ? "grid-cols-2" : "grid-cols-1"
-              }`}
-            >
-              {onPrintReceipt && (
-                <div>
-                  <button
-                    type="button"
-                    onClick={handlePrintReceipt}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-md border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-900 text-sm font-semibold transition-colors duration-150"
-                  >
-                    {printStatus === "done" ? (
-                      <>
-                        <CheckCircle2 className="w-4 h-4" /> Tercetak
-                      </>
-                    ) : (
-                      <>
-                        <Printer className="w-4 h-4" /> Cetak
-                      </>
-                    )}
-                  </button>
-                </div>
-              )}
-
-              {onSendWhatsApp && (
-                <div>
-                  <button
-                    type="button"
-                    onClick={handleSendWhatsApp}
-                    disabled={waStatus === "sending" || waStatus === "sent"}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-md border border-lco-green/40 text-lco-green hover:bg-lco-green/10 text-sm font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-70"
-                  >
-                    {waStatus === "sending" ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : waStatus === "sent" ? (
-                      <CheckCircle2 className="w-4 h-4" />
-                    ) : (
-                      <MessageCircle className="w-4 h-4" />
-                    )}
-                    {waStatus === "sending"
-                      ? "Menyiapkan..."
-                      : waStatus === "sent"
-                        ? "Terkirim"
-                        : "Kirim WA"}
-                  </button>
-                  {waStatus === "sent" && waMethod === "download-fallback" && (
-                    <p className="mt-2 text-[11px] text-zinc-500 text-left">
-                      Lampirkan gambar struk yang baru terunduh ke chat WhatsApp
-                      secara manual.
-                    </p>
-                  )}
-                  {waStatus === "error" && waError && (
-                    <p className="mt-2 text-[11px] text-lco-coral text-left">
-                      {waError}
-                    </p>
-                  )}
-                </div>
-              )}
+            <div className="px-6 shrink-0">
+              <p className="mb-3 text-[11px] text-lco-mustard border border-lco-mustard/40 bg-lco-mustard/10 rounded-md px-3 py-2">
+                {proofWarning}
+              </p>
             </div>
           )}
 
-          <button
-            type="button"
-            onClick={handleFinishTransaction}
-            className="w-full flex items-center justify-center gap-2 py-3 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-sm font-semibold transition-colors duration-150"
-          >
-            Selesai <ArrowRight className="w-4 h-4" />
-          </button>
+          {/* ── Preview struk/nota — dipaksa bg putih & teks gelap (bg-white
+              text-zinc-800, TANPA varian dark:) apa pun tema aplikasinya,
+              supaya tampak seperti kertas struk sungguhan, bukan kartu UI. ── */}
+          {receipt && (
+            <div className="mx-6 mb-4 rounded-lg border border-zinc-200 bg-white overflow-hidden shrink-0">
+              <div className="px-4 py-2 border-b border-dashed border-zinc-300 bg-zinc-50">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400 text-center">
+                  Preview Struk
+                </p>
+              </div>
+              <div className="max-h-[38vh] overflow-y-auto px-4 py-3">
+                <div className="font-mono text-[11px] leading-relaxed text-zinc-800">
+                  <p className="text-center font-semibold text-xs mb-0.5 text-zinc-900">
+                    {receipt.receiptNo}
+                  </p>
+                  {(receipt.cashierName || receipt.customerName) && (
+                    <div className="text-center text-[10px] text-zinc-500 mb-2 space-y-0.5">
+                      {receipt.cashierName && (
+                        <p>Kasir: {receipt.cashierName}</p>
+                      )}
+                      {receipt.customerName && (
+                        <p>Pelanggan: {receipt.customerName}</p>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="border-t border-dashed border-zinc-300 my-2" />
+
+                  <div className="space-y-1.5">
+                    {(receipt.items ?? []).map((item, idx) => (
+                      <div key={idx}>
+                        <p className="truncate text-zinc-800">{item.name}</p>
+                        <div className="flex justify-between text-zinc-500">
+                          <span>
+                            {item.qty} x {formatRp(item.price)}
+                          </span>
+                          <span className="tabular-nums">
+                            {formatRp(item.price * item.qty)}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="border-t border-dashed border-zinc-300 my-2" />
+
+                  {/* ── CATATAN: beberapa field ReceiptData (discount, tax, dll)
+                      opsional di tipe aslinya, jadi dipakai dengan fallback
+                      `?? 0` di sini supaya aman dari undefined, baik untuk
+                      TypeScript maupun tampilan (bukan cuma kosmetik). */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between">
+                      <span>Subtotal</span>
+                      <span className="tabular-nums">
+                        {formatRp(receipt.subtotal ?? 0)}
+                      </span>
+                    </div>
+                    {(receipt.discount ?? 0) > 0 && (
+                      <div className="flex justify-between">
+                        <span>Diskon</span>
+                        <span className="tabular-nums">
+                          -{formatRp(receipt.discount ?? 0)}
+                        </span>
+                      </div>
+                    )}
+                    {(receipt.tax ?? 0) > 0 && (
+                      <div className="flex justify-between">
+                        <span>Pajak</span>
+                        <span className="tabular-nums">
+                          {formatRp(receipt.tax ?? 0)}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between font-semibold text-sm text-zinc-900 pt-1">
+                      <span>Total</span>
+                      <span className="tabular-nums">
+                        {formatRp(receipt.total ?? 0)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-dashed border-zinc-300 my-2" />
+
+                  <div className="space-y-1">
+                    <div className="flex justify-between">
+                      <span>Bayar ({receipt.method})</span>
+                      <span className="tabular-nums">
+                        {formatRp(receipt.paidAmount ?? 0)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Kembali</span>
+                      <span className="tabular-nums">
+                        {formatRp(receipt.changeAmount ?? 0)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Aksi: Cetak / Kirim / Selesai ── */}
+          <div className="px-6 pb-6 pt-1 flex flex-col shrink-0">
+            {/* ── TAMBAHAN (konsep baru: preview struk + cetak manual) ──
+                Tombol Cetak: dialog print sistem HANYA muncul lewat sini,
+                tidak pernah otomatis. */}
+            {onPrint && (
+              <div className="w-full mb-3">
+                <button
+                  type="button"
+                  onClick={handlePrintClick}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-md border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-900 text-sm font-semibold transition-colors duration-150"
+                >
+                  <Printer className="w-4 h-4" />
+                  {printCount > 0 ? "Cetak Ulang" : "Cetak Struk"}
+                </button>
+                {printCount > 0 && (
+                  <p className="mt-1.5 text-[11px] text-zinc-400">
+                    Sudah dicetak {printCount}x. Dialog print tidak muncul? Cek
+                    pop-up blocker browser.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {onSendWhatsApp && (
+              <div className="w-full mb-3">
+                <button
+                  type="button"
+                  onClick={handleSendWhatsApp}
+                  disabled={waStatus === "sending" || waStatus === "sent"}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-md border border-lco-green/40 text-lco-green hover:bg-lco-green/10 text-sm font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {waStatus === "sending" ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" /> Menyiapkan
+                      Gambar Struk...
+                    </>
+                  ) : waStatus === "sent" ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      {waMethod === "web-share"
+                        ? "Terkirim ke Sheet Share"
+                        : "Gambar Terunduh, WhatsApp Terbuka"}
+                    </>
+                  ) : (
+                    <>
+                      <MessageCircle className="w-4 h-4" /> Kirim Struk via
+                      WhatsApp
+                    </>
+                  )}
+                </button>
+                {waStatus === "sent" && waMethod === "download-fallback" && (
+                  <p className="mt-2 text-[11px] text-zinc-500 text-left">
+                    Lampirkan gambar struk yang baru terunduh ke chat WhatsApp
+                    secara manual.
+                  </p>
+                )}
+                {waStatus === "error" && waError && (
+                  <p className="mt-2 text-[11px] text-lco-coral text-left">
+                    {waError}
+                  </p>
+                )}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={handleFinishTransaction}
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-sm font-semibold transition-colors duration-150"
+            >
+              Selesai <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
     );

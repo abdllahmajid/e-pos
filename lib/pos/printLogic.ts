@@ -77,13 +77,32 @@ function escapeHtml(value: string): string {
 }
 
 export const printThermalReceipt = (data: ReceiptData) => {
-  // 1. Buat elemen iframe tersembunyi
+  console.log("[printLogic] printThermalReceipt() dipanggil", data.receiptNo);
+  // 1. Buat elemen iframe tersembunyi.
+  // ── KOREKSI #2 (bug cetak: dialog print tetap tidak muncul) ── Percobaan
+  // pertama (iframe `position:fixed` ukuran 0x0) TERNYATA masih gagal di
+  // Chrome/macOS tanpa error apa pun — dugaan: Chrome menganggap iframe 0x0
+  // "tidak ada konten untuk dicetak" dan diam-diam melewati dialognya sama
+  // sekali. Sekarang dipindah ke pola yang SUDAH TERBUKTI jalan di file ini
+  // sendiri (lihat `buildShareReceiptElement()` di bawah, dipakai
+  // `generateReceiptImage()`/kirim WA): iframe diberi UKURAN ASLI (sesuai
+  // lebar kertas thermal, bukan 0), lalu diposisikan di LUAR area layar
+  // (`left: -9999px`) — bukan ukuran nol. Masih "tersembunyi" dari mata kasir
+  // (di luar viewport), tapi tetap punya layout/render tree penuh yang
+  // dibutuhkan mesin print Chrome.
   const iframe = document.createElement("iframe");
-  iframe.style.display = "none";
+  iframe.style.position = "fixed";
+  iframe.style.top = "0";
+  iframe.style.left = "-9999px";
+  iframe.style.width = "302px"; // ~80mm, cukup lebar untuk thermal 58/80mm
+  iframe.style.height = "600px";
+  iframe.style.border = "0";
   document.body.appendChild(iframe);
+
 
   const iframeDoc = iframe.contentWindow?.document;
   if (!iframeDoc) {
+    console.warn("[printLogic] iframeDoc null — dibatalkan sebelum sempat mencetak");
     document.body.removeChild(iframe);
     return;
   }
@@ -214,8 +233,18 @@ export const printThermalReceipt = (data: ReceiptData) => {
 
   // Tunggu sebentar agar browser selesai merender HTML, lalu cetak
   setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
+    // ── TAMBAHAN (bug cetak) ── try/catch supaya kalau print() gagal (mis.
+    // WebView Android yang tidak mengimplementasikan window.print() sama
+    // sekali), errornya kelihatan di console — sebelumnya gagal diam-diam,
+    // persis seperti gejala "kedip doang, tidak ada dialog apa pun".
+    try {
+      console.log("[printLogic] memanggil iframe.contentWindow.print() ...");
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      console.log("[printLogic] print() selesai dipanggil tanpa exception");
+    } catch (err) {
+      console.error("printThermalReceipt: window.print() gagal:", err);
+    }
     // Hapus iframe setelah selesai agar tidak menumpuk di DOM
     setTimeout(() => {
       document.body.removeChild(iframe);
@@ -226,12 +255,20 @@ export const printThermalReceipt = (data: ReceiptData) => {
 // ── TAMBAHAN (T-03) ── Fungsi cetak nota A6/A5 untuk dokumen yang lebih awet.
 // Menggunakan iframe tersembunyi yang sama dengan CSS layout berbeda.
 export const printA6Nota = (data: ReceiptData, paperSize: "A6" | "A5" = "A6") => {
+  console.log("[printLogic] printA6Nota() dipanggil", data.receiptNo, paperSize);
+  // ── KOREKSI #2 (bug cetak) ── Sama seperti printThermalReceipt() di atas.
   const iframe = document.createElement("iframe");
-  iframe.style.display = "none";
+  iframe.style.position = "fixed";
+  iframe.style.top = "0";
+  iframe.style.left = "-9999px";
+  iframe.style.width = paperSize === "A5" ? "560px" : "397px"; // ~A5/A6 di 96dpi
+  iframe.style.height = "800px";
+  iframe.style.border = "0";
   document.body.appendChild(iframe);
 
   const iframeDoc = iframe.contentWindow?.document;
   if (!iframeDoc) {
+    console.warn("[printLogic] iframeDoc null — dibatalkan sebelum sempat mencetak");
     document.body.removeChild(iframe);
     return;
   }
@@ -368,8 +405,15 @@ export const printA6Nota = (data: ReceiptData, paperSize: "A6" | "A5" = "A6") =>
   iframeDoc.close();
 
   setTimeout(() => {
-    iframe.contentWindow?.focus();
-    iframe.contentWindow?.print();
+    // ── TAMBAHAN (bug cetak) ── lihat catatan try/catch di printThermalReceipt().
+    try {
+      console.log("[printLogic] memanggil iframe.contentWindow.print() ...");
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      console.log("[printLogic] print() selesai dipanggil tanpa exception");
+    } catch (err) {
+      console.error("printA6Nota: window.print() gagal:", err);
+    }
     setTimeout(() => {
       document.body.removeChild(iframe);
     }, 1000);
