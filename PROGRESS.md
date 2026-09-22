@@ -126,6 +126,55 @@ Dikerjakan agent sesi ini:
    5. Kosongkan salah satu field (mis. alamat) → baris itu harus hilang dari
       struk, bukan tampil kosong/"undefined".
 
+7. **Bug ditemukan pemilik project: setelah transaksi selesai, layar
+   "Pembayaran Berhasil" TIDAK PERNAH tampil — yang muncul hanya dialog cetak
+   (print preview) bawaan Chrome, lalu balik ke form pembayaran.** Terjadi di
+   SEMUA metode pembayaran, sejak awal. Tidak ada error di console (kecuali
+   `manifest.json` syntax error — TIDAK terkait, lihat poin di bawah), dan
+   transaksi tetap tercatat benar di DB.
+
+   **Akar masalah (soal timing, bukan transaksi gagal):**
+   `printThermalReceipt`/`printA6Nota` (printLogic.ts) memanggil
+   `window.print()` lewat iframe tersembunyi, tapi ditunda 250ms lewat
+   `setTimeout` (supaya browser sempat render HTML struk). Selama dialog print
+   Chrome terbuka, javascript halaman ini TERBEKUKAN (perilaku bawaan browser).
+   Sebelumnya, `handleConfirmPayment`/`handleConfirmSplitPayment` di
+   `KasirModule.tsx` melakukan `await refetch()` (refresh daftar produk, network
+   call ke Supabase) SEBELUM `return` ke `PaymentModal.tsx` — dan
+   `PaymentModal.tsx` baru memanggil `setIsSuccess(true)` SETELAH `return` itu
+   diterima. Kalau `refetch()` lebih lambat dari 250ms (umum terjadi), dialog
+   print muncul DULUAN dan membekukan javascript SEBELUM `setIsSuccess(true)`
+   sempat jalan — kasir hanya melihat dialog print, lalu (setelah ditutup)
+   kembali ke form yang belum sempat berpindah ke layar sukses.
+
+   **Perbaikan:** `KasirModule.tsx`, 2 titik (`handleConfirmPayment` &
+   `handleConfirmSplitPayment`) — `await refetch()` diganti `void refetch()`
+   (tidak ditunggu). Aman karena: (1) refetch() di sini HANYA menyegarkan angka
+   stok di katalog Kasir, BUKAN bagian transaksi (transaksi sudah tersimpan
+   lewat RPC `createTransaction`/`create_transaction` sebelum baris ini); (2)
+   `hooks/useProducts.ts` → `fetchProducts` menangani error-nya sendiri lewat
+   `setError` (tidak `throw`), jadi menghapus `await` tidak menghilangkan
+   penanganan error apa pun. Dengan ini, `return` ke `PaymentModal.tsx` terjadi
+   nyaris instan, jauh di bawah 250ms, jadi `setIsSuccess(true)` seharusnya
+   sempat jalan & layar sukses ter-render SEBELUM dialog print muncul (dialog
+   print akan tampil DI ATAS layar sukses yang sudah ada, bukan lagi mendahului
+   dan membekukannya).
+
+   **Risiko sisa yang BELUM diperbaiki:** untuk metode BANK_TRANSFER/QRIS
+   DENGAN bukti pembayaran dilampirkan, `PaymentModal.tsx` masih melakukan
+   `await uploadPaymentProofs(...)` (upload ke Supabase Storage) SETELAH
+   `onConfirmPayment` resolve dan SEBELUM `setIsSuccess(true)` — race yang sama
+   masih bisa terjadi kalau upload itu sendiri lebih lambat dari 250ms. Belum
+   diperbaiki karena butuh restrukturisasi lebih besar (upload bukti tidak bisa
+   sekadar "void" seperti refetch — kegagalannya perlu ditampilkan sebagai
+   `proofWarning`). Kalau kejadian ini masih terjadi KHUSUS saat melampirkan
+   bukti transfer/QRIS, laporkan lagi, itu jalur yang berbeda.
+
+   **Belum diuji di browser** (agent tanpa `tsc`/jaringan). Uji: transaksi
+   Tunai, Transfer, QRIS, Tempo (satu-satu, tanpa bukti dulu) — pastikan layar
+   "Pembayaran Berhasil" (ikon centang hijau) tampil SEBELUM/bersamaan dengan
+   dialog print, bukan sesudahnya.
+
 Koreksi terhadap catatan lama:
 
 - `public/manifest.json` **TIDAK 0 byte** di zip terbaru (771 byte). Baris

@@ -72,6 +72,116 @@ const SPLIT_METHOD_LABELS: Record<PaymentMethod, string> = {
   TEMPO: "Tempo",
 };
 
+// ── TAMBAHAN (revisi layar sukses) ── Preview struk yang tampil DI DALAM
+// aplikasi (bukan print preview browser) di layar sukses PaymentModal.
+// Sengaja komponen presentasional biasa (bukan HTML string seperti di
+// printLogic.ts) supaya ikut tema Tailwind/dark-mode KasirModule, dan
+// dikirim ke PaymentModal lewat prop `receiptPreview` sebagai node siap-pakai
+// — PaymentModal sendiri tidak perlu tahu bentuk ReceiptData (lihat catatan
+// di PaymentModal.tsx).
+function ReceiptPreview({ data }: { data: ReceiptData }) {
+  const fmt = (n: number) => Math.round(n).toLocaleString("id-ID");
+  const dateStr = new Date(data.createdAt ?? Date.now()).toLocaleString(
+    "id-ID",
+    {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    },
+  );
+  const discount = data.discount ?? 0;
+  const tax = data.tax ?? 0;
+
+  return (
+    <div className="font-mono text-[11px] leading-relaxed text-zinc-700 dark:text-zinc-300">
+      <div className="text-center font-bold text-sm text-zinc-900 dark:text-zinc-100">
+        Langitan.co
+      </div>
+      <div className="text-center text-zinc-500 mb-2">
+        Store &amp; Merchandise
+      </div>
+      <div className="border-b border-dashed border-zinc-300 dark:border-zinc-700 mb-2" />
+
+      <div className="flex justify-between">
+        <span>No. Struk</span>
+        <span>{data.receiptNo}</span>
+      </div>
+      <div className="flex justify-between">
+        <span>Waktu</span>
+        <span>{dateStr}</span>
+      </div>
+      {data.cashierName && (
+        <div className="flex justify-between">
+          <span>Kasir</span>
+          <span>{data.cashierName}</span>
+        </div>
+      )}
+      {data.customerName && (
+        <div className="flex justify-between">
+          <span>Pelanggan</span>
+          <span>{data.customerName}</span>
+        </div>
+      )}
+      <div className="flex justify-between">
+        <span>Metode</span>
+        <span>{data.method}</span>
+      </div>
+
+      <div className="border-b border-dashed border-zinc-300 dark:border-zinc-700 my-2" />
+
+      {data.items.map((item, idx) => (
+        <div key={idx} className="mb-1">
+          <div>{item.name}</div>
+          <div className="flex justify-between text-zinc-500">
+            <span>
+              {item.qty}x {fmt(item.price)}
+            </span>
+            <span>{fmt(item.subtotal ?? item.qty * item.price)}</span>
+          </div>
+        </div>
+      ))}
+
+      <div className="border-b border-dashed border-zinc-300 dark:border-zinc-700 my-2" />
+
+      <div className="flex justify-between">
+        <span>Subtotal</span>
+        <span>{fmt(data.subtotal)}</span>
+      </div>
+      {discount > 0 && (
+        <div className="flex justify-between">
+          <span>Diskon</span>
+          <span>-{fmt(discount)}</span>
+        </div>
+      )}
+      {tax > 0 && (
+        <div className="flex justify-between">
+          <span>Pajak</span>
+          <span>{fmt(tax)}</span>
+        </div>
+      )}
+      <div className="flex justify-between font-bold text-zinc-900 dark:text-zinc-100">
+        <span>Total</span>
+        <span>{fmt(data.total)}</span>
+      </div>
+      <div className="flex justify-between">
+        <span>Bayar</span>
+        <span>{fmt(data.paidAmount)}</span>
+      </div>
+      <div className="flex justify-between">
+        <span>Kembali</span>
+        <span>{fmt(data.changeAmount)}</span>
+      </div>
+
+      <div className="border-b border-dashed border-zinc-300 dark:border-zinc-700 my-2" />
+      <div className="text-center text-zinc-500">
+        Terima kasih atas kunjungan Anda
+      </div>
+    </div>
+  );
+}
+
 interface KasirModuleProps {
   /** Dipanggil saat kasir menekan tombol "Buka Shift" di layar blokir (lihat di bawah). */
   onNavigateToShift?: () => void;
@@ -110,6 +220,14 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   const [lastReceipt, setLastReceipt] = useState<ReceiptData | null>(null);
   const [lastCustomerPhone, setLastCustomerPhone] = useState<string | null>(
     null,
+  );
+  // ── TAMBAHAN (revisi layar sukses) ── Format cetak yang dipilih kasir untuk
+  // transaksi TERAKHIR, disimpan terpisah dari `lastReceipt` supaya
+  // handlePrintReceipt() tahu mesti panggil printThermalReceipt atau
+  // printA6Nota saat tombol "Cetak" di layar sukses ditekan (cetak sekarang
+  // TIDAK lagi otomatis — lihat handleConfirmPayment/handleConfirmSplitPayment).
+  const [lastPrintFormat, setLastPrintFormat] = useState<"thermal" | "nota">(
+    "thermal",
   );
 
   // ── TAMBAHAN (T-11 bagian 1) ── Modal konfirmasi "Tunda" (isi label opsional).
@@ -197,15 +315,6 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       });
 
       const receiptData: ReceiptData = {
-        // ── TAMBAHAN ── Sebelumnya field toko tidak dikirim sama sekali, jadi
-        // struk selalu memakai fallback hardcode di printLogic.ts, tidak
-        // peduli apa pun yang diisi di Pengaturan > Toko. `posSettings` di
-        // atas sudah live-reload lewat useSettings(), jadi ini otomatis ikut
-        // setiap kali admin/supervisor menyimpan Pengaturan Toko.
-        storeName: posSettings.namaToko,
-        storeAddress: posSettings.alamat,
-        storePhone: posSettings.telepon,
-        footerText: posSettings.footerStruk,
         receiptNo: result.receipt_no,
         cashierName: user?.full_name ?? user?.email ?? null,
         customerName: extra?.customerName,
@@ -223,15 +332,15 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         method,
       };
 
-      // ── TAMBAHAN (T-03) ── Pemanggilan print logic sesuai dengan pilihan dari PaymentModal
-      if (extra?.printFormat === "nota") {
-        printA6Nota(
-          receiptData,
-          (posSettings.paperNota as "A6" | "A5") ?? "A6",
-        );
-      } else {
-        printThermalReceipt(receiptData);
-      }
+      // ── KOREKSI (revisi layar sukses) ── Cetak TIDAK lagi dipanggil di sini.
+      // Sebelumnya printA6Nota/printThermalReceipt dipanggil otomatis begitu
+      // transaksi tersimpan, sehingga dialog print browser muncul sendiri
+      // walau kasir tidak minta, dan (karena window.print() memblokir thread
+      // JS tab) sempat membuat layar sukses terasa tidak muncul. Sekarang
+      // format cetak hanya DISIMPAN di sini; pencetakan baru benar-benar
+      // terjadi kalau kasir menekan tombol "Cetak" di layar sukses (lihat
+      // handlePrintReceipt() + prop onPrintReceipt di bawah).
+      setLastPrintFormat(extra?.printFormat ?? "thermal");
 
       // ── TAMBAHAN (013) ── Simpan struk + no. HP transaksi ini supaya tombol
       // "Kirim WA" di layar sukses PaymentModal (dipanggil lewat onSendWhatsApp
@@ -240,23 +349,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       setLastCustomerPhone(extra?.customerPhone ?? null);
 
       setCart(clearCart());
-      // ── KOREKSI ── Sebelumnya `await refetch()` di sini — refetch produk
-      // (network call ke Supabase, bisa 100-800ms) menunda `return` di bawah,
-      // yang menunda PaymentModal.tsx memanggil `setIsSuccess(true)`. Kalau
-      // penundaan itu lebih lama dari 250ms (jeda internal printThermalReceipt/
-      // printA6Nota sebelum window.print() dipanggil — lihat printLogic.ts),
-      // dialog cetak Chrome muncul DULUAN dan MEMBEKUKAN javascript halaman ini
-      // selama dialog terbuka (perilaku bawaan browser, bukan bug di sini).
-      // Kasir jadi hanya melihat dialog cetak, layar "Pembayaran Berhasil"
-      // baru sempat tampil setelah dialog ditutup — sering terlewat/dikira
-      // tidak pernah muncul. refetch() di sini HANYA me-refresh angka stok di
-      // katalog Kasir, bukan bagian transaksi (transaksi sudah tersimpan lewat
-      // createTransaction() di atas) — aman dijalankan di latar belakang tanpa
-      // ditunggu. Errornya sendiri tidak pernah terlempar ke sini pun (lihat
-      // hooks/useProducts.ts: fetchProducts menangani error-nya sendiri lewat
-      // setError, tidak throw), jadi menghapus `await` tidak menghilangkan
-      // penanganan error apa pun.
-      void refetch();
+      await refetch();
       return { paymentId: result.payment_id };
     } catch (err) {
       console.error("Transaction failed:", err);
@@ -314,15 +407,6 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         .join(" + ");
 
       const receiptData: ReceiptData = {
-        // ── TAMBAHAN ── Sebelumnya field toko tidak dikirim sama sekali, jadi
-        // struk selalu memakai fallback hardcode di printLogic.ts, tidak
-        // peduli apa pun yang diisi di Pengaturan > Toko. `posSettings` di
-        // atas sudah live-reload lewat useSettings(), jadi ini otomatis ikut
-        // setiap kali admin/supervisor menyimpan Pengaturan Toko.
-        storeName: posSettings.namaToko,
-        storeAddress: posSettings.alamat,
-        storePhone: posSettings.telepon,
-        footerText: posSettings.footerStruk,
         receiptNo: result.receipt_no,
         cashierName: user?.full_name ?? user?.email ?? null,
         customerName: extra?.customerName,
@@ -340,22 +424,15 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         method: methodLabel,
       };
 
-      if (extra?.printFormat === "nota") {
-        printA6Nota(
-          receiptData,
-          (posSettings.paperNota as "A6" | "A5") ?? "A6",
-        );
-      } else {
-        printThermalReceipt(receiptData);
-      }
+      // ── KOREKSI (revisi layar sukses) ── Sama seperti handleConfirmPayment
+      // di atas: cetak tidak lagi otomatis, hanya simpan format-nya.
+      setLastPrintFormat(extra?.printFormat ?? "thermal");
 
       setLastReceipt(receiptData);
       setLastCustomerPhone(extra?.customerPhone ?? null);
 
       setCart(clearCart());
-      // ── KOREKSI ── Sama seperti handleConfirmPayment di atas — lihat
-      // komentar di sana untuk alasan lengkapnya.
-      void refetch();
+      await refetch();
       return { payments: result.payments };
     } catch (err) {
       console.error("Split transaction failed:", err);
@@ -381,6 +458,21 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       );
     }
     return shareReceiptViaWhatsApp(lastReceipt, lastCustomerPhone);
+  };
+
+  // ── TAMBAHAN (revisi layar sukses) ── Dipanggil PaymentModal saat kasir
+  // menekan tombol "Cetak" di layar sukses. Ini SATU-SATUNYA tempat yang
+  // memicu dialog print browser sekarang (lihat catatan di
+  // handleConfirmPayment di atas) — sengaja diam-diam return kalau lastReceipt
+  // belum ada, karena tombolnya sendiri baru bisa muncul setelah ada transaksi
+  // sukses (prop onPrintReceipt hanya dikirim di JSX bawah bersamaan dengan itu).
+  const handlePrintReceipt = () => {
+    if (!lastReceipt) return;
+    if (lastPrintFormat === "nota") {
+      printA6Nota(lastReceipt, (posSettings.paperNota as "A6" | "A5") ?? "A6");
+    } else {
+      printThermalReceipt(lastReceipt);
+    }
   };
 
   // ── TAMBAHAN (T-11 bagian 1) ── Handler Hold Order.
@@ -899,6 +991,14 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         // jadi tombolnya baru bisa terlihat/dipakai mulai dari baris ini.
         onConfirmSplitPayment={handleConfirmSplitPayment}
         onSendWhatsApp={handleSendWhatsApp}
+        // ── TAMBAHAN (revisi layar sukses) ── Preview struk + cetak manual di
+        // layar sukses. `lastReceipt` baru terisi setelah transaksi sukses,
+        // jadi selama belum ada transaksi kedua prop ini otomatis undefined/null
+        // dan PaymentModal menyembunyikan kotak preview & tombol "Cetak".
+        receiptPreview={
+          lastReceipt ? <ReceiptPreview data={lastReceipt} /> : null
+        }
+        onPrintReceipt={lastReceipt ? handlePrintReceipt : undefined}
       />
 
       {/* ── TAMBAHAN (T-11 bagian 1) ── Modal konfirmasi "Tunda". */}
