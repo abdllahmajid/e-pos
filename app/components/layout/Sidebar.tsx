@@ -24,6 +24,8 @@ import {
   Settings,
   Bell,
   BellOff,
+  Sun,
+  Moon,
   Loader2,
   LogOut,
   type LucideIcon,
@@ -34,6 +36,14 @@ import { useAuth, type UserRole } from "@/hooks/useAuth";
 // admin-only, jadi tombolnya harus terlihat SEMUA role, bukan di
 // PengaturanModule.tsx (yang admin+supervisor only).
 import { useFcmToken } from "@/hooks/useFcmToken";
+// ── TAMBAHAN (dark mode toggle, sidebar) ── Sama alasannya dengan
+// useFcmToken di atas: preferensi PER-DEVICE, bukan pengaturan toko, jadi
+// tombolnya sengaja ditaruh di sini (footer Sidebar), BUKAN di
+// PengaturanModule.tsx (admin/supervisor only) — supaya semua role kasir
+// bisa mengatur tampilan device yang sedang mereka pakai sendiri, kapan
+// saja, tanpa perlu izin admin. Lihat catatan lengkap di
+// hooks/useThemePreference.ts.
+import { useThemePreference } from "@/hooks/useThemePreference";
 
 export interface SidebarMenuItem {
   key: string;
@@ -266,6 +276,31 @@ function NotificationStatus() {
   );
 }
 
+// ── TAMBAHAN (dark mode toggle, sidebar) ── Toggle terang/gelap, ditaruh di
+// footer Sidebar (bukan Pengaturan) atas permintaan langsung — preferensi
+// ini per-device, dibaca/ditulis lewat hooks/useThemePreference.ts
+// (localStorage), BUKAN lewat hooks/useSettings.ts (tabel `settings`
+// Supabase yang tulisnya admin-only, lihat catatan lengkap di hook itu).
+function ThemeToggle() {
+  const { theme, toggleTheme } = useThemePreference();
+  const isDark = theme === "dark";
+
+  return (
+    <button
+      type="button"
+      onClick={toggleTheme}
+      className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-zinc-600 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+    >
+      {isDark ? (
+        <Sun className="h-3.5 w-3.5" />
+      ) : (
+        <Moon className="h-3.5 w-3.5" />
+      )}
+      {isDark ? "Mode Terang" : "Mode Gelap"}
+    </button>
+  );
+}
+
 // ── TAMBAHAN (logout) ── Label role untuk ditampilkan di footer Sidebar.
 const ROLE_LABELS: Record<UserRole, string> = {
   admin: "Admin",
@@ -352,6 +387,8 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
       {/* ── TAMBAHAN (T-12) ── Footer notifikasi, di luar area scroll di atas
           supaya selalu terlihat. */}
       <div className="border-t border-zinc-200 p-2 dark:border-zinc-800">
+        {/* ── TAMBAHAN (dark mode toggle, sidebar) ── */}
+        <ThemeToggle />
         <NotificationStatus />
 
         {/* ── TAMBAHAN (logout) ── Identitas user + tombol Keluar. */}

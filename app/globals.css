@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* ── TAMBAHAN (dark mode toggle, sidebar) ── Default Tailwind v4 tanpa baris
+   ini: SEMUA class `dark:` di seluruh komponen (22 file, sudah lama dipakai)
+   otomatis ikut `prefers-color-scheme` OS/browser kasir — tidak bisa
+   dikontrol dari aplikasi sama sekali. Baris ini mengganti strateginya jadi
+   berbasis CLASS: `dark:` baru aktif kalau ada elemen leluhur (di sini:
+   <html>) yang punya class "dark" — persis yang ditempel/dilepas oleh
+   hooks/useThemePreference.ts saat kasir menekan tombol di Sidebar.
+   Tidak ada satu pun class `dark:` yang sudah ada di komponen manapun yang
+   perlu diubah — semuanya otomatis ikut strategi baru ini. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   /* --- WARNA UTAMA LCO (BRAND) --- */
   --color-lco-teal: #49bfb4;

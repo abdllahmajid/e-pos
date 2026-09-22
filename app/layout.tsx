@@ -53,7 +53,32 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       // teks UI aplikasi ini yang memang Bahasa Indonesia.
       lang="id"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      // ── TAMBAHAN (dark mode toggle, sidebar) ── Script inline di bawah
+      // menempelkan class "dark" ke elemen INI secara langsung ke DOM,
+      // SEBELUM React sempat hydrate — HTML yang dirender server tidak
+      // (dan tidak bisa) tahu preferensi tema device ini (tersimpan di
+      // localStorage, cuma ada di browser). Tanpa suppressHydrationWarning,
+      // React akan mencatat "mismatch" pada atribut class <html> ini dan
+      // menampilkan warning di console (perilaku ini SENGAJA, aman —
+      // pola yang sama dipakai library tema populer seperti next-themes).
+      suppressHydrationWarning
     >
+      <head>
+        {/* ── TAMBAHAN (dark mode toggle, sidebar) ── Skrip sinkron kecil,
+            jalan SEBELUM konten <body> sempat ter-paint, supaya kalau kasir
+            sebelumnya memilih mode gelap, layar TIDAK sempat "kedip" terang
+            dulu baru berubah gelap. Preferensi ini PER-DEVICE (localStorage),
+            bukan pengaturan toko dari hooks/useSettings.ts — lihat catatan
+            lengkap di hooks/useThemePreference.ts kenapa keduanya sengaja
+            dipisah. Key ("lco-pos-theme") harus PERSIS SAMA dengan STORAGE_KEY
+            di hook itu. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var t=window.localStorage.getItem('lco-pos-theme');if(t==='dark'){document.documentElement.classList.add('dark');}}catch(e){}})();",
+          }}
+        />
+      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );
