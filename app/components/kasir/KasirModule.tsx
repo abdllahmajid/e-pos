@@ -197,6 +197,15 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       });
 
       const receiptData: ReceiptData = {
+        // ── TAMBAHAN ── Sebelumnya field toko tidak dikirim sama sekali, jadi
+        // struk selalu memakai fallback hardcode di printLogic.ts, tidak
+        // peduli apa pun yang diisi di Pengaturan > Toko. `posSettings` di
+        // atas sudah live-reload lewat useSettings(), jadi ini otomatis ikut
+        // setiap kali admin/supervisor menyimpan Pengaturan Toko.
+        storeName: posSettings.namaToko,
+        storeAddress: posSettings.alamat,
+        storePhone: posSettings.telepon,
+        footerText: posSettings.footerStruk,
         receiptNo: result.receipt_no,
         cashierName: user?.full_name ?? user?.email ?? null,
         customerName: extra?.customerName,
@@ -231,7 +240,23 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       setLastCustomerPhone(extra?.customerPhone ?? null);
 
       setCart(clearCart());
-      await refetch();
+      // ── KOREKSI ── Sebelumnya `await refetch()` di sini — refetch produk
+      // (network call ke Supabase, bisa 100-800ms) menunda `return` di bawah,
+      // yang menunda PaymentModal.tsx memanggil `setIsSuccess(true)`. Kalau
+      // penundaan itu lebih lama dari 250ms (jeda internal printThermalReceipt/
+      // printA6Nota sebelum window.print() dipanggil — lihat printLogic.ts),
+      // dialog cetak Chrome muncul DULUAN dan MEMBEKUKAN javascript halaman ini
+      // selama dialog terbuka (perilaku bawaan browser, bukan bug di sini).
+      // Kasir jadi hanya melihat dialog cetak, layar "Pembayaran Berhasil"
+      // baru sempat tampil setelah dialog ditutup — sering terlewat/dikira
+      // tidak pernah muncul. refetch() di sini HANYA me-refresh angka stok di
+      // katalog Kasir, bukan bagian transaksi (transaksi sudah tersimpan lewat
+      // createTransaction() di atas) — aman dijalankan di latar belakang tanpa
+      // ditunggu. Errornya sendiri tidak pernah terlempar ke sini pun (lihat
+      // hooks/useProducts.ts: fetchProducts menangani error-nya sendiri lewat
+      // setError, tidak throw), jadi menghapus `await` tidak menghilangkan
+      // penanganan error apa pun.
+      void refetch();
       return { paymentId: result.payment_id };
     } catch (err) {
       console.error("Transaction failed:", err);
@@ -289,6 +314,15 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         .join(" + ");
 
       const receiptData: ReceiptData = {
+        // ── TAMBAHAN ── Sebelumnya field toko tidak dikirim sama sekali, jadi
+        // struk selalu memakai fallback hardcode di printLogic.ts, tidak
+        // peduli apa pun yang diisi di Pengaturan > Toko. `posSettings` di
+        // atas sudah live-reload lewat useSettings(), jadi ini otomatis ikut
+        // setiap kali admin/supervisor menyimpan Pengaturan Toko.
+        storeName: posSettings.namaToko,
+        storeAddress: posSettings.alamat,
+        storePhone: posSettings.telepon,
+        footerText: posSettings.footerStruk,
         receiptNo: result.receipt_no,
         cashierName: user?.full_name ?? user?.email ?? null,
         customerName: extra?.customerName,
@@ -319,7 +353,9 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       setLastCustomerPhone(extra?.customerPhone ?? null);
 
       setCart(clearCart());
-      await refetch();
+      // ── KOREKSI ── Sama seperti handleConfirmPayment di atas — lihat
+      // komentar di sana untuk alasan lengkapnya.
+      void refetch();
       return { payments: result.payments };
     } catch (err) {
       console.error("Split transaction failed:", err);

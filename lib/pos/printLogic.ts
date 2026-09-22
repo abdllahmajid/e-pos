@@ -17,6 +17,21 @@ export interface ReceiptItem {
 }
 
 export interface ReceiptData {
+  // ── TAMBAHAN ── Sebelum ini, nama toko & footer di-hardcode ("Langitan.co",
+  // "Terima kasih atas kunjungan Anda", dst) di 3 tempat berbeda di file ini,
+  // jadi Pengaturan > Toko (hooks/useSettings.ts: namaToko/alamat/telepon/
+  // footerStruk) TIDAK PERNAH terlihat efeknya di struk/nota/gambar WA. Field
+  // di bawah ini yang menggantikannya — semua opsional (`?`) dengan fallback
+  // di setiap fungsi cetak, supaya pemanggil lama yang belum dioper (kalau
+  // ada) tidak pernah gagal, hanya menampilkan default lama.
+  /** Dari `settings.namaToko`. Kosong/undefined -> fallback "Langitan.co". */
+  storeName?: string;
+  /** Dari `settings.alamat`. Kosong/undefined -> baris alamat tidak dicetak. */
+  storeAddress?: string;
+  /** Dari `settings.telepon`. Kosong/undefined -> baris telepon tidak dicetak. */
+  storePhone?: string;
+  /** Dari `settings.footerStruk`. Kosong/undefined -> fallback "Terima kasih atas kunjungan Anda". */
+  footerText?: string;
   /** Nomor struk asli, mis. LCO-STR/26/09/000001. Wajib — sebelumnya tidak pernah ditampilkan. */
   receiptNo: string;
   /** ISO datetime transaksi. Kalau tidak dikirim (transaksi baru), pakai waktu sekarang. */
@@ -123,8 +138,9 @@ export const printThermalReceipt = (data: ReceiptData) => {
       </head>
       <body>
         ${data.isReprint ? `<div class="reprint-badge">*** CETAK ULANG ***</div>` : ""}
-        <div class="text-center font-bold" style="font-size: 16px;">Langitan.co</div>
-        <div class="text-center">Store &amp; Merchandise</div>
+        <div class="text-center font-bold" style="font-size: 16px;">${escapeHtml(data.storeName || "Langitan.co")}</div>
+        ${data.storeAddress ? `<div class="text-center">${escapeHtml(data.storeAddress)}</div>` : ""}
+        ${data.storePhone ? `<div class="text-center">${escapeHtml(data.storePhone)}</div>` : ""}
         <div class="divider"></div>
 
         <table>
@@ -186,8 +202,7 @@ export const printThermalReceipt = (data: ReceiptData) => {
         </table>
 
         <div class="divider"></div>
-        <div class="text-center">Terima kasih atas kunjungan Anda</div>
-        <div class="text-center">lco-store.com</div>
+        <div class="text-center">${escapeHtml(data.footerText || "Terima kasih atas kunjungan Anda")}</div>
       </body>
     </html>
   `;
@@ -279,8 +294,9 @@ export const printA6Nota = (data: ReceiptData, paperSize: "A6" | "A5" = "A6") =>
         ${data.isReprint ? `<div class="reprint-badge">SALINAN / CETAK ULANG</div>` : ""}
         
         <div class="header">
-          <h1>LANGITAN.CO</h1>
-          <p>Store &amp; Merchandise</p>
+          <h1>${escapeHtml((data.storeName || "Langitan.co").toUpperCase())}</h1>
+          ${data.storeAddress ? `<p>${escapeHtml(data.storeAddress)}</p>` : ""}
+          ${data.storePhone ? `<p>${escapeHtml(data.storePhone)}</p>` : ""}
         </div>
 
         <table class="info-table">
@@ -341,7 +357,7 @@ export const printA6Nota = (data: ReceiptData, paperSize: "A6" | "A5" = "A6") =>
         </table>
 
         <div class="footer">
-          <p>Terima kasih atas kunjungan Anda. Barang yang sudah dibeli tidak dapat ditukar/dikembalikan kecuali ada perjanjian.<br/><strong>lco-store.com</strong></p>
+          <p>${escapeHtml(data.footerText || "Terima kasih atas kunjungan Anda")}</p>
         </div>
       </body>
     </html>
@@ -459,8 +475,9 @@ function buildShareReceiptElement(data: ReceiptData): HTMLDivElement {
           ? `<div style="text-align:center;font-weight:bold;border:1px dashed #18181b;padding:4px 0;margin-bottom:10px;">*** CETAK ULANG ***</div>`
           : ""
       }
-      <div style="text-align:center;font-weight:bold;font-size:20px;letter-spacing:0.5px;">LANGITAN.CO</div>
-      <div style="text-align:center;font-size:12px;color:#52525b;margin-bottom:14px;">Store &amp; Merchandise</div>
+      <div style="text-align:center;font-weight:bold;font-size:20px;letter-spacing:0.5px;">${escapeHtml((data.storeName || "Langitan.co").toUpperCase())}</div>
+      ${data.storeAddress ? `<div style="text-align:center;font-size:12px;color:#52525b;">${escapeHtml(data.storeAddress)}</div>` : ""}
+      ${data.storePhone ? `<div style="text-align:center;font-size:12px;color:#52525b;margin-bottom:14px;">${escapeHtml(data.storePhone)}</div>` : ""}
       <div style="border-top:1px dashed #a1a1aa;margin:10px 0;"></div>
       <table style="width:100%;font-size:13px;border-collapse:collapse;">
         <tr><td style="padding:2px 0;">No. Struk</td><td style="text-align:right;">${escapeHtml(data.receiptNo)}</td></tr>
@@ -485,8 +502,7 @@ function buildShareReceiptElement(data: ReceiptData): HTMLDivElement {
         <tr><td style="padding:2px 0;">Kembali</td><td style="text-align:right;">${formatMoney(data.changeAmount)}</td></tr>
       </table>
       <div style="border-top:1px dashed #a1a1aa;margin:10px 0;"></div>
-      <div style="text-align:center;font-size:12px;color:#52525b;">Terima kasih atas kunjungan Anda</div>
-      <div style="text-align:center;font-size:12px;font-weight:bold;">lco-store.com</div>
+      <div style="text-align:center;font-size:12px;color:#52525b;">${escapeHtml(data.footerText || "Terima kasih atas kunjungan Anda")}</div>
     </div>
   `;
 
@@ -542,7 +558,11 @@ export async function shareReceiptViaWhatsApp(
   const safeReceiptNo = data.receiptNo.replace(/[\\/:*?"<>|]/g, "-");
   const fileName = `Struk-${safeReceiptNo}.jpg`;
   const file = new File([blob], fileName, { type: "image/jpeg" });
-  const caption = `Struk pembelian Langitan.co No. ${data.receiptNo}. Terima kasih atas kunjungan Anda!`;
+  // ── TAMBAHAN ── Sebelumnya "Langitan.co" tetap di sini juga, terpisah dari
+  // 3 tempat lain di file ini yang sudah diperbaiki — caption pesan WA ini
+  // tidak ikut ke gambar struk (`generateReceiptImage`), jadi harus dibetulkan
+  // sendiri di sini.
+  const caption = `Struk pembelian ${data.storeName || "Langitan.co"} No. ${data.receiptNo}. ${data.footerText || "Terima kasih atas kunjungan Anda"}!`;
 
   // `canShare`/`share` dengan dukungan `files` belum ada di semua lib.dom.d.ts
   // versi TS lama — dicek via optional chaining + type guard tipis di sini,

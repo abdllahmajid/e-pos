@@ -76,6 +76,56 @@ Dikerjakan agent sesi ini:
    HP tidak bisa navigasi. Perlu keputusan pemilik: tambah menu mobile (hamburger)
    atau cukup dinyatakan tidak didukung.
 
+6. **Bug ditemukan pemilik project: Pengaturan > Toko (nama, alamat, telepon,
+   footer struk) TIDAK PERNAH muncul di struk/nota/gambar WA.** Akar masalah:
+   `lib/pos/printLogic.ts` — `printThermalReceipt`, `printA6Nota`, dan
+   `buildShareReceiptElement` (gambar untuk kirim WA) semuanya hardcode teks
+   tetap ("Langitan.co", "Store & Merchandise", "Terima kasih atas kunjungan
+   Anda", "lco-store.com") di 4 tempat total (termasuk caption pesan WA di
+   `shareReceiptViaWhatsApp`). `useSettings.ts` sendiri SUDAH BENAR (baca/tulis
+   `settings.nama_toko`/`alamat`/`telepon`/`footer_struk` jalan normal, dan
+   `PengaturanTokoTab.tsx` sudah punya field Footer Struk) — datanya tersimpan
+   di DB, hanya tidak pernah dioper ke fungsi cetak.
+
+   Perbaikan:
+   - `ReceiptData` (printLogic.ts) — 4 field baru: `storeName`, `storeAddress`,
+     `storePhone`, `footerText`. Semua opsional dengan fallback ke teks lama,
+     supaya pemanggil yang belum dioper tidak pernah gagal.
+   - Keempat tempat hardcode di atas diganti memakai field ini.
+   - `KasirModule.tsx` (2 titik pembuatan `receiptData`) dan
+     `TransactionDetailModal.tsx` (`buildReceiptData`, dipakai baik untuk cetak
+     ulang maupun kirim WA) — sekarang mengisi ke-4 field dari `posSettings`
+     (`useSettings()`, sudah ter-import di kedua file, tidak perlu hook baru).
+
+   **Perubahan perilaku yang perlu diketahui:**
+   - Nota A6/A5 SEBELUMNYA punya kalimat tambahan hardcode "Barang yang sudah
+     dibeli tidak dapat ditukar/dikembalikan kecuali ada perjanjian." di footer,
+     terpisah dari kalimat "Terima kasih..." — kalimat kebijakan itu TIDAK ada
+     di `settings.footer_struk` mana pun, jadi ikut terhapus saat footer
+     diganti dinamis. Kalau kebijakan retur itu masih diperlukan di nota,
+     pemilik perlu menambahkannya sendiri ke isi Footer Struk di Pengaturan >
+     Toko (field itu bebas teks, jadi bisa ditulis manual di sana), atau minta
+     agent membuat field terpisah "Catatan Nota" nanti.
+   - Baris "lco-store.com" (website) di ketiga tempat SEKARANG TIDAK MUNCUL LAGI
+     kalau tidak dimasukkan manual ke Footer Struk — tidak ada field khusus URL
+     web di Pengaturan Toko. Kalau perlu ditampilkan, tulis manual di Footer
+     Struk atau minta field baru.
+   - Cetak ulang (Riwayat Transaksi) memakai Pengaturan Toko yang berlaku
+     SEKARANG, bukan snapshot saat transaksi terjadi — kalau nama/alamat toko
+     diganti setelahnya, struk lama yang dicetak ulang ikut berubah. Sama
+     seperti cara `posSettings` dipakai di tempat lain di app ini (live, bukan
+     snapshot per transaksi).
+
+   **Belum diuji di browser** (agent tanpa `tsc`/jaringan; hanya diperiksa
+   manual — kurung/kurawal dicek seimbang di 3 file yang diubah). Uji:
+   1. Isi Pengaturan > Toko (nama, alamat, telepon, footer) lalu Simpan.
+   2. Transaksi baru di Kasir → cetak struk thermal DAN nota A6 → cek keempat
+      field tampil, bukan "Langitan.co"/teks lama.
+   3. Kirim struk ke WA → cek gambar & caption pesan ikut berubah.
+   4. Riwayat Transaksi → cetak ulang → cek juga ikut berubah.
+   5. Kosongkan salah satu field (mis. alamat) → baris itu harus hilang dari
+      struk, bukan tampil kosong/"undefined".
+
 Koreksi terhadap catatan lama:
 
 - `public/manifest.json` **TIDAK 0 byte** di zip terbaru (771 byte). Baris

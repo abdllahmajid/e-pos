@@ -149,6 +149,19 @@ export default function TransactionDetailModal({
     const primaryPayment = txDetail.payments[0];
 
     return {
+      // ── TAMBAHAN ── Sama seperti KasirModule.tsx: sebelumnya tidak dikirim,
+      // jadi cetak ulang dari Riwayat Transaksi juga selalu memakai fallback
+      // hardcode, bukan Pengaturan Toko yang berlaku SEKARANG. Catatan: kalau
+      // Pengaturan Toko diubah SETELAH transaksi lama terjadi, cetak ulang
+      // memakai footer/nama toko TERBARU, bukan yang berlaku saat transaksi
+      // dibuat — struk tidak menyimpan snapshot data toko per transaksi. Ini
+      // konsisten dengan cara `posSettings` dipakai di tempat lain (live,
+      // bukan snapshot), tapi sebutkan kalau toko ganti nama/alamat, struk
+      // lama yang dicetak ulang akan ikut berubah.
+      storeName: posSettings.namaToko,
+      storeAddress: posSettings.alamat,
+      storePhone: posSettings.telepon,
+      footerText: posSettings.footerStruk,
       receiptNo: txDetail.receipt_no,
       createdAt: txDetail.created_at,
       cashierName: txDetail.cashier_name,
