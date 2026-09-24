@@ -1,23 +1,33 @@
 // hooks/usePromoMedia.ts
-// ── TAMBAHAN ── Hook domain Layar Promosi TV (fitur di luar penomoran T-xx
-// PRD; langkah 2 dari 6, lihat PROGRESS.md sesi #20). Tabel `promo_media` +
-// bucket Storage `promo-media` dibuat migration 026.
+// ── KOREKSI ── Direvisi total (langkah 3, menggantikan rencana lama
+// PROGRESS.md sesi #20 yang cuma satu playlist global). Sekarang tiap media
+// milik SATU TV (`screen_id`, migration 027) — daftar TV-nya sendiri
+// dikelola `hooks/usePromoScreens.ts` (file terpisah, dibuat langkah 2).
 //
 // Isi file ini dua hal yang SENGAJA dipisah:
 //
-// 1. `usePromoMedia()` — hook untuk layar PENGELOLA (admin+supervisor):
-//    daftar semua media (termasuk nonaktif), tambah/upload, ubah judul/durasi,
-//    aktif/nonaktif, hapus, dan atur urutan.
-// 2. `fetchPlayablePromoMedia()` — fungsi biasa (BUKAN hook) untuk halaman
-//    PUBLIK `/tv`. Bukan hook karena pemutar punya siklus polling sendiri.
+// 1. `usePromoMedia(screenId)` — hook untuk layar PENGELOLA (admin+
+//    supervisor): daftar semua media MILIK SATU TV TERTENTU (termasuk
+//    nonaktif), tambah/upload, ubah judul/durasi, aktif/nonaktif, hapus,
+//    dan atur urutan. `screenId` WAJIB diisi (tidak ada mode "semua TV") —
+//    komponen pemanggil (PromoModule.tsx, langkah 4) harus me-remount hook
+//    ini tiap kali TV yang dipilih berganti, misalnya lewat prop `key`
+//    React (`key={screenId}` di komponen yang memanggil hook ini) — hook
+//    ini SENGAJA tidak memuat ulang sendiri kalau `screenId` berubah di
+//    tengah hidup komponen yang sama (pola sama seperti efek pemuatan
+//    awal di bawah: sekali jalan saat mount, lihat komentar lint-nya).
+// 2. `fetchScreenPlaylist(accessToken)` — fungsi biasa (BUKAN hook) untuk
+//    halaman PUBLIK `/tv/[access_token]`. Bukan hook karena pemutar punya
+//    siklus polling sendiri.
 //
-// ── PENTING untuk `fetchPlayablePromoMedia()` ── dipanggil sebagai `anon`
-// (TV tidak login). Migration 026 hanya memberi `anon` hak SELECT pada 7
-// kolom: id, title, media_type, file_url, duration_seconds, sort_order,
-// is_active. Konsekuensinya query di sana:
-//   - TIDAK BOLEH `select("*")`,
-//   - TIDAK BOLEH `.order("created_at")` (mengurutkan juga butuh hak baca
-//     kolom itu → "permission denied"). Pengurut kedua memakai `id`.
+// ── PENTING untuk `fetchScreenPlaylist()` ── dipanggil sebagai `anon` (TV
+// tidak login). Migration 027 MENCABUT semua hak SELECT langsung `anon` ke
+// tabel `promo_media` — satu-satunya jalan sekarang adalah RPC
+// `get_screen_playlist(p_token)` (`security definer`), yang otomatis
+// membatasi hasil ke media milik SATU TV (dicocokkan lewat token) dan
+// mengembalikan 0 baris kalau token salah ATAU TV-nya dinonaktifkan (dua
+// kasus itu SENGAJA tidak dibedakan pesannya, lihat header migration 027).
+// TIDAK ADA lagi query `.from("promo_media")` langsung di jalur ini.
 //
 // Aksi tulis (`addMedia`, `updateMedia`, `removeMedia`, `moveItem`)
 // mengembalikan `{ ok: true } | { ok: false; error }` — TIDAK melempar error
@@ -43,6 +53,7 @@ export type PromoMediaType = "image" | "video";
 
 export interface PromoMedia {
   id: string;
+  screen_id: string;
   title: string;
   media_type: PromoMediaType;
   file_url: string;
@@ -88,7 +99,7 @@ const MIME_INFO: Record<string, { type: PromoMediaType; ext: string }> = {
 };
 
 const ADMIN_COLUMNS =
-  "id, title, media_type, file_url, storage_path, file_name, file_size, duration_seconds, sort_order, is_active, created_by, created_at";
+  "id, screen_id, title, media_type, file_url, storage_path, file_name, file_size, duration_seconds, sort_order, is_active, created_by, created_at";
 
 // ── Helper ──────────────────────────────────────────────────────────────
 
@@ -120,22 +131,31 @@ function isValidDuration(value: number): boolean {
   );
 }
 
-// ── Untuk halaman publik /tv ────────────────────────────────────────────
+// ── Untuk halaman publik /tv/[access_token] ─────────────────────────────
 
 /**
- * Ambil playlist yang sedang aktif, berurutan. Dipakai `app/tv/page.tsx`
- * (langkah 5). MELEMPAR Error kalau gagal — pemutar yang memutuskan (biasanya
- * tetap memutar playlist lama daripada layar TV kosong karena sinyal putus
- * sebentar).
+ * Ambil playlist yang sedang aktif MILIK SATU TV, berurutan — dicocokkan
+ * lewat `accessToken` (bagian dari URL, migration 027). Dipakai
+ * `app/tv/[access_token]/page.tsx`. Satu-satunya panggilan ke RPC
+ * `get_screen_playlist` (`security definer`) — TIDAK ADA query
+ * `.from("promo_media")` di sini lagi, karena `anon` sudah tidak punya hak
+ * SELECT langsung ke tabel itu sejak migration 027.
+ *
+ * Token salah ATAU TV-nya dinonaktifkan sama-sama mengembalikan array
+ * kosong (bukan error) — RPC-nya memang sengaja tidak membedakan dua kasus
+ * itu (lihat header migration 027), supaya pemutar tidak bisa dipakai
+ * menebak-nebak token TV lain lewat beda respons.
+ *
+ * MELEMPAR Error hanya untuk kegagalan jaringan/RPC itu sendiri — pemutar
+ * yang memutuskan (biasanya tetap memutar playlist lama daripada layar TV
+ * kosong karena sinyal putus sebentar).
  */
-export async function fetchPlayablePromoMedia(): Promise<PlayablePromoMedia[]> {
-  const { data, error } = await supabase
-    .from("promo_media")
-    // Kolom disebut satu-satu — lihat catatan header soal hak `anon`.
-    .select("id, title, media_type, file_url, duration_seconds, sort_order")
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true })
-    .order("id", { ascending: true });
+export async function fetchScreenPlaylist(
+  accessToken: string,
+): Promise<PlayablePromoMedia[]> {
+  const { data, error } = await supabase.rpc("get_screen_playlist", {
+    p_token: accessToken,
+  });
 
   if (error) {
     throw new Error(error.message || "Gagal memuat media promosi.");
@@ -176,7 +196,11 @@ interface UsePromoMediaResult {
   moveItem: (id: string, direction: "up" | "down") => Promise<PromoActionResult>;
 }
 
-export function usePromoMedia(): UsePromoMediaResult {
+/**
+ * @param screenId TV yang sedang dikelola (wajib, lihat catatan header file
+ *   ini soal remount lewat `key={screenId}` kalau TV yang dipilih berganti).
+ */
+export function usePromoMedia(screenId: string): UsePromoMediaResult {
   const [items, setItems] = useState<PromoMedia[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -191,6 +215,7 @@ export function usePromoMedia(): UsePromoMediaResult {
     const { data, error: fetchError } = await supabase
       .from("promo_media")
       .select(ADMIN_COLUMNS)
+      .eq("screen_id", screenId)
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true });
 
@@ -207,7 +232,7 @@ export function usePromoMedia(): UsePromoMediaResult {
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load() hanya memakai setter state (stabil) dan client singleton; cukup dijalankan sekali saat mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load() menutup (closure) atas `screenId` prop, tapi SENGAJA cuma dijalankan sekali saat mount (bukan tiap `screenId` berubah) — lihat catatan header file: pemanggil wajib `key={screenId}` supaya ganti TV = remount komponen, bukan mengandalkan efek ini mendeteksi perubahan.
   }, []);
 
   async function refetch() {
@@ -310,12 +335,15 @@ export function usePromoMedia(): UsePromoMediaResult {
         .from(PROMO_BUCKET)
         .getPublicUrl(storagePath);
 
-      // Urutan: taruh di paling akhir. Ambil sort_order tertinggi langsung
-      // dari database (bukan dari state) supaya benar walau daftar di layar
-      // sudah basi — termasuk baris nonaktif, yang admin+supervisor bisa lihat.
+      // Urutan: taruh di paling akhir DI TV INI SAJA (`eq("screen_id", ...)`
+      // — tanpa ini, urutan media TV lain bisa ikut terhitung). Ambil
+      // sort_order tertinggi langsung dari database (bukan dari state)
+      // supaya benar walau daftar di layar sudah basi — termasuk baris
+      // nonaktif, yang admin+supervisor bisa lihat.
       const { data: lastRows } = await supabase
         .from("promo_media")
         .select("sort_order")
+        .eq("screen_id", screenId)
         .order("sort_order", { ascending: false })
         .limit(1);
       const nextSortOrder =
@@ -325,6 +353,7 @@ export function usePromoMedia(): UsePromoMediaResult {
       const { data: inserted, error: insertError } = await supabase
         .from("promo_media")
         .insert({
+          screen_id: screenId,
           title: cleanTitle,
           media_type: info.type,
           file_url: publicUrlData.publicUrl,

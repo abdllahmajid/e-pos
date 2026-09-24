@@ -1,33 +1,53 @@
 "use client";
 
 // app/components/promo/PromoModule.tsx
-// ── TAMBAHAN ── Layar pengelola Layar Promosi TV (fitur di luar penomoran
-// T-xx PRD; langkah 3 dari 6, lihat PROGRESS.md sesi #20). Admin+supervisor
-// mengunggah gambar/video, mengatur urutan, menayangkan/menyembunyikan, dan
-// menghapus media yang diputar halaman publik `/tv` (langkah 5).
+// ── KOREKSI ── Direvisi total (langkah 4, menggantikan rencana lama
+// PROGRESS.md sesi #20 yang cuma satu playlist global untuk semua TV).
+// Sekarang dua tingkat:
+//   1. Daftar TV (`ScreenListView`, dirender langsung di bawah) — tambah/
+//      ubah nama/aktif-nonaktif/hapus TV, tiap baris ada link + kode QR
+//      sendiri (`ScreenLinkModal`/`ScreenQrCode`). Data dari
+//      `hooks/usePromoScreens.ts` (langkah 2).
+//   2. Kelola media SATU TV (`ScreenMediaManager`) — dibuka dengan klik
+//      salah satu TV. Isinya hampir seluruhnya kode lama sesi #20 (upload,
+//      urutan, aktif/nonaktif, hapus media), cuma sekarang discope ke
+//      `screen.id` lewat `usePromoMedia(screen.id)` (langkah 3). Dirender
+//      dengan `key={screen.id}` supaya berpindah TV = remount bersih
+//      (lihat catatan `usePromoMedia` soal ini).
 //
-// Semua logika data ada di hooks/usePromoMedia.ts — file ini murni tampilan +
-// state form/dialog. Siapa boleh menulis ditegakkan RLS di database
-// (migration 026); gate di bawah cuma UX supaya role lain tidak melihat
-// layar yang pasti gagal. Pola gate SAMA dengan PengaturanModule.tsx
-// (cabang isAuthLoading dulu, baru !canAccess, keduanya SETELAH semua hook
-// dipanggil sesuai Rules of Hooks) — supaya tidak mengulang bug "kedipan".
+// Gate akses SAMA seperti sebelumnya: pola gate SAMA dengan
+// PengaturanModule.tsx (cabang isAuthLoading dulu, baru !canAccess,
+// keduanya SETELAH semua hook dipanggil sesuai Rules of Hooks).
 //
-// Wiring menu (Sidebar.tsx + page.tsx) ada di langkah 4: sampai itu selesai,
-// modul ini belum bisa dibuka dari aplikasi.
+// ── Dependency baru: `qrcode` (+ `@types/qrcode`) ──
+// Menyimpang dari Aturan Main §18.8 ("jangan tambah dependency tanpa
+// alasan di PRD") — tapi wajar di sini: seluruh fitur TV memang di luar
+// PRD, dan `html5-qrcode` yang sudah ada di package.json itu library untuk
+// MEMBACA QR (kamera), bukan MEMBUATNYA. Sudah dicoba `npm install` +
+// `npm run build` sesi ini dan hijau (lihat PROGRESS.md).
+//
+// Wiring menu (Sidebar.tsx + page.tsx) TIDAK berubah dari sesi #20 — menu
+// "Layar Promosi" tetap merender komponen default export file ini, cuma
+// sekarang isinya dua tingkat seperti di atas.
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import QRCode from "qrcode";
 import {
   AlertCircle,
+  ArrowLeft,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Check,
+  Copy,
   Eye,
   EyeOff,
   Loader2,
+  Monitor,
   Pencil,
   PlayCircle,
   Plus,
+  QrCode,
   ShieldAlert,
   Trash2,
   Upload,
@@ -46,6 +66,12 @@ import {
   type PromoMedia,
   type UpdatePromoMediaInput,
 } from "@/hooks/usePromoMedia";
+import {
+  buildScreenUrl,
+  usePromoScreens,
+  type PromoScreen,
+  type PromoScreenActionResult,
+} from "@/hooks/usePromoScreens";
 
 // ── Helper tampilan ─────────────────────────────────────────────────────
 
@@ -68,12 +94,261 @@ const ICON_BUTTON_CLASS = `${ICON_BUTTON_BASE} text-zinc-600 hover:bg-zinc-50 ho
 
 const ICON_BUTTON_DANGER_CLASS = `${ICON_BUTTON_BASE} text-zinc-600 hover:bg-lco-coral/10 hover:text-lco-coral dark:text-zinc-400 dark:hover:bg-lco-coral/10 dark:hover:text-lco-coral`;
 
-// ── Modal tambah / ubah ─────────────────────────────────────────────────
+// ── Kode QR ─────────────────────────────────────────────────────────────
 
-type FormTarget = { mode: "add" } | { mode: "edit"; item: PromoMedia };
+/**
+ * Kode QR dibuat di browser (client-side, `QRCode.toDataURL`) — tidak
+ * pernah mengirim `url` (yang mengandung access_token) ke layanan pihak
+ * ketiga manapun, beda dari pola "tempel ke API QR publik" yang umum
+ * dipakai tapi bocor token ke pihak luar.
+ */
+function ScreenQrCode({ url, size = 96 }: { url: string; size?: number }) {
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDataUrl(null);
+    setFailed(false);
+
+    QRCode.toDataURL(url, { width: size, margin: 1 })
+      .then((result) => {
+        if (!cancelled) setDataUrl(result);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [url, size]);
+
+  if (failed) {
+    return (
+      <div
+        style={{ width: size, height: size }}
+        className="flex shrink-0 items-center justify-center rounded-md border border-dashed border-zinc-300 text-center text-[10px] text-zinc-400 dark:border-zinc-700"
+      >
+        Gagal buat QR
+      </div>
+    );
+  }
+
+  if (!dataUrl) {
+    return (
+      <div
+        style={{ width: size, height: size }}
+        className="flex shrink-0 items-center justify-center rounded-md border border-zinc-200 dark:border-zinc-800"
+      >
+        <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
+      </div>
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- data URL lokal (base64) dibuat di browser, bukan aset untuk dioptimasi next/image
+    <img
+      src={dataUrl}
+      alt="Kode QR alamat TV ini"
+      width={size}
+      height={size}
+      className="shrink-0 rounded-md border border-zinc-200 dark:border-zinc-800"
+    />
+  );
+}
+
+/** Modal QR besar + link lengkap + tombol salin, dibuka dari daftar TV. */
+function ScreenLinkModal({
+  screen,
+  onClose,
+}: {
+  screen: PromoScreen;
+  onClose: () => void;
+}) {
+  const url = buildScreenUrl(screen.access_token);
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard API bisa ditolak (browser lama / bukan HTTPS) — diamkan,
+      // link teksnya masih bisa disalin manual lewat seleksi biasa.
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/30 p-4">
+      <div className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h3 className="min-w-0 truncate text-sm font-semibold">
+            Akses TV — {screen.name}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Tutup"
+            className="shrink-0 rounded-md p-1.5 text-zinc-500 transition-colors duration-150 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex justify-center">
+          <ScreenQrCode url={url} size={220} />
+        </div>
+
+        <p className="mt-4 break-all rounded-md border border-zinc-200 bg-zinc-50 p-2.5 font-mono text-xs text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
+          {url}
+        </p>
+
+        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+          Pindai kode QR dari Android box/tablet TV, atau salin link ini dan
+          buka langsung di browser TV lalu layar penuh. Alamat ini bisa dibuka
+          siapa pun tanpa login — jangan sebarkan ke luar kalau TV menampilkan
+          materi internal.
+        </p>
+
+        <button
+          type="button"
+          onClick={() => void handleCopy()}
+          className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+        >
+          {copied ? (
+            <Check className="h-4 w-4 text-lco-green" />
+          ) : (
+            <Copy className="h-4 w-4" />
+          )}
+          {copied ? "Tersalin!" : "Salin Link"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Modal tambah / ubah nama TV ─────────────────────────────────────────
+
+type ScreenFormTarget =
+  | { mode: "add" }
+  | { mode: "rename"; screen: PromoScreen };
+
+function ScreenFormModal({
+  target,
+  isBusy,
+  onClose,
+  onAdd,
+  onRename,
+  onSaved,
+}: {
+  target: ScreenFormTarget;
+  isBusy: boolean;
+  onClose: () => void;
+  onAdd: (name: string) => Promise<PromoScreenActionResult>;
+  onRename: (id: string, name: string) => Promise<PromoScreenActionResult>;
+  onSaved: (message: string) => void;
+}) {
+  const renameTarget = target.mode === "rename" ? target.screen : null;
+  const isRename = renameTarget !== null;
+
+  const [name, setName] = useState(renameTarget ? renameTarget.name : "");
+  const [formError, setFormError] = useState("");
+
+  async function handleSubmit() {
+    setFormError("");
+    if (!name.trim()) {
+      setFormError("Nama TV wajib diisi.");
+      return;
+    }
+
+    const result = renameTarget
+      ? await onRename(renameTarget.id, name)
+      : await onAdd(name);
+
+    if (!result.ok) {
+      setFormError(result.error);
+      return;
+    }
+    onSaved(isRename ? "Nama TV disimpan." : "TV baru ditambahkan.");
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/30 p-4">
+      <div className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+          <h3 className="text-sm font-semibold">
+            {isRename ? "Ubah Nama TV" : "Tambah TV"}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isBusy}
+            aria-label="Tutup"
+            className="rounded-md p-1.5 text-zinc-500 transition-colors duration-150 hover:bg-zinc-100 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-4 p-5">
+          <div>
+            <label className={LABEL_CLASS}>Nama TV</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              disabled={isBusy}
+              maxLength={80}
+              placeholder="Mis. TV Kasir Depan"
+              className={INPUT_CLASS}
+              autoFocus
+            />
+            <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+              Hanya penanda di daftar ini — tidak tampil di layar TV itu
+              sendiri.
+            </p>
+          </div>
+
+          {formError && (
+            <div className="flex items-start gap-2 border border-lco-coral/30 bg-white p-3 text-xs text-lco-coral dark:bg-zinc-950">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <p>{formError}</p>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-4 dark:border-zinc-800">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isBusy}
+            className="rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+          >
+            Batal
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSubmit()}
+            disabled={isBusy}
+            className="inline-flex items-center gap-2 rounded-md bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isBusy && <Loader2 className="h-4 w-4 animate-spin" />}
+            {isRename ? "Simpan" : "Tambah"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Modal tambah / ubah media (SAMA seperti sesi #20, tidak berubah) ────
+
+type MediaFormTarget = { mode: "add" } | { mode: "edit"; item: PromoMedia };
 
 interface MediaFormModalProps {
-  target: FormTarget;
+  target: MediaFormTarget;
   isBusy: boolean;
   onClose: () => void;
   onAdd: (input: AddPromoMediaInput) => Promise<PromoActionResult>;
@@ -84,9 +359,9 @@ interface MediaFormModalProps {
   onSaved: (message: string) => void;
 }
 
-// Dirender HANYA saat `target` ada (lihat PromoModule di bawah), jadi state
-// awalnya cukup diisi lewat useState initializer — tidak perlu useEffect
-// untuk mereset form tiap dibuka.
+// Dirender HANYA saat `target` ada (lihat ScreenMediaManager di bawah), jadi
+// state awalnya cukup diisi lewat useState initializer — tidak perlu
+// useEffect untuk mereset form tiap dibuka.
 function MediaFormModal({
   target,
   isBusy,
@@ -324,12 +599,19 @@ function MediaFormModal({
   );
 }
 
-// ── Modul utama ─────────────────────────────────────────────────────────
+// ── Tingkat 2: kelola media SATU TV ─────────────────────────────────────
+// Isi bawah ini hampir seluruhnya kode lama sesi #20 (upload, urutan,
+// aktif/nonaktif, hapus media) — cuma sekarang discope ke `screen.id` lewat
+// `usePromoMedia(screen.id)`, dan header diganti menampilkan info TV yang
+// sedang dikelola (bukan lagi alamat /tv global).
 
-export default function PromoModule() {
-  const { user, isLoading: isAuthLoading } = useAuth();
-  const canManage = user?.role === "admin" || user?.role === "supervisor";
-
+function ScreenMediaManager({
+  screen,
+  onBack,
+}: {
+  screen: PromoScreen;
+  onBack: () => void;
+}) {
   const {
     items,
     isLoading,
@@ -340,13 +622,14 @@ export default function PromoModule() {
     updateMedia,
     removeMedia,
     moveItem,
-  } = usePromoMedia();
+  } = usePromoMedia(screen.id);
 
-  const [formTarget, setFormTarget] = useState<FormTarget | null>(null);
+  const [formTarget, setFormTarget] = useState<MediaFormTarget | null>(null);
   const [deletingItem, setDeletingItem] = useState<PromoMedia | null>(null);
   const [deleteError, setDeleteError] = useState("");
   const [actionError, setActionError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [showLinkModal, setShowLinkModal] = useState(false);
 
   async function runAction(
     action: () => Promise<PromoActionResult>,
@@ -383,92 +666,70 @@ export default function PromoModule() {
     setSuccessMessage("Media dihapus.");
   }
 
-  if (isAuthLoading) {
-    return (
-      <div className="flex h-full items-center justify-center bg-zinc-100 dark:bg-zinc-950">
-        <div className="flex items-center gap-2 text-sm text-zinc-500">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Memuat...
-        </div>
-      </div>
-    );
-  }
-
-  if (!canManage) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center bg-zinc-100 p-6 text-center dark:bg-zinc-950">
-        <div className="mb-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-          <ShieldAlert className="h-6 w-6 text-lco-coral" />
-        </div>
-        <h3 className="text-sm font-semibold">Akses Ditolak</h3>
-        <p className="mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-          Layar Promosi hanya untuk admin dan supervisor.
-        </p>
-      </div>
-    );
-  }
-
-  // Modul ini dimuat lewat next/dynamic { ssr: false } (lihat app/page.tsx),
-  // jadi `window` selalu ada di sini.
-  const tvUrl = `${window.location.origin}/tv`;
+  const tvUrl = buildScreenUrl(screen.access_token);
   const activeCount = items.filter((item) => item.is_active).length;
 
   return (
     <section className="h-full overflow-y-auto bg-zinc-100 dark:bg-zinc-950">
       <div className="mx-auto max-w-5xl p-4 md:p-6">
+        <button
+          type="button"
+          onClick={onBack}
+          className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 transition-colors duration-150 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Daftar TV
+        </button>
+
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-              Layar Promosi
+          <div className="min-w-0">
+            <h2 className="truncate text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+              {screen.name}
             </h2>
             <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              Gambar dan video yang diputar berulang di TV toko.
+              Gambar dan video yang diputar berulang di TV ini.
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              setActionError("");
-              setSuccessMessage("");
-              setFormTarget({ mode: "add" });
-            }}
-            className="inline-flex items-center gap-2 rounded-md bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
-          >
-            <Plus className="h-4 w-4" />
-            Tambah Media
-          </button>
+          <div className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              onClick={() => setShowLinkModal(true)}
+              className="inline-flex items-center gap-2 rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+            >
+              <QrCode className="h-4 w-4" />
+              Link & QR
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setActionError("");
+                setSuccessMessage("");
+                setFormTarget({ mode: "add" });
+              }}
+              className="inline-flex items-center gap-2 rounded-md bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
+            >
+              <Plus className="h-4 w-4" />
+              Tambah Media
+            </button>
+          </div>
         </div>
 
-        {/* Petunjuk pemakaian + alamat TV */}
         <div className="mb-4 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-          <p className={LABEL_CLASS}>Alamat layar TV</p>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <a
-              href="/tv"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="break-all font-mono text-sm text-lco-green underline-offset-2 transition-colors duration-150 hover:underline dark:text-lco-teal"
-            >
-              {tvUrl}
-            </a>
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">
-              ← buka di browser TV / mini PC, lalu layar penuh
-            </span>
-          </div>
-          <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-zinc-500 dark:text-zinc-400">
+          <ul className="list-disc space-y-1 pl-5 text-xs text-zinc-500 dark:text-zinc-400">
             <li>
               Gambar tayang sesuai durasinya; video diputar sampai selesai,
               tanpa suara.
             </li>
             <li>
-              Perubahan di daftar ini muncul di TV dalam sekitar 1 menit tanpa
-              perlu memuat ulang.
+              Perubahan di daftar ini muncul di TV ini dalam sekitar 1 menit
+              tanpa perlu memuat ulang.
             </li>
             <li>
-              Alamat ini bisa dibuka siapa pun tanpa login. Hanya media yang
-              berstatus <span className="font-medium">Tayang</span> yang
-              terlihat — jangan unggah materi internal.
+              Media di sini HANYA tayang di{" "}
+              <span className="font-medium">{screen.name}</span> — TV lain punya
+              daftarnya sendiri. Klik &quot;Link &amp; QR&quot; untuk alamat TV
+              ini.
             </li>
           </ul>
         </div>
@@ -510,7 +771,7 @@ export default function PromoModule() {
             <p className="text-sm font-medium">Belum ada media</p>
             <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
               Klik &quot;Tambah Media&quot; untuk mengunggah gambar atau video
-              pertama. Selama kosong, TV menampilkan layar tunggu.
+              pertama. Selama kosong, TV ini menampilkan layar tunggu.
             </p>
           </div>
         ) : (
@@ -519,7 +780,7 @@ export default function PromoModule() {
               <span className="font-mono tabular-nums">{items.length}</span>{" "}
               media ·{" "}
               <span className="font-mono tabular-nums">{activeCount}</span>{" "}
-              tayang di TV
+              tayang di TV ini
             </p>
 
             <ul className="space-y-2">
@@ -688,9 +949,16 @@ export default function PromoModule() {
         />
       )}
 
+      {showLinkModal && (
+        <ScreenLinkModal
+          screen={screen}
+          onClose={() => setShowLinkModal(false)}
+        />
+      )}
+
       {/* Konfirmasi hapus — overlay & radius disamakan dengan modal Hapus
           produk di ProdukModule.tsx. Beda penting: di sini hapus PERMANEN
-          (tidak ada Sampah untuk media promosi, lihat migration 026). */}
+          (tidak ada Sampah untuk media promosi, lihat migration 026/027). */}
       {deletingItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/30 p-4">
           <div className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
@@ -730,6 +998,348 @@ export default function PromoModule() {
               <button
                 type="button"
                 onClick={() => void handleConfirmDelete()}
+                disabled={isMutating}
+                className="inline-flex items-center gap-2 rounded-md bg-lco-coral px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-coral/90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isMutating && <Loader2 className="h-4 w-4 animate-spin" />}
+                Ya, Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── Tingkat 1 + gate: daftar TV ──────────────────────────────────────────
+
+export default function PromoModule() {
+  const { user, isLoading: isAuthLoading } = useAuth();
+  const canManage = user?.role === "admin" || user?.role === "supervisor";
+
+  const {
+    screens,
+    isLoading,
+    error,
+    isMutating,
+    refetch,
+    addScreen,
+    renameScreen,
+    setScreenActive,
+    removeScreen,
+  } = usePromoScreens();
+
+  const [selectedScreen, setSelectedScreen] = useState<PromoScreen | null>(
+    null,
+  );
+  const [screenFormTarget, setScreenFormTarget] =
+    useState<ScreenFormTarget | null>(null);
+  const [linkModalScreen, setLinkModalScreen] = useState<PromoScreen | null>(
+    null,
+  );
+  const [deletingScreen, setDeletingScreen] = useState<PromoScreen | null>(
+    null,
+  );
+  const [deleteError, setDeleteError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+
+  async function runAction(action: () => Promise<PromoScreenActionResult>) {
+    setActionError("");
+    setSuccessMessage("");
+    const result = await action();
+    if (!result.ok) {
+      setActionError(result.error);
+    }
+  }
+
+  function handleScreenFormSaved(message: string) {
+    setScreenFormTarget(null);
+    setActionError("");
+    setSuccessMessage(message);
+  }
+
+  async function handleConfirmDeleteScreen() {
+    if (!deletingScreen) return;
+    setDeleteError("");
+
+    const result = await removeScreen(deletingScreen.id);
+    if (!result.ok) {
+      setDeleteError(result.error);
+      return;
+    }
+
+    setDeletingScreen(null);
+    setActionError("");
+    setSuccessMessage("TV dihapus.");
+  }
+
+  if (isAuthLoading) {
+    return (
+      <div className="flex h-full items-center justify-center bg-zinc-100 dark:bg-zinc-950">
+        <div className="flex items-center gap-2 text-sm text-zinc-500">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Memuat...
+        </div>
+      </div>
+    );
+  }
+
+  if (!canManage) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center bg-zinc-100 p-6 text-center dark:bg-zinc-950">
+        <div className="mb-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+          <ShieldAlert className="h-6 w-6 text-lco-coral" />
+        </div>
+        <h3 className="text-sm font-semibold">Akses Ditolak</h3>
+        <p className="mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
+          Layar Promosi hanya untuk admin dan supervisor.
+        </p>
+      </div>
+    );
+  }
+
+  // Sesuai Rules of Hooks: semua hook di atas SELALU dipanggil dulu, baru
+  // di sini boleh render kondisional. `key={selectedScreen.id}` supaya
+  // ganti TV = remount ScreenMediaManager bersih (lihat catatan
+  // `usePromoMedia` soal ini di hooks/usePromoMedia.ts).
+  if (selectedScreen) {
+    return (
+      <ScreenMediaManager
+        key={selectedScreen.id}
+        screen={selectedScreen}
+        onBack={() => setSelectedScreen(null)}
+      />
+    );
+  }
+
+  return (
+    <section className="h-full overflow-y-auto bg-zinc-100 dark:bg-zinc-950">
+      <div className="mx-auto max-w-5xl p-4 md:p-6">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+              Layar Promosi
+            </h2>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              TV yang menampilkan promosi toko — tiap TV punya link akses dan
+              daftar media sendiri.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActionError("");
+              setSuccessMessage("");
+              setScreenFormTarget({ mode: "add" });
+            }}
+            className="inline-flex items-center gap-2 rounded-md bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
+          >
+            <Plus className="h-4 w-4" />
+            Tambah TV
+          </button>
+        </div>
+
+        {successMessage && (
+          <div className="mb-3 flex items-start gap-2 border border-lco-teal/40 bg-white p-3 text-xs text-lco-green dark:bg-zinc-950 dark:text-lco-teal">
+            <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <p>{successMessage}</p>
+          </div>
+        )}
+
+        {actionError && (
+          <div className="mb-3 flex items-start gap-2 border border-lco-coral/30 bg-white p-3 text-xs text-lco-coral dark:bg-zinc-950">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <p>{actionError}</p>
+          </div>
+        )}
+
+        {isLoading ? (
+          <div className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white p-10 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Memuat daftar TV...
+          </div>
+        ) : error ? (
+          <div className="rounded-xl border border-lco-coral/30 bg-white p-6 text-center dark:bg-zinc-950">
+            <AlertCircle className="mx-auto mb-2 h-5 w-5 text-lco-coral" />
+            <p className="text-sm text-lco-coral">{error}</p>
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              className="mt-3 rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+            >
+              Coba lagi
+            </button>
+          </div>
+        ) : screens.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-zinc-300 bg-white p-10 text-center dark:border-zinc-700 dark:bg-zinc-950">
+            <Monitor className="mx-auto mb-2 h-6 w-6 text-zinc-400" />
+            <p className="text-sm font-medium">Belum ada TV</p>
+            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+              Klik &quot;Tambah TV&quot; untuk mendaftarkan TV pertama, lalu
+              kelola isinya dan buka link/QR-nya di perangkat TV.
+            </p>
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {screens.map((screen) => (
+              <li
+                key={screen.id}
+                className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950"
+              >
+                <div
+                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-zinc-200 dark:border-zinc-800 ${
+                    screen.is_active ? "" : "opacity-40"
+                  }`}
+                >
+                  <Monitor className="h-5 w-5 text-zinc-500 dark:text-zinc-400" />
+                </div>
+
+                <div className="min-w-0 flex-1 basis-40">
+                  <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                    {screen.name}
+                  </p>
+                  <p
+                    className={`mt-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                      screen.is_active
+                        ? "text-lco-green dark:text-lco-teal"
+                        : "text-zinc-400"
+                    }`}
+                  >
+                    {screen.is_active ? "Aktif" : "Nonaktif"}
+                  </p>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <button
+                    type="button"
+                    title="Link & kode QR"
+                    aria-label="Link & kode QR"
+                    onClick={() => setLinkModalScreen(screen)}
+                    className={ICON_BUTTON_CLASS}
+                  >
+                    <QrCode className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title={screen.is_active ? "Nonaktifkan TV" : "Aktifkan TV"}
+                    aria-label={
+                      screen.is_active ? "Nonaktifkan TV" : "Aktifkan TV"
+                    }
+                    disabled={isMutating}
+                    onClick={() =>
+                      void runAction(() =>
+                        setScreenActive(screen.id, !screen.is_active),
+                      )
+                    }
+                    className={ICON_BUTTON_CLASS}
+                  >
+                    {screen.is_active ? (
+                      <Eye className="h-4 w-4" />
+                    ) : (
+                      <EyeOff className="h-4 w-4" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    title="Ubah nama"
+                    aria-label="Ubah nama"
+                    disabled={isMutating}
+                    onClick={() => {
+                      setActionError("");
+                      setSuccessMessage("");
+                      setScreenFormTarget({ mode: "rename", screen });
+                    }}
+                    className={ICON_BUTTON_CLASS}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Hapus TV"
+                    aria-label="Hapus TV"
+                    disabled={isMutating}
+                    onClick={() => {
+                      setDeleteError("");
+                      setDeletingScreen(screen);
+                    }}
+                    className={ICON_BUTTON_DANGER_CLASS}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedScreen(screen)}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-lco-green px-3 py-1.5 text-xs font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
+                  >
+                    Kelola Media
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {screenFormTarget && (
+        <ScreenFormModal
+          target={screenFormTarget}
+          isBusy={isMutating}
+          onClose={() => setScreenFormTarget(null)}
+          onAdd={addScreen}
+          onRename={renameScreen}
+          onSaved={handleScreenFormSaved}
+        />
+      )}
+
+      {linkModalScreen && (
+        <ScreenLinkModal
+          screen={linkModalScreen}
+          onClose={() => setLinkModalScreen(null)}
+        />
+      )}
+
+      {deletingScreen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/30 p-4">
+          <div className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="mb-3 flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-lco-coral/10 text-lco-coral">
+                <Trash2 className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold">Hapus TV?</h3>
+                <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                    {deletingScreen.name}
+                  </span>{" "}
+                  beserta SEMUA media dan filenya akan dihapus permanen dan
+                  tidak bisa dipulihkan. Kalau hanya ingin berhenti menayangkan
+                  sementara, pakai tombol nonaktifkan (ikon mata).
+                </p>
+              </div>
+            </div>
+
+            {deleteError && (
+              <div className="mb-3 flex items-start gap-2 border border-lco-coral/30 bg-white p-3 text-xs text-lco-coral dark:bg-zinc-950">
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <p className="break-all">{deleteError}</p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeletingScreen(null)}
+                disabled={isMutating}
+                className="rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmDeleteScreen()}
                 disabled={isMutating}
                 className="inline-flex items-center gap-2 rounded-md bg-lco-coral px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-coral/90 disabled:cursor-not-allowed disabled:opacity-60"
               >
