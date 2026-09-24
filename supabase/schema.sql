@@ -1,15 +1,33 @@
+-- =====================================================================
+-- schema.sql — setup database dari NOL (Supabase / PostgreSQL 15+)
+-- =====================================================================
+-- Sumber : dump `schema_asli.sql` dari project production (PG 17.6),
+--          bagian schema `public` saja, disalin persis apa adanya.
+--          Ditambah hal-hal yang TIDAK ikut ter-dump (lihat BAGIAN B).
 --
--- PostgreSQL database dump
+-- CARA PAKAI (project Supabase BARU & KOSONG):
+--   1. Supabase Dashboard -> SQL Editor -> New query
+--   2. Tempel SELURUH isi file ini -> Run
+--   3. Buat user admin pertama (lihat BAGIAN D di paling bawah)
+--   4. Isi environment aplikasi (URL + anon key + service role key)
 --
-
-
--- Dumped from database version 17.6
--- Dumped by pg_dump version 18.6
+-- CATATAN:
+--   * Untuk database KOSONG. Kalau tabel `public.transactions` sudah
+--     ada, script berhenti dengan pesan jelas (tidak merusak apa-apa).
+--   * Script dijalankan sebagai SATU transaksi: kalau ada error di
+--     tengah jalan, semuanya di-rollback -> tidak ada setengah jadi.
+--   * JANGAN dijalankan di database production yang sudah berisi data.
+--
+-- ISI:
+--   A. Struktur public (enum, function, tabel, index, trigger, RLS)
+--   B. Data awal: settings, bucket storage, policy storage
+--   C. (Opsional) pengamanan hak eksekusi function untuk anon
+--   D. (Panduan) membuat admin pertama
+-- =====================================================================
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
 SET idle_in_transaction_session_timeout = 0;
-SET transaction_timeout = 0;
 SET client_encoding = 'UTF8';
 SET standard_conforming_strings = on;
 SELECT pg_catalog.set_config('search_path', '', false);
@@ -18,16 +36,21 @@ SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
---
--- Name: public; Type: SCHEMA; Schema: -; Owner: -
---
+-- Pengaman: hentikan kalau ini bukan database kosong.
+DO $guard$
+BEGIN
+  IF to_regclass('public.transactions') IS NOT NULL THEN
+    RAISE EXCEPTION
+      'Database ini sudah berisi tabel aplikasi (public.transactions ada). schema.sql hanya untuk database KOSONG — dibatalkan, tidak ada yang diubah.';
+  END IF;
+END
+$guard$;
+
+-- =====================================================================
+-- BAGIAN A — STRUKTUR SCHEMA PUBLIC (hasil dump production)
+-- =====================================================================
 
 CREATE SCHEMA IF NOT EXISTS public;
-
-
---
--- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
---
 
 COMMENT ON SCHEMA public IS 'standard public schema';
 
@@ -1007,6 +1030,28 @@ COMMENT ON FUNCTION public.create_transaction(p_items jsonb, p_subtotal bigint, 
 
 
 --
+-- Name: current_user_role(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.current_user_role() RETURNS public.user_role
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+  select role
+  from public.profiles
+  where id = auth.uid()
+    and is_active = true;
+$$;
+
+
+--
+-- Name: FUNCTION current_user_role(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.current_user_role() IS 'Baca role user yang sedang login, bypass RLS (SECURITY DEFINER) — dipakai policy profiles_select_admin_supervisor/profiles_update_admin_supervisor supaya tidak query langsung ke profiles dari dalam policy profiles sendiri (itu penyebab "infinite recursion detected"). Return NULL kalau user tidak aktif/tidak ditemukan.';
+
+
+--
 -- Name: enforce_profiles_role_change(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1055,6 +1100,31 @@ $$;
 --
 
 COMMENT ON FUNCTION public.enforce_profiles_role_change() IS 'Kunci perubahan kolom role/is_active di profiles kecuali pemanggil admin/supervisor aktif; supervisor tambahan dilarang menyentuh atau membuat akun admin. Lihat migration 016 (versi awal, admin-only) & 018 (revisi ini, pemilik project minta akses supervisor).';
+
+
+--
+-- Name: get_screen_playlist(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.get_screen_playlist(p_token text) RETURNS TABLE(id uuid, title text, media_type text, file_url text, duration_seconds integer, sort_order integer)
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+  select m.id, m.title, m.media_type, m.file_url, m.duration_seconds, m.sort_order
+  from public.promo_media m
+  join public.promo_screens s on s.id = m.screen_id
+  where s.access_token = p_token
+    and s.is_active = true
+    and m.is_active = true
+  order by m.sort_order asc, m.id asc;
+$$;
+
+
+--
+-- Name: FUNCTION get_screen_playlist(p_token text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.get_screen_playlist(p_token text) IS 'Satu-satunya jalan anon membaca media promosi (migration 027) — dipanggil app/tv/[access_token]/page.tsx (langkah berikutnya). Token salah ATAU layar nonaktif sama-sama menghasilkan 0 baris (tidak membedakan pesan, sengaja, lihat header migration).';
 
 
 --
@@ -1150,6 +1220,37 @@ $$;
 --
 
 COMMENT ON FUNCTION public.get_transaction_by_receipt(p_receipt_no text, p_date date) IS 'Lookup publik untuk halaman /cek-struk (PRD §4.9, §17 T-07). SECURITY DEFINER — sengaja bypass RLS lewat RPC yang divalidasi ketat (nomor struk + tanggal harus cocok), bukan lewat policy anon select langsung di transactions. Tidak pernah mengembalikan harga modal, nama kasir, atau detail bukti pembayaran.';
+
+
+--
+-- Name: reorder_promo_media(uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reorder_promo_media(p_ids uuid[]) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public'
+    AS $$
+begin
+  if coalesce(public.current_user_role()::text, '') not in ('admin', 'supervisor') then
+    raise exception 'Hanya admin/supervisor yang boleh mengatur urutan media promosi.'
+      using errcode = '42501';
+  end if;
+
+  -- Posisi (1, 2, 3, ...) mengikuti urutan elemen di p_ids. Baris yang tidak
+  -- disebut di p_ids tidak disentuh.
+  update public.promo_media m
+     set sort_order = t.pos::integer
+    from unnest(p_ids) with ordinality as t(id, pos)
+   where m.id = t.id;
+end;
+$$;
+
+
+--
+-- Name: FUNCTION reorder_promo_media(p_ids uuid[]); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.reorder_promo_media(p_ids uuid[]) IS 'Tulis ulang sort_order media promosi sesuai urutan array id (posisi mulai 1). Hanya admin/supervisor. Migration 026.';
 
 
 --
@@ -1699,6 +1800,7 @@ SET default_tablespace = '';
 
 SET default_table_access_method = heap;
 
+
 --
 -- Name: activity_logs; Type: TABLE; Schema: public; Owner: -
 --
@@ -1910,6 +2012,97 @@ COMMENT ON COLUMN public.profiles.fcm_token IS 'Registration token FCM (perangka
 --
 
 COMMENT ON COLUMN public.profiles.fcm_token_updated_at IS 'Kapan fcm_token terakhir disimpan/dibersihkan (UTC). Berguna untuk debugging "kenapa notifikasi tidak masuk".';
+
+
+--
+-- Name: profiles_directory; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.profiles_directory WITH (security_invoker='true') AS
+ SELECT id,
+    full_name
+   FROM public.profiles
+  WHERE (is_active = true);
+
+
+--
+-- Name: promo_media; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.promo_media (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    title text NOT NULL,
+    media_type text NOT NULL,
+    file_url text NOT NULL,
+    storage_path text NOT NULL,
+    file_name text,
+    file_size bigint,
+    duration_seconds integer DEFAULT 8 NOT NULL,
+    sort_order integer DEFAULT 0 NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_by uuid DEFAULT auth.uid(),
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    screen_id uuid,
+    CONSTRAINT promo_media_duration_seconds_check CHECK (((duration_seconds >= 3) AND (duration_seconds <= 120))),
+    CONSTRAINT promo_media_media_type_check CHECK ((media_type = ANY (ARRAY['image'::text, 'video'::text])))
+);
+
+
+--
+-- Name: TABLE promo_media; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.promo_media IS 'Media promosi (gambar/video) untuk layar TV toko, diputar berurutan oleh halaman /tv. File fisik di Storage bucket "promo-media", baris ini metadata + URL. Migration 026.';
+
+
+--
+-- Name: COLUMN promo_media.duration_seconds; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.promo_media.duration_seconds IS 'Lama tayang GAMBAR dalam detik (3-120). Diabaikan untuk video — video diputar sampai selesai.';
+
+
+--
+-- Name: COLUMN promo_media.sort_order; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.promo_media.sort_order IS 'Urutan tayang naik (kecil dulu). Ditulis ulang atomik oleh RPC reorder_promo_media.';
+
+
+--
+-- Name: COLUMN promo_media.screen_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.promo_media.screen_id IS 'Layar TV pemilik media ini (migration 027). NULL = media lama dari sebelum fitur multi-TV, tidak lagi tertayang di manapun sampai diberi screen_id manual.';
+
+
+--
+-- Name: promo_screens; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.promo_screens (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name text NOT NULL,
+    access_token text DEFAULT (replace((gen_random_uuid())::text, '-'::text, ''::text) || replace((gen_random_uuid())::text, '-'::text, ''::text)) NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT promo_screens_name_not_blank CHECK ((length(TRIM(BOTH FROM name)) > 0))
+);
+
+
+--
+-- Name: TABLE promo_screens; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.promo_screens IS 'Satu baris = satu TV/layar promosi fisik. access_token adalah "kunci" URL publik /tv/[access_token] (migration 027) — pengganti login untuk perangkat TV.';
+
+
+--
+-- Name: COLUMN promo_screens.access_token; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.promo_screens.access_token IS 'String acak 64 hex char, dibangkitkan otomatis (2x gen_random_uuid()). Jangan pernah dibuat bisa ditebak/berurutan — ini satu-satunya penjaga akses ke /tv/[access_token].';
 
 
 --
@@ -2171,6 +2364,30 @@ ALTER TABLE ONLY public.profiles
 
 
 --
+-- Name: promo_media promo_media_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.promo_media
+    ADD CONSTRAINT promo_media_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: promo_screens promo_screens_access_token_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.promo_screens
+    ADD CONSTRAINT promo_screens_access_token_key UNIQUE (access_token);
+
+
+--
+-- Name: promo_screens promo_screens_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.promo_screens
+    ADD CONSTRAINT promo_screens_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: settings settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2246,13 +2463,6 @@ CREATE INDEX payments_tempo_unsettled_idx ON public.payments USING btree (due_da
 
 
 --
--- Name: profiles_fcm_token_unique; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX profiles_fcm_token_unique ON public.profiles USING btree (fcm_token) WHERE (fcm_token IS NOT NULL);
-
-
---
 -- Name: profiles_fcm_token_unique_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2264,6 +2474,20 @@ CREATE UNIQUE INDEX profiles_fcm_token_unique_idx ON public.profiles USING btree
 --
 
 COMMENT ON INDEX public.profiles_fcm_token_unique_idx IS 'Jaga satu fcm_token cuma dipegang satu profil pada satu waktu — jaring pengaman DB di belakang logika revoke di RPC save_my_fcm_token (migration 023). NULL dikecualikan (where fcm_token is not null) supaya user yang belum pernah kasih izin notifikasi tidak saling bentrok.';
+
+
+--
+-- Name: promo_media_active_order_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX promo_media_active_order_idx ON public.promo_media USING btree (is_active, sort_order, created_at);
+
+
+--
+-- Name: promo_media_screen_id_sort_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX promo_media_screen_id_sort_idx ON public.promo_media USING btree (screen_id, sort_order);
 
 
 --
@@ -2365,6 +2589,30 @@ ALTER TABLE ONLY public.products
 
 
 --
+-- Name: promo_media promo_media_created_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.promo_media
+    ADD CONSTRAINT promo_media_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.profiles(id) ON DELETE SET NULL;
+
+
+--
+-- Name: promo_media promo_media_screen_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.promo_media
+    ADD CONSTRAINT promo_media_screen_id_fkey FOREIGN KEY (screen_id) REFERENCES public.promo_screens(id) ON DELETE CASCADE;
+
+
+--
+-- Name: promo_screens promo_screens_created_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.promo_screens
+    ADD CONSTRAINT promo_screens_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id);
+
+
+--
 -- Name: settings settings_updated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2434,6 +2682,7 @@ ALTER TABLE ONLY public.transactions
 
 ALTER TABLE public.activity_logs ENABLE ROW LEVEL SECURITY;
 
+
 --
 -- Name: activity_logs activity_logs_select_admin_supervisor; Type: POLICY; Schema: public; Owner: -
 --
@@ -2444,10 +2693,46 @@ CREATE POLICY activity_logs_select_admin_supervisor ON public.activity_logs FOR 
 
 
 --
+-- Name: categories; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.categories ENABLE ROW LEVEL SECURITY;
+
+
+--
+-- Name: categories categories_delete_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY categories_delete_admin_supervisor ON public.categories FOR DELETE TO authenticated USING ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
+-- Name: categories categories_insert_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY categories_insert_admin_supervisor ON public.categories FOR INSERT TO authenticated WITH CHECK ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
+-- Name: categories categories_select_active_users; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY categories_select_active_users ON public.categories FOR SELECT TO authenticated USING ((public.current_user_role() IS NOT NULL));
+
+
+--
+-- Name: categories categories_update_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY categories_update_admin_supervisor ON public.categories FOR UPDATE TO authenticated USING ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role]))) WITH CHECK ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
 -- Name: held_orders; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.held_orders ENABLE ROW LEVEL SECURITY;
+
 
 --
 -- Name: held_orders held_orders_delete_own_or_supervisor; Type: POLICY; Schema: public; Owner: -
@@ -2482,6 +2767,7 @@ CREATE POLICY held_orders_select_own_or_supervisor ON public.held_orders FOR SEL
 
 ALTER TABLE public.payment_proofs ENABLE ROW LEVEL SECURITY;
 
+
 --
 -- Name: payment_proofs payment_proofs_insert_active_users; Type: POLICY; Schema: public; Owner: -
 --
@@ -2506,6 +2792,7 @@ CREATE POLICY payment_proofs_select_active_users ON public.payment_proofs FOR SE
 
 ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
 
+
 --
 -- Name: payments payments_select_authenticated; Type: POLICY; Schema: public; Owner: -
 --
@@ -2516,34 +2803,143 @@ CREATE POLICY payments_select_authenticated ON public.payments FOR SELECT USING 
 
 
 --
+-- Name: products; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
+
+
+--
+-- Name: products products_insert_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY products_insert_admin_supervisor ON public.products FOR INSERT TO authenticated WITH CHECK ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
+-- Name: products products_select_active_users; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY products_select_active_users ON public.products FOR SELECT TO authenticated USING ((public.current_user_role() IS NOT NULL));
+
+
+--
+-- Name: products products_update_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY products_update_admin_supervisor ON public.products FOR UPDATE TO authenticated USING ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role]))) WITH CHECK ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
+-- Name: profiles; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+
+--
 -- Name: profiles profiles_select_admin_supervisor; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY profiles_select_admin_supervisor ON public.profiles FOR SELECT USING ((EXISTS ( SELECT 1
-   FROM public.profiles p
-  WHERE ((p.id = auth.uid()) AND (p.role = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])) AND (p.is_active = true)))));
+CREATE POLICY profiles_select_admin_supervisor ON public.profiles FOR SELECT TO authenticated USING ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
+-- Name: profiles profiles_select_own; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY profiles_select_own ON public.profiles FOR SELECT TO authenticated USING ((auth.uid() = id));
 
 
 --
 -- Name: profiles profiles_update_admin_supervisor; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY profiles_update_admin_supervisor ON public.profiles FOR UPDATE USING (((EXISTS ( SELECT 1
-   FROM public.profiles caller
-  WHERE ((caller.id = auth.uid()) AND (caller.is_active = true) AND (caller.role = 'admin'::public.user_role)))) OR ((role <> 'admin'::public.user_role) AND (EXISTS ( SELECT 1
-   FROM public.profiles caller
-  WHERE ((caller.id = auth.uid()) AND (caller.is_active = true) AND (caller.role = 'supervisor'::public.user_role))))))) WITH CHECK (((EXISTS ( SELECT 1
-   FROM public.profiles caller
-  WHERE ((caller.id = auth.uid()) AND (caller.is_active = true) AND (caller.role = 'admin'::public.user_role)))) OR ((role <> 'admin'::public.user_role) AND (EXISTS ( SELECT 1
-   FROM public.profiles caller
-  WHERE ((caller.id = auth.uid()) AND (caller.is_active = true) AND (caller.role = 'supervisor'::public.user_role)))))));
+CREATE POLICY profiles_update_admin_supervisor ON public.profiles FOR UPDATE TO authenticated USING (((public.current_user_role() = 'admin'::public.user_role) OR ((role <> 'admin'::public.user_role) AND (public.current_user_role() = 'supervisor'::public.user_role)))) WITH CHECK (((public.current_user_role() = 'admin'::public.user_role) OR ((role <> 'admin'::public.user_role) AND (public.current_user_role() = 'supervisor'::public.user_role))));
 
 
 --
 -- Name: POLICY profiles_update_admin_supervisor ON profiles; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON POLICY profiles_update_admin_supervisor ON public.profiles IS 'Admin+supervisor boleh UPDATE profiles siapa pun (migration 018), TAPI supervisor tidak lolos sama sekali untuk baris yang role-nya admin (SEBELUM maupun SESUDAH update) — migration 020, menutup celah full_name/email yang tidak lewat trigger enforce_profiles_role_change.';
+COMMENT ON POLICY profiles_update_admin_supervisor ON public.profiles IS 'Admin bebas UPDATE profiles siapa pun; supervisor boleh KECUALI baris yang role-nya admin (migration 020, ditulis ulang migration 024 pakai current_user_role() untuk hindari infinite recursion — logika akses tidak berubah).';
+
+
+--
+-- Name: profiles profiles_update_own; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY profiles_update_own ON public.profiles FOR UPDATE TO authenticated USING ((auth.uid() = id));
+
+
+--
+-- Name: promo_media; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.promo_media ENABLE ROW LEVEL SECURITY;
+
+
+--
+-- Name: promo_media promo_media_delete_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY promo_media_delete_admin_supervisor ON public.promo_media FOR DELETE TO authenticated USING ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
+-- Name: promo_media promo_media_insert_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY promo_media_insert_admin_supervisor ON public.promo_media FOR INSERT TO authenticated WITH CHECK ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
+-- Name: promo_media promo_media_select_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY promo_media_select_admin_supervisor ON public.promo_media FOR SELECT TO authenticated USING ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
+-- Name: promo_media promo_media_update_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY promo_media_update_admin_supervisor ON public.promo_media FOR UPDATE TO authenticated USING ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role]))) WITH CHECK ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
+-- Name: promo_screens; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.promo_screens ENABLE ROW LEVEL SECURITY;
+
+
+--
+-- Name: promo_screens promo_screens_delete_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY promo_screens_delete_admin_supervisor ON public.promo_screens FOR DELETE TO authenticated USING ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
+-- Name: promo_screens promo_screens_insert_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY promo_screens_insert_admin_supervisor ON public.promo_screens FOR INSERT TO authenticated WITH CHECK ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
+-- Name: promo_screens promo_screens_select_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY promo_screens_select_admin_supervisor ON public.promo_screens FOR SELECT TO authenticated USING ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
+
+
+--
+-- Name: promo_screens promo_screens_update_admin_supervisor; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY promo_screens_update_admin_supervisor ON public.promo_screens FOR UPDATE TO authenticated USING ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role]))) WITH CHECK ((public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])));
 
 
 --
@@ -2551,6 +2947,7 @@ COMMENT ON POLICY profiles_update_admin_supervisor ON public.profiles IS 'Admin+
 --
 
 ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
+
 
 --
 -- Name: settings settings_delete_admin_only; Type: POLICY; Schema: public; Owner: -
@@ -2596,6 +2993,7 @@ CREATE POLICY settings_update_admin_supervisor ON public.settings FOR UPDATE USI
 
 ALTER TABLE public.shift_sessions ENABLE ROW LEVEL SECURITY;
 
+
 --
 -- Name: shift_sessions shift_sessions_insert_own; Type: POLICY; Schema: public; Owner: -
 --
@@ -2631,6 +3029,7 @@ CREATE POLICY shift_sessions_update_own_or_supervisor ON public.shift_sessions F
 
 ALTER TABLE public.stock_movements ENABLE ROW LEVEL SECURITY;
 
+
 --
 -- Name: stock_movements stock_movements_select_supervisor; Type: POLICY; Schema: public; Owner: -
 --
@@ -2646,6 +3045,7 @@ CREATE POLICY stock_movements_select_supervisor ON public.stock_movements FOR SE
 
 ALTER TABLE public.transaction_items ENABLE ROW LEVEL SECURITY;
 
+
 --
 -- Name: transaction_items transaction_items_select_authenticated; Type: POLICY; Schema: public; Owner: -
 --
@@ -2660,6 +3060,7 @@ CREATE POLICY transaction_items_select_authenticated ON public.transaction_items
 --
 
 ALTER TABLE public.transactions ENABLE ROW LEVEL SECURITY;
+
 
 --
 -- Name: transactions transactions_select_authenticated; Type: POLICY; Schema: public; Owner: -
@@ -2677,358 +3078,133 @@ CREATE POLICY transactions_select_authenticated ON public.transactions FOR SELEC
 COMMENT ON POLICY transactions_select_authenticated ON public.transactions IS 'Semua user login (role apa saja, asal is_active) boleh lihat semua transaksi — sengaja tidak dibatasi per-kasir, lihat catatan desain di header migration 011. Anon/publik otomatis ditolak karena auth.uid() bernilai NULL untuk mereka.';
 
 
---
--- PostgreSQL database dump complete
---
+-- =====================================================================
+-- BAGIAN B — DATA AWAL YANG TIDAK IKUT TER-DUMP
+-- (pg_dump --schema-only membuang isi baris; schema `storage` dianggap
+--  milik platform Supabase sehingga bucket & policy-nya juga terbuang)
+-- =====================================================================
 
+-- ── B1. Seed `settings` ───────────────────────────────────────────────
+-- Dibutuhkan hooks/useSettings.ts: updateSetting() memakai
+-- .update().eq("key", ...) — kalau barisnya belum ada, update "berhasil"
+-- tapi 0 baris kena (kelihatan seperti "tidak tersimpan").
+INSERT INTO public.settings (key, value, description) VALUES
+  ('nama_toko',          '"Langitan.co"'::jsonb,                     'Nama toko, tampil di header struk/nota.'),
+  ('alamat',             '""'::jsonb,                                'Alamat toko, tampil di footer struk/nota.'),
+  ('telepon',            '""'::jsonb,                                'Nomor telepon toko, tampil di struk/nota.'),
+  ('footer_struk',       '"Terima kasih atas kunjungan Anda"'::jsonb, 'Teks footer struk/nota.'),
+  ('ppn_enabled',        'false'::jsonb,                             'Aktifkan baris PPN di transaksi (PaymentModal) & struk. Default off sesuai PRD §4.2.'),
+  ('ppn_rate',           '11'::jsonb,                                'Persentase PPN, dipakai kalau ppn_enabled = true.'),
+  ('rounding',           '100'::jsonb,                               'Pembulatan kembalian tunai ke kelipatan ini (rupiah).'),
+  ('shift_default_cash', '0'::jsonb,                                 'Modal awal kas default saat kasir buka shift.'),
+  ('print_default',      '"nota"'::jsonb,                            'Format cetak default: "struk" (thermal) atau "nota" (A6/A5).'),
+  ('paper_nota',         '"A6"'::jsonb,                              'Ukuran kertas nota: "A6" atau "A5".'),
+  ('paper_thermal',      '"80mm"'::jsonb,                            'Ukuran kertas thermal: "58mm" atau "80mm".'),
+  ('show_cost_price',    'false'::jsonb,                             'Tampilkan harga modal di layar yang butuh permission harga_modal (PRD §5).')
+ON CONFLICT (key) DO NOTHING;
 
+-- ── B2. Storage bucket ────────────────────────────────────────────────
+-- ⚠ Konfigurasi bucket TIDAK ada di dump production, jadi nilai di bawah
+--   adalah yang dipakai aplikasi (file_url publik). Kalau ingin
+--   memastikan sama dengan production, jalankan di project production:
+--     select id, public, file_size_limit, allowed_mime_types
+--       from storage.buckets;
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('payment-proofs', 'payment-proofs', true)
+ON CONFLICT (id) DO NOTHING;
 
--- ==========================================================
--- Seed default `settings` (PRD §17 T-01 / migration 005).
--- TIDAK ikut ter-dump oleh `pg_dump --schema-only` (itu perintah dump
--- struktur saja, isi baris apa pun termasuk seed default ini otomatis
--- terbuang, apa pun sumbernya) — ditambahkan manual di sini supaya
--- instalasi baru langsung punya baris yang dibutuhkan `hooks/useSettings.ts`
--- (updateSetting() memakai .update().eq("key", ...) — kalau baris belum
--- ada, update itu "berhasil" tapi 0 baris kena, jadi kelihatan seperti
--- "tidak tersimpan").
--- ==========================================================
-insert into public.settings (key, value, description) values
-  ('nama_toko',          '"Langitan.co"'::jsonb,                        'Nama toko, tampil di header struk/nota.'),
-  ('alamat',             '""'::jsonb,                                   'Alamat toko, tampil di footer struk/nota.'),
-  ('telepon',            '""'::jsonb,                                   'Nomor telepon toko, tampil di struk/nota.'),
-  ('footer_struk',       '"Terima kasih atas kunjungan Anda"'::jsonb,    'Teks footer struk/nota.'),
-  ('ppn_enabled',        'false'::jsonb,                                'Aktifkan baris PPN di transaksi (PaymentModal) & struk. Default off sesuai PRD §4.2.'),
-  ('ppn_rate',           '11'::jsonb,                                   'Persentase PPN, dipakai kalau ppn_enabled = true.'),
-  ('rounding',           '100'::jsonb,                                  'Pembulatan kembalian tunai ke kelipatan ini (rupiah). Belum dipakai di T-01, disiapkan untuk T-02/T-03.'),
-  ('shift_default_cash', '0'::jsonb,                                    'Modal awal kas default saat kasir buka shift. Dipakai mulai T-04.'),
-  ('print_default',      '"nota"'::jsonb,                               'Format cetak default: "struk" (thermal) atau "nota" (A6/A5). Dipakai mulai T-03.'),
-  ('paper_nota',         '"A6"'::jsonb,                                 'Ukuran kertas nota: "A6" atau "A5". Dipakai mulai T-03.'),
-  ('paper_thermal',      '"80mm"'::jsonb,                               'Ukuran kertas thermal: "58mm" atau "80mm". Dipakai mulai T-03.'),
-  ('show_cost_price',    'false'::jsonb,                                'Tampilkan harga modal di layar yang butuh permission harga_modal (PRD §5).')
-on conflict (key) do nothing;
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'promo-media', 'promo-media', true,
+  52428800, -- 50 MB, mengikuti PROMO_MAX_FILE_BYTES di hooks/usePromoMedia.ts
+  ARRAY['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm']
+)
+ON CONFLICT (id) DO UPDATE SET
+  public             = EXCLUDED.public,
+  file_size_limit    = EXCLUDED.file_size_limit,
+  allowed_mime_types = EXCLUDED.allowed_mime_types;
 
--- ==========================================================
--- Storage bucket "payment-proofs" (migration 006).
--- Schema `storage` sengaja dikecualikan `pg_dump` (dianggap milik platform
--- Supabase, bukan milik user) — bucket & policy-nya ditambah manual di
--- sini, kalau tidak, upload bukti pembayaran (PaymentModal) akan gagal
--- di instalasi baru walau semua tabel `public` sudah benar.
--- ==========================================================
-insert into storage.buckets (id, name, public)
-values ('payment-proofs', 'payment-proofs', true)
-on conflict (id) do nothing;
+-- ── B3. Policy storage.objects (nama & isi = production) ─────────────
+DROP POLICY IF EXISTS payment_proofs_storage_select ON storage.objects;
+CREATE POLICY payment_proofs_storage_select ON storage.objects
+  FOR SELECT
+  USING (bucket_id = 'payment-proofs');
 
-drop policy if exists "payment_proofs_storage_select" on storage.objects;
-create policy "payment_proofs_storage_select"
-  on storage.objects for select
-  using (bucket_id = 'payment-proofs');
-
-drop policy if exists "payment_proofs_storage_insert" on storage.objects;
-create policy "payment_proofs_storage_insert"
-  on storage.objects for insert
-  with check (
+DROP POLICY IF EXISTS payment_proofs_storage_insert ON storage.objects;
+CREATE POLICY payment_proofs_storage_insert ON storage.objects
+  FOR INSERT
+  WITH CHECK (
     bucket_id = 'payment-proofs'
-    and exists (
-      select 1 from public.profiles
-      where profiles.id = auth.uid()
-        and profiles.is_active = true
+    AND EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE profiles.id = auth.uid()
+        AND profiles.is_active = true
     )
-  );-- Migration 023: pulihkan RLS `profiles` yang mati diam-diam.
---
--- ── Temuan (sesi #18, lewat pg_dump sungguhan ke production) ──
--- `profiles` di production TIDAK punya RLS aktif sama sekali, dan policy
--- `profiles_select_own`/`profiles_update_own` (auth.uid() = id) yang
--- ADA di migration 002 (baca file itu, bagian bawah) TIDAK ADA lagi di
--- production. Tidak ada satu migration pun (001-022) yang men-DROP policy
--- itu atau menjalankan `DISABLE ROW LEVEL SECURITY` — artinya ada langkah
--- manual yang tidak pernah tercatat. Dugaan paling masuk akal (BUKAN
--- fakta terkonfirmasi, tidak ada log untuk memastikan): saat policy
--- `profiles_select_admin_supervisor` ditambahkan (migration 016/018,
--- polanya `EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() ...)`
--- — query ke tabel yang sama dari dalam policy-nya sendiri), seseorang
--- sempat kena error "infinite recursion detected in policy for relation
--- profiles" dan "memperbaikinya" dengan mematikan RLS sepenuhnya alih-alih
--- menyadari bahwa `profiles_select_own` yang SUDAH ADA sejak migration 002
--- seharusnya memutus rekursi itu (lihat penjelasan di bawah).
---
--- Akibat production berjalan tanpa RLS `profiles` selama ini: siapa pun
--- yang login (role apa saja) berpotensi baca/ubah baris profil siapa saja
--- lewat panggilan langsung Supabase client, termasuk kolom `role` miliknya
--- sendiri — melewati semua pembatasan yang dibangun migration 002/016/018/020.
--- Juga menjelaskan kenapa `migration 022` (FCM token) tetap "jalan" walau
--- komentarnya eksplisit mengasumsikan `profiles_update_own` masih ada untuk
--- client menyimpan token sendiri — bukan karena didesain benar, tapi karena
--- RLS mati total.
---
--- ── Kenapa restore `profiles_select_own` TIDAK memicu rekursi lagi ──
--- Postgres meng-OR-kan semua policy SELECT pada tabel yang sama. Policy
--- `profiles_select_admin_supervisor` butuh subquery SELECT ke `profiles`
--- untuk baris milik pemanggil sendiri (`p.id = auth.uid()`) — begitu
--- `profiles_select_own` ada, baris ITU langsung terlihat lewat policy
--- own-row yang sama sekali tidak rekursif (`id = auth.uid()` polos, tanpa
--- subquery ke `profiles` lagi), jadi subquery admin-check tidak pernah
--- perlu "menunggu" hasil dari dirinya sendiri. Ini pola standar yang
--- direkomendasikan dokumentasi Supabase untuk kasus persis begini.
---
--- ── Kenapa trigger `enforce_profiles_role_change` (migration 016/018)
---    tetap aman dijalankan setelah RLS ini diaktifkan ──
--- Fungsinya `SECURITY DEFINER`, dan pemilik fungsi (role yang menjalankan
--- migration, biasa `postgres`) otomatis DIKECUALIKAN dari RLS kecuali
--- `FORCE ROW LEVEL SECURITY` diset di tabelnya — migration ini SENGAJA
--- tidak memakai FORCE, supaya trigger tetap bisa baca role/is_active
--- pemanggil tanpa terhalang. Sudah dicek: trigger ini sendiri sudah
--- didesain dengan asumsi itu (lihat komentar header migration 018).
---
--- ── Kenapa ditambah `profiles_directory` (baru, bukan bagian migration 002) ──
--- Widget "Shift belum ditutup" di Dashboard (`hooks/useDashboard.ts`) dan
--- laporan shift (`hooks/useReports.ts`) perlu menampilkan NAMA kasir lain,
--- bukan cuma baris milik sendiri — dan PRD §5 bilang Dashboard boleh
--- diakses kasir juga (bukan cuma admin/supervisor). `profiles_select_own`
--- saja tidak cukup untuk kasus ini, tapi memberi akses SELECT penuh ke
--- semua kolom `profiles` (termasuk `role`, `email`, `fcm_token`) ke semua
--- user login juga berlebihan. Solusinya: view read-only yang cuma expose
--- `id` + `full_name` untuk user aktif, RLS tidak berlaku untuk kolom
--- (Postgres RLS itu row-level, bukan column-level) jadi cara paling bersih
--- adalah lewat VIEW, bukan menambah kolom sensitif ke policy tabel utama.
--- **Butuh 1 perubahan kode menyusul**: `hooks/useDashboard.ts` baris ~693
--- perlu diubah dari `.from("profiles")` ke `.from("profiles_directory")`
--- untuk lookup nama kasir lain — belum dilakukan di migration ini, file
--- terpisah.
---
--- Idempotent: aman dijalankan berkali-kali (DROP POLICY IF EXISTS,
--- CREATE OR REPLACE VIEW, ENABLE ROW LEVEL SECURITY tidak error kalau
--- sudah aktif).
-
--- 1. Pulihkan policy own-row yang hilang (persis migration 002).
-drop policy if exists profiles_select_own on public.profiles;
-create policy profiles_select_own
-  on public.profiles
-  for select
-  to authenticated
-  using (auth.uid() = id);
-
-drop policy if exists profiles_update_own on public.profiles;
-create policy profiles_update_own
-  on public.profiles
-  for update
-  to authenticated
-  using (auth.uid() = id);
-
--- 2. View directory ringan — cuma id + nama, cuma user aktif, cuma kolom
---    yang memang perlu terlihat lintas-user untuk kebutuhan UI (bukan
---    data sensitif). `security_invoker = true` supaya view ini tunduk ke
---    privilege PEMANGGIL (RLS `profiles` tetap berlaku saat view ini
---    dievaluasi), bukan privilege pembuat view.
-create or replace view public.profiles_directory
-  with (security_invoker = true) as
-select id, full_name
-from public.profiles
-where is_active = true;
-
-grant select on public.profiles_directory to authenticated;
-
--- 3. Aktifkan kembali RLS yang mati diam-diam. TANPA FORCE (lihat
---    penjelasan trigger di atas).
-alter table public.profiles enable row level security;
-
--- Migration 024: perbaikan DARURAT "infinite recursion detected in policy
--- for relation profiles" — muncul begitu migration 023 mengaktifkan RLS
--- `profiles` lagi.
---
--- ── Akar masalah sebenarnya (bukan yang saya jelaskan di migration 023) ──
--- `profiles_select_admin_supervisor` dan `profiles_update_admin_supervisor`
--- (migration 016/018) isinya `EXISTS (SELECT 1 FROM public.profiles p
--- WHERE p.id = auth.uid() ...)` — query LANGSUNG ke tabel yang sama dari
--- DALAM policy tabel itu sendiri. Postgres punya pengaman anti-rekursi yang
--- menolak pola ini di level query rewrite, TERLEPAS dari apakah secara
--- logika sebenarnya bisa selesai (penjelasan migration 023 soal
--- "profiles_select_own memutus siklus lewat OR" itu KELIRU — itu benar
--- secara logika murni, tapi Postgres tidak mengevaluasi selogis itu untuk
--- kasus tabel yang sama dirujuk dari dalam policy-nya sendiri).
---
--- Bug pola ini SUDAH ADA sejak migration 016/018 dibuat — cuma baru
--- kelihatan sekarang karena sebelumnya RLS `profiles` mati total (lihat
--- migration 023), jadi policy ini tidak pernah benar-benar dievaluasi
--- Postgres. Dugaan kemungkinan besar: orang sebelumnya (yang mematikan RLS,
--- lihat migration 023) kena error PERSIS ini juga saat pertama kali
--- menambah policy admin/supervisor, dan "solusinya" waktu itu mematikan
--- RLS sepenuhnya alih-alih memperbaiki pola policy-nya.
---
--- ── Perbaikan ──
--- Pola resmi yang direkomendasikan dokumentasi Supabase untuk kasus ini:
--- bungkus pengecekan role pemanggil ke function `SECURITY DEFINER`.
--- Function begini dieksekusi dengan privilese PEMILIK function (bukan
--- privilese pemanggil), yang secara default DIKECUALIKAN dari RLS —
--- jadi query di DALAM function tidak pernah melalui rewrite RLS lagi,
--- memutus rantai rekursi di titik itu (bukan "memutus lewat OR" seperti
--- klaim keliru migration 023).
---
--- `profiles_select_own`/`profiles_update_own` (migration 023) TIDAK
--- bermasalah dan TIDAK diubah di sini — pola itu aman (auth.uid() = id
--- polos, tidak ada subquery ke `profiles` lagi di dalamnya).
---
--- Idempotent: aman dijalankan berkali-kali.
-
--- 1. Function SECURITY DEFINER — baca role pemanggil, bypass RLS.
-create or replace function public.current_user_role()
-returns public.user_role
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select role
-  from public.profiles
-  where id = auth.uid()
-    and is_active = true;
-$$;
-
-comment on function public.current_user_role() is
-  'Baca role user yang sedang login, bypass RLS (SECURITY DEFINER) — dipakai policy profiles_select_admin_supervisor/profiles_update_admin_supervisor supaya tidak query langsung ke profiles dari dalam policy profiles sendiri (itu penyebab "infinite recursion detected"). Return NULL kalau user tidak aktif/tidak ditemukan.';
-
--- 2. Tulis ulang policy SELECT admin/supervisor pakai function di atas.
-drop policy if exists profiles_select_admin_supervisor on public.profiles;
-create policy profiles_select_admin_supervisor
-  on public.profiles
-  for select
-  to authenticated
-  using (public.current_user_role() in ('admin', 'supervisor'));
-
--- 3. Tulis ulang policy UPDATE admin/supervisor — logika sama persis
---    dengan sebelumnya (admin bebas; supervisor boleh KECUALI menyentuh
---    baris yang role-nya admin, migration 020), cuma sumber pengecekan
---    role-nya lewat function, bukan subquery langsung.
-drop policy if exists profiles_update_admin_supervisor on public.profiles;
-create policy profiles_update_admin_supervisor
-  on public.profiles
-  for update
-  to authenticated
-  using (
-    public.current_user_role() = 'admin'
-    or (role <> 'admin' and public.current_user_role() = 'supervisor')
-  )
-  with check (
-    public.current_user_role() = 'admin'
-    or (role <> 'admin' and public.current_user_role() = 'supervisor')
   );
 
-comment on policy profiles_update_admin_supervisor on public.profiles is
-  'Admin bebas UPDATE profiles siapa pun; supervisor boleh KECUALI baris yang role-nya admin (migration 020, ditulis ulang migration 024 pakai current_user_role() untuk hindari infinite recursion — logika akses tidak berubah).';
+DROP POLICY IF EXISTS promo_media_storage_select ON storage.objects;
+CREATE POLICY promo_media_storage_select ON storage.objects
+  FOR SELECT
+  USING (bucket_id = 'promo-media');
 
--- Migration 025: aktifkan RLS di `products` dan `categories`.
+DROP POLICY IF EXISTS promo_media_storage_insert ON storage.objects;
+CREATE POLICY promo_media_storage_insert ON storage.objects
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    bucket_id = 'promo-media'
+    AND public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])
+  );
+
+DROP POLICY IF EXISTS promo_media_storage_delete ON storage.objects;
+CREATE POLICY promo_media_storage_delete ON storage.objects
+  FOR DELETE TO authenticated
+  USING (
+    bucket_id = 'promo-media'
+    AND public.current_user_role() = ANY (ARRAY['admin'::public.user_role, 'supervisor'::public.user_role])
+  );
+
+
+-- =====================================================================
+-- BAGIAN C — PENGAMANAN HAK EKSEKUSI FUNCTION (AKTIF)
+-- =====================================================================
+-- Di Supabase, function baru di schema `public` otomatis boleh
+-- dipanggil oleh `anon` (siapa pun yang punya anon key, tanpa login)
+-- lewat supabase.rpc(). Beberapa function di sini tidak memeriksa login
+-- (contoh: create_transaction hanya melewati cek shift kalau auth.uid()
+-- kosong), jadi orang tanpa login berpotensi memanggilnya.
 --
--- ── Kenapa ──
--- Dua tabel ini satu-satunya yang masih tanpa RLS (semua tabel lain sudah
--- aktif). Artinya siapa pun yang punya anon key (kunci itu memang tampil di
--- browser) bisa membaca, mengubah harga/stok, atau menghapus produk &
--- kategori lewat REST API tanpa login. PRD §9.3: "RLS aktif di semua tabel".
+-- Hanya DUA function yang memang sengaja publik:
+--   * get_transaction_by_receipt  -> halaman /cek-struk
+--   * get_screen_playlist         -> halaman /tv/[token]
 --
--- ── Aturan yang dipasang (mengikuti perilaku aplikasi saat ini) ──
---   SELECT : semua user login yang aktif (kasir perlu daftar produk di
---            layar Kasir; Dashboard membaca stok menipis).
---   INSERT : admin + supervisor.
---   UPDATE : admin + supervisor.
---   DELETE : products -> TIDAK ADA policy (hapus produk lewat RPC
---            soft_delete_product yang SECURITY DEFINER, tidak terpengaruh).
---            categories -> admin + supervisor (KategoriModule memang
---            memanggil .delete() langsung).
+-- Blok di bawah AKTIF secara default. Hapus/komentari bila tidak mau.
+-- (Cek dulu di production: select routine_name from
+--  information_schema.routine_privileges where grantee = 'anon'
+--  and routine_schema = 'public';  -> kalau daftarnya panjang, aktifkan.)
 --
--- ── Yang TIDAK terpengaruh ──
---   * RPC SECURITY DEFINER (create_transaction, return_transaction,
---     void_transaction, adjust_stock, soft_delete_product, restore_product,
---     get_transaction_by_receipt/`/cek-struk`) -> bypass RLS, tetap jalan.
---   * Route API yang memakai service role -> bypass RLS.
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_transaction_by_receipt(text, date) TO anon;
+GRANT EXECUTE ON FUNCTION public.get_screen_playlist(text)               TO anon;
+GRANT EXECUTE ON FUNCTION public.current_user_role()                     TO anon;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public                          TO authenticated, service_role;
+
+
+-- =====================================================================
+-- BAGIAN D — PANDUAN: ADMIN PERTAMA (jalankan TERPISAH, setelah di atas)
+-- =====================================================================
+-- Tabel `profiles` tidak terhubung otomatis ke auth.users, jadi di
+-- database baru belum ada satu pun profil -> tidak ada yang bisa login
+-- ke aplikasi. Langkah:
+--   1. Dashboard -> Authentication -> Users -> Add user
+--      (isi email + password, centang "Auto Confirm User").
+--   2. Jalankan query ini (ganti email & nama):
 --
--- ── Batasan yang perlu diketahui ──
---   * RLS itu per-baris, bukan per-kolom: kasir yang login masih bisa
---     membaca kolom `cost_price` lewat API langsung. Menyembunyikannya
---     butuh view/kolom terpisah (di luar migration ini).
---   * Kasir yang membuka Produk/Kategori dan menekan Simpan sekarang akan
---     ditolak database ("row-level security policy"). Tombolnya belum
---     disembunyikan di UI untuk role kasir.
+-- INSERT INTO public.profiles (id, full_name, email, role, is_active)
+-- SELECT id, 'Nama Admin', email, 'admin', true
+-- FROM auth.users
+-- WHERE email = 'admin@contoh.com';
 --
--- Prasyarat: migration 024 (function public.current_user_role()).
--- Idempotent: aman dijalankan berulang.
+--   3. Login ke aplikasi, tambah user lain dari Pengaturan (admin).
 
--- 0. Pengaman: hentikan kalau prasyarat belum ada.
-do $$
-begin
-  if to_regprocedure('public.current_user_role()') is null then
-    raise exception
-      'Function public.current_user_role() tidak ditemukan. Jalankan migration 024 dulu.';
-  end if;
-end
-$$;
-
--- ── products ─────────────────────────────────────────────────────────────
-alter table public.products enable row level security;
-
-drop policy if exists products_select_active_users on public.products;
-create policy products_select_active_users
-  on public.products
-  for select
-  to authenticated
-  using (public.current_user_role() is not null);
-
-drop policy if exists products_insert_admin_supervisor on public.products;
-create policy products_insert_admin_supervisor
-  on public.products
-  for insert
-  to authenticated
-  with check (public.current_user_role() in ('admin', 'supervisor'));
-
-drop policy if exists products_update_admin_supervisor on public.products;
-create policy products_update_admin_supervisor
-  on public.products
-  for update
-  to authenticated
-  using (public.current_user_role() in ('admin', 'supervisor'))
-  with check (public.current_user_role() in ('admin', 'supervisor'));
-
--- ── categories ───────────────────────────────────────────────────────────
-alter table public.categories enable row level security;
-
-drop policy if exists categories_select_active_users on public.categories;
-create policy categories_select_active_users
-  on public.categories
-  for select
-  to authenticated
-  using (public.current_user_role() is not null);
-
-drop policy if exists categories_insert_admin_supervisor on public.categories;
-create policy categories_insert_admin_supervisor
-  on public.categories
-  for insert
-  to authenticated
-  with check (public.current_user_role() in ('admin', 'supervisor'));
-
-drop policy if exists categories_update_admin_supervisor on public.categories;
-create policy categories_update_admin_supervisor
-  on public.categories
-  for update
-  to authenticated
-  using (public.current_user_role() in ('admin', 'supervisor'))
-  with check (public.current_user_role() in ('admin', 'supervisor'));
-
-drop policy if exists categories_delete_admin_supervisor on public.categories;
-create policy categories_delete_admin_supervisor
-  on public.categories
-  for delete
-  to authenticated
-  using (public.current_user_role() in ('admin', 'supervisor'));
-
--- ── Cek hasil (jalankan terpisah setelah migration) ──────────────────────
--- select tablename, rowsecurity from pg_tables
---  where schemaname = 'public' and tablename in ('products', 'categories');
---   -> keduanya rowsecurity = true
---
--- select tablename, policyname, cmd from pg_policies
---  where schemaname = 'public' and tablename in ('products', 'categories')
---  order by 1, 3;
---   -> products: 1 select + 1 insert + 1 update
---   -> categories: 1 select + 1 insert + 1 update + 1 delete
---
--- ── Rollback darurat (kalau layar Kasir/Produk mendadak kosong) ──────────
--- alter table public.products disable row level security;
--- alter table public.categories disable row level security;
+SELECT pg_catalog.set_config('search_path', '"$user", public, extensions', false);
