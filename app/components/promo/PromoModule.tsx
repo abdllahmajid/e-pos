@@ -68,6 +68,7 @@ import {
 } from "@/hooks/usePromoMedia";
 import {
   buildScreenUrl,
+  slugifyScreenToken,
   usePromoScreens,
   type PromoScreen,
   type PromoScreenActionResult,
@@ -246,7 +247,10 @@ function ScreenFormModal({
   target: ScreenFormTarget;
   isBusy: boolean;
   onClose: () => void;
-  onAdd: (name: string) => Promise<PromoScreenActionResult>;
+  onAdd: (
+    name: string,
+    customSlug?: string,
+  ) => Promise<PromoScreenActionResult>;
   onRename: (id: string, name: string) => Promise<PromoScreenActionResult>;
   onSaved: (message: string) => void;
 }) {
@@ -254,7 +258,15 @@ function ScreenFormModal({
   const isRename = renameTarget !== null;
 
   const [name, setName] = useState(renameTarget ? renameTarget.name : "");
+  // Hanya dipakai saat TAMBAH TV — mengubah access_token TV yang sudah ada
+  // akan mematahkan link/QR yang sudah ditempel di perangkat itu, jadi
+  // sengaja tidak ditawarkan di form "Ubah Nama" (lihat catatan di
+  // `usePromoScreens.ts`: tidak ada fungsi regenerate token).
+  const [customSlug, setCustomSlug] = useState("");
   const [formError, setFormError] = useState("");
+
+  const slugPreview = customSlug.trim() ? slugifyScreenToken(customSlug) : null;
+  const slugLooksInvalid = customSlug.trim().length > 0 && !slugPreview;
 
   async function handleSubmit() {
     setFormError("");
@@ -262,10 +274,16 @@ function ScreenFormModal({
       setFormError("Nama TV wajib diisi.");
       return;
     }
+    if (!isRename && slugLooksInvalid) {
+      setFormError(
+        "Alamat TV tidak valid — minimal 3 karakter, huruf kecil/angka/tanda hubung saja.",
+      );
+      return;
+    }
 
     const result = renameTarget
       ? await onRename(renameTarget.id, name)
-      : await onAdd(name);
+      : await onAdd(name, customSlug);
 
     if (!result.ok) {
       setFormError(result.error);
@@ -310,6 +328,34 @@ function ScreenFormModal({
               sendiri.
             </p>
           </div>
+
+          {!isRename && (
+            <div>
+              <label className={LABEL_CLASS}>Alamat TV (opsional)</label>
+              <input
+                type="text"
+                value={customSlug}
+                onChange={(event) => setCustomSlug(event.target.value)}
+                disabled={isBusy}
+                maxLength={64}
+                placeholder="Mis. kasir-depan (kosongkan untuk kode acak)"
+                className={INPUT_CLASS}
+              />
+              <p
+                className={`mt-1.5 text-xs ${
+                  slugLooksInvalid
+                    ? "text-lco-coral"
+                    : "text-zinc-500 dark:text-zinc-400"
+                }`}
+              >
+                {customSlug.trim()
+                  ? slugLooksInvalid
+                    ? "Minimal 3 karakter, huruf kecil/angka/tanda hubung saja."
+                    : `Link jadi: .../tv/${slugPreview}`
+                  : "Kosongkan supaya link tetap acak & aman ditebak (disarankan). Isi hanya kalau ingin link pendek yang mudah diketik ulang manual di perangkat TV."}
+              </p>
+            </div>
+          )}
 
           {formError && (
             <div className="flex items-start gap-2 border border-lco-coral/30 bg-white p-3 text-xs text-lco-coral dark:bg-zinc-950">

@@ -40,6 +40,15 @@ export type PromoScreenActionResult = { ok: true } | { ok: false; error: string 
 const SCREEN_NAME_MAX = 80;
 const SCREEN_COLUMNS = "id, name, access_token, is_active, created_by, created_at";
 
+// Migration 028: slug custom boleh 3–64 karakter, huruf kecil/angka/tanda
+// hubung, tidak diawali/diakhiri tanda hubung — SAMA PERSIS dengan CHECK
+// constraint `promo_screens_access_token_format` di database, supaya pesan
+// error tervalidasi di sisi klien DULU (lebih cepat & ramah) sebelum sempat
+// dikirim dan ditolak database.
+const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]{1,62}[a-z0-9])?$/;
+const SLUG_MIN = 3;
+const SLUG_MAX = 64;
+
 // ── Helper ──────────────────────────────────────────────────────────────
 
 function friendlyError(message: string | undefined, fallback: string): string {
@@ -48,7 +57,34 @@ function friendlyError(message: string | undefined, fallback: string): string {
   if (text.includes("row-level security") || text.includes("permission denied")) {
     return "Anda tidak punya izin untuk aksi ini (hanya admin/supervisor).";
   }
+  if (text.includes("promo_screens_access_token_format")) {
+    return "Alamat TV hanya boleh huruf kecil, angka, dan tanda hubung (3-64 karakter), tidak diawali/diakhiri tanda hubung.";
+  }
+  if (text.includes("promo_screens_access_token_key") || text.includes("duplicate key")) {
+    return "Alamat TV ini sudah dipakai TV lain — coba alamat lain.";
+  }
   return message || fallback;
+}
+
+/**
+ * Ubah ketikan bebas pengguna (mis. "Kasir Depan!!") jadi bentuk yang lolos
+ * `SLUG_PATTERN` (mis. "kasir-depan") — huruf besar diturunkan, spasi/garis
+ * bawah/karakter simbol jadi satu tanda hubung, tanda hubung berulang
+ * dirapikan, tanda hubung di awal/akhir dibuang. Kembalikan `null` kalau
+ * setelah dibersihkan hasilnya lebih pendek dari `SLUG_MIN` (bukan
+ * memaksakan sisa karakter yang ada — lebih baik user diberi tahu untuk
+ * menulis ulang daripada dapat slug pendek yang tidak diminta).
+ */
+export function slugifyScreenToken(raw: string): string | null {
+  const slug = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, SLUG_MAX);
+
+  if (slug.length < SLUG_MIN || !SLUG_PATTERN.test(slug)) return null;
+  return slug;
 }
 
 /**
@@ -73,7 +109,7 @@ interface UsePromoScreensResult {
   /** true selama ada aksi tulis yang sedang berjalan (tambah/ubah/hapus). */
   isMutating: boolean;
   refetch: () => Promise<void>;
-  addScreen: (name: string) => Promise<PromoScreenActionResult>;
+  addScreen: (name: string, customSlug?: string) => Promise<PromoScreenActionResult>;
   renameScreen: (id: string, name: string) => Promise<PromoScreenActionResult>;
   setScreenActive: (id: string, isActive: boolean) => Promise<PromoScreenActionResult>;
   removeScreen: (id: string) => Promise<PromoScreenActionResult>;
@@ -133,20 +169,37 @@ export function usePromoScreens(): UsePromoScreensResult {
   }
 
   // ── Tambah TV baru ──────────────────────────────────────────────────
-  function addScreen(name: string): Promise<PromoScreenActionResult> {
+  // `customSlug` (migration 028) OPSIONAL: kalau diisi & valid, dipakai
+  // sebagai `access_token` (alamat `/tv/...` yang mudah dibaca/diketik).
+  // Kalau kosong, `access_token` TIDAK dikirim sama sekali — dibangkitkan
+  // otomatis oleh default kolom di database (2x `gen_random_uuid()`,
+  // migration 027), supaya keacakannya murni server-side.
+  function addScreen(
+    name: string,
+    customSlug?: string,
+  ): Promise<PromoScreenActionResult> {
     return runMutation(async () => {
       const cleanName = name.trim().slice(0, SCREEN_NAME_MAX);
       if (!cleanName) {
         return { ok: false, error: "Nama TV wajib diisi." };
       }
 
-      // `access_token` TIDAK dikirim dari sini — dibangkitkan otomatis oleh
-      // default kolom di database (2x `gen_random_uuid()`, migration 027),
-      // supaya keacakannya murni server-side, tidak bergantung sumber
-      // acak di browser.
+      let accessToken: string | undefined;
+      if (customSlug && customSlug.trim()) {
+        const slug = slugifyScreenToken(customSlug);
+        if (!slug) {
+          return {
+            ok: false,
+            error:
+              "Alamat TV tidak valid — minimal 3 karakter, huruf kecil/angka/tanda hubung saja.",
+          };
+        }
+        accessToken = slug;
+      }
+
       const { data: inserted, error: insertError } = await supabase
         .from("promo_screens")
-        .insert({ name: cleanName })
+        .insert(accessToken ? { name: cleanName, access_token: accessToken } : { name: cleanName })
         .select(SCREEN_COLUMNS)
         .single();
 

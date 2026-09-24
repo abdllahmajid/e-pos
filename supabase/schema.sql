@@ -3078,6 +3078,22 @@ CREATE POLICY transactions_select_authenticated ON public.transactions FOR SELEC
 COMMENT ON POLICY transactions_select_authenticated ON public.transactions IS 'Semua user login (role apa saja, asal is_active) boleh lihat semua transaksi — sengaja tidak dibatasi per-kasir, lihat catatan desain di header migration 011. Anon/publik otomatis ditolak karena auth.uid() bernilai NULL untuk mereka.';
 
 
+-- ── A2. Perubahan SETELAH dump production (migration 028) ─────────────
+-- Link TV custom: access_token boleh diisi slug buatan sendiri, misalnya
+-- "kasir-depan" -> /tv/kasir-depan. Token acak 64-hex bawaan tetap lolos.
+-- Format: huruf kecil/angka/tanda hubung, 3-64 karakter, tidak boleh
+-- diawali/diakhiri tanda hubung.
+ALTER TABLE public.promo_screens
+  DROP CONSTRAINT IF EXISTS promo_screens_access_token_format;
+
+ALTER TABLE public.promo_screens
+  ADD CONSTRAINT promo_screens_access_token_format
+  CHECK (access_token ~ '^[a-z0-9]([a-z0-9-]{1,62}[a-z0-9])?$');
+
+COMMENT ON COLUMN public.promo_screens.access_token IS
+  'String kunci URL publik /tv/[access_token]. Default token acak 64-hex, TAPI boleh diisi slug custom yang mudah dibaca (mis. "kasir-depan") saat membuat TV baru (migration 028). Format dibatasi CHECK constraint (huruf kecil/angka/tanda hubung, 3-64 char). Slug yang mudah ditebak berarti siapa pun yang menebaknya bisa melihat isi TV tsb (media promosi, bukan data sensitif).';
+
+
 -- =====================================================================
 -- BAGIAN B — DATA AWAL YANG TIDAK IKUT TER-DUMP
 -- (pg_dump --schema-only membuang isi baris; schema `storage` dianggap

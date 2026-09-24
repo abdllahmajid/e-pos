@@ -15,36 +15,196 @@
 > per langkah**, diserahkan sebagai file yang bisa diunduh — bukan banyak
 > kode sekaligus di dalam chat.
 
-## Fitur baru: Layar Promosi TV (sesi #20, 2026-09-24) — BACA INI DULU
+## Fitur baru: Layar Promosi TV — MULTI-TV (sesi #21, 2026-09-24) — BACA INI DULU
 
-**Bukan task T-xx PRD** (PRD tidak menyebut layar TV sama sekali) — permintaan
-langsung pemilik project: _"menampilkan gambar atau video di layar TV
-promosi"_. Konsep: TV / mini PC / Android box / tablet yang disambung ke TV
-membuka halaman **`/tv`** di browser; halaman itu memutar daftar media
-berulang. Admin+supervisor mengelola daftarnya dari menu baru **"Layar
-Promosi"** di app kasir. Dikerjakan **bertahap, SATU file per langkah**
-(preferensi pemilik project, lihat catatan di atas).
+**⚠️ Menggantikan arah sesi #20 di bawah** (arsip tabel lama dipindah ke
+sub-bagian "Riwayat sesi #20 (arah lama, sudah digantikan)" di akhir bagian
+ini — jangan diikuti lagi, tapi jangan dihapus karena alasan keputusannya
+masih relevan). Permintaan pemilik project berubah dari "satu playlist
+global untuk semua TV" menjadi **"satu TV satu akses sendiri, dan isinya
+juga sendiri"** — tiap TV sekarang punya baris `promo_screens` sendiri
+dengan link + QR unik (`/tv/[access_token]`), dan medianya
+(`promo_media.screen_id`) hanya milik satu TV itu. Tetap **bukan task T-xx
+PRD**, tetap dikerjakan **bertahap, SATU file per langkah**.
 
-| #   | Langkah                                                 | File                                                                                                                                 | Status                                                                                                                                                                                                                                                                                                                |
-| --- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Database: tabel, bucket, RLS, RPC urutan                | `supabase/migrations/026_promo_media.sql`                                                                                            | ✅ **Dijalankan pemilik project di production & diverifikasi** (sesi #20): 5 cek `supabase/checks/026_cek_hasil.sql` semua sesuai harapan; uji `anon` (`026_cek_anon.sql`) hanya menampilkan baris aktif. **Belum dilaporkan:** uji `select *` sebagai `anon` (harus ERROR permission denied)                         |
-| 2   | Hook                                                    | `hooks/usePromoMedia.ts`                                                                                                             | ✅ Terpasang di repo pemilik project; **`npm run build` hijau** (tahap TypeScript lolos, Next 16.3.5 Turbopack). Belum dicoba di browser (belum ada UI)                                                                                                                                                               |
-| 3   | Layar pengelola (upload, urutan, aktif/nonaktif, hapus) | `app/components/promo/PromoModule.tsx`                                                                                               | ✅ Terpasang di repo pemilik project; **`npm run build` hijau** (TypeScript lolos, termasuk nama ikon lucide). Belum dicoba di browser                                                                                                                                                                                |
-| 4   | Wiring menu                                             | `app/components/layout/Sidebar.tsx` + `app/page.tsx` (2 edit kecil)                                                                  | 🟡 File dibuat sesi #20 — **hanya penambahan** (diff diperiksa: 0 baris lama berubah). Menu "Layar Promosi" (key `promo`, ikon `Monitor`, grup "Alat Kasir", admin+supervisor) + `dynamic()` import `PromoModule` (`ssr: false`) + baris render. Belum `npm run build`, belum dicoba di browser                       |
-| 5   | Pemutar publik + izinkan tanpa login                    | `app/tv/page.tsx` + `middleware.ts` (tambah `"/tv"` ke `PUBLIC_PATHS`)                                                               | ⬜ Belum. Catatan: `npm run build` Next 16.3.5 memberi peringatan _"middleware file convention is deprecated, use proxy"_ — **PRA-EKSISTING, bukan dari fitur ini**. Langkah 5 cukup menambah `"/tv"` di `middleware.ts` seperti sekarang; JANGAN migrasi ke `proxy` di langkah yang sama (ubah satu hal per langkah) |
-| 6   | Sinkron dokumentasi                                     | tambahkan isi `026` ke akhir `supabase/schema.sql` (aturan: tiap migration baru WAJIB ikut ditambah manual) + perbarui `PROGRESS.md` | ⬜ Belum                                                                                                                                                                                                                                                                                                              |
+| #   | Langkah                                                                               | File                                                                                       | Status                                                                                                                                                                                                                                                                     |
+| --- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Database: tabel `promo_screens`, kolom `screen_id`, tutup akses `anon` lama, RPC baru | `supabase/migrations/027_promo_screens.sql`                                                | 🟡 File dibuat & diserahkan. **Belum ada laporan pemilik project bahwa sudah dijalankan di production** maupun hasil `027_cek_hasil.sql` (7 cek struktur + uji fungsional `anon` 4 skenario). **WAJIB dikonfirmasi sebelum lanjut apa pun yang menyentuh data production** |
+| 2   | Hook daftar TV (CRUD layar)                                                           | `hooks/usePromoScreens.ts`                                                                 | ✅ Ditulis sesi #21 — **file ini sebelumnya KOSONG (0 baris)** walau `usePromoMedia.ts` & `PromoModule.tsx` sudah menyebutnya sebagai "sudah dibuat langkah 2" (lihat "Temuan sesi ini" di bawah). Belum `npm run build`                                                   |
+| 3   | Hook media, direvisi per-TV                                                           | `hooks/usePromoMedia.ts`                                                                   | ✅ Direvisi sesi sebelumnya (masih sesi #21 secara kronologis kerja, sebelum jeda konteks) — `usePromoMedia(screenId)` wajib parameter, `fetchScreenPlaylist(accessToken)` lewat RPC menggantikan `fetchPlayablePromoMedia()`. Belum `npm run build`                       |
+| 4   | Layar pengelola, dua tingkat (daftar TV → kelola media satu TV)                       | `app/components/promo/PromoModule.tsx`                                                     | ✅ Sudah dua tingkat (`ScreenListView` + `ScreenMediaManager`, link+QR pakai dependency baru `qrcode`). Belum `npm run build`                                                                                                                                              |
+| 5   | Pemutar publik per-TV + matikan `/tv` lama                                            | `app/tv/[access_token]/page.tsx` (baru) + `app/tv/page.tsx` (diganti jadi `redirect("/")`) | ✅ Ditulis sesi #21. `middleware.ts` **TIDAK perlu diubah** — `PUBLIC_PATHS` sudah berisi `"/tv"` dan dicocokkan dengan `.startsWith()`, otomatis mencakup `/tv/[access_token]` juga                                                                                       |
+| 6   | Sinkron dokumentasi                                                                   | `PROGRESS.md` (file ini) + `supabase/schema.sql` (tambahkan isi `027`)                     | 🟡 `PROGRESS.md` — sedang ditulis sekarang. `supabase/schema.sql` **BELUM disentuh** — masih berisi migration lama sampai `026`, isi `027` belum ditambahkan manual ke situ                                                                                                |
 
-**Keputusan desain yang sudah diambil (detail lengkap di komentar header
-migration `026`):**
+**Keputusan desain migration `027` (detail lengkap di komentar headernya):**
+
+- `access_token` acak 64-hex (`2x gen_random_uuid()`), BUKAN id/slug yang
+  bisa ditebak — satu-satunya "kunci" akses TV, tidak pernah diketik
+  manusia (beda dari `/cek-struk` yang kuncinya sengaja bisa diketik).
+- `promo_screens` **TIDAK diberi hak akses apa pun ke `anon`**. Satu-satunya
+  pintu publik adalah RPC `get_screen_playlist(p_token)` (`security
+definer`), pola sama seperti `get_transaction_by_receipt`.
+- Policy lama `promo_media_select_active` (anon+authenticated) **DIHAPUS**,
+  dan hak `SELECT` `anon` ke `promo_media` **DICABUT total**. Kalau tidak,
+  `anon` masih bisa lihat media SEMUA TV sekaligus lewat query langsung —
+  tembus konsep "isinya sendiri-sendiri".
+- `promo_media.screen_id` **NULLABLE** (bukan NOT NULL) — sesuai keputusan
+  pemilik project ("mulai bersih dari nol, TV lama dimatikan, saya atur
+  ulang manual"). Baris media LAMA (`screen_id` kosong) dibiarkan apa
+  adanya di DB, tidak lagi tertayang di mana pun (RPC selalu JOIN ke
+  `promo_screens`), boleh dibersihkan manual lewat layar pengelola.
+- `on delete cascade` dari `promo_media` ke `promo_screens` — hapus TV ikut
+  menghapus baris medianya (DB saja). File Storage **TIDAK** ikut terhapus
+  cascade — `removeScreen()` di `usePromoScreens.ts` WAJIB membersihkan file
+  Storage dulu SEBELUM menghapus baris `promo_screens` (arah kebalik dari
+  `removeMedia()`, karena di sini yang dihapus adalah induknya).
+- RPC `get_screen_playlist` sengaja **tidak membedakan** "token salah" dari
+  "TV nonaktif" — dua-duanya 0 baris, supaya tidak bisa dipakai menebak
+  status TV lain.
+
+**Kontrak `hooks/usePromoScreens.ts` (langkah 2, baru ditulis sesi #21) —
+dipakai `PromoModule.tsx` tingkat 1:**
+
+- `usePromoScreens()` → `{ screens, isLoading, error, isMutating, refetch,
+addScreen(name), renameScreen(id,name), setScreenActive(id,isActive),
+removeScreen(id) }`. Pola sama seperti `usePromoMedia`: aksi tulis
+  `{ ok:true } | { ok:false; error }`, tidak melempar; `access_token`
+  TIDAK BISA diubah dari sini (tidak ada fungsi regenerate — TV yang
+  tokennya bocor dihapus & dibuat ulang, bukan "diputar ulang" tokennya).
+- `buildScreenUrl(accessToken)` — fungsi biasa, `window.location.origin +
+"/tv/" + accessToken`. Client-side saja (dipanggil dari komponen
+  `ssr:false`).
+- `removeScreen(id)` membersihkan SEMUA `storage_path` milik TV itu dari
+  bucket `promo-media` dulu, baru menghapus baris `promo_screens` (lihat
+  keputusan desain di atas).
+
+**Kontrak `hooks/usePromoMedia.ts` (langkah 3, direvisi) — perubahan dari
+kontrak lama sesi #20:**
+
+- `usePromoMedia()` → **`usePromoMedia(screenId: string)`** — parameter
+  WAJIB, tidak ada lagi mode "semua TV". Hook **sengaja tidak memuat ulang
+  sendiri** kalau `screenId` berubah di tengah hidup komponen — pemanggil
+  WAJIB `key={screenId}` supaya ganti TV = remount bersih.
+- `fetchPlayablePromoMedia()` **dihapus**, diganti **`fetchScreenPlaylist(accessToken)`**
+  — lewat RPC `get_screen_playlist`, BUKAN lagi query `.from("promo_media")`
+  langsung (hak `SELECT` `anon` ke tabel itu sudah dicabut migration `027`).
+  Token salah/TV nonaktif → array kosong (bukan error). MELEMPAR Error
+  hanya untuk kegagalan jaringan/RPC itu sendiri.
+- Sisanya (upload+kompresi gambar, batas 50 MB, `reorder_promo_media` RPC,
+  hapus baris-dulu-baru-file, `{ok,error}` tanpa melempar) **tidak berubah**
+  dari sesi #20 — hanya sekarang semua query/insert ikut `.eq("screen_id",
+screenId)`.
+
+**Catatan `PromoModule.tsx` (langkah 4, dua tingkat):**
+
+- Tingkat 1 `ScreenListView` (di dalam `export default function
+PromoModule()`): daftar TV dari `usePromoScreens()` — tambah, ubah nama,
+  aktif/nonaktif (ikon mata), hapus (modal konfirmasi terpisah dari
+  nonaktifkan), dan tombol "Link & kode QR" per baris (`ScreenLinkModal` +
+  `ScreenQrCode`, generate QR di browser dengan `qrcode`, **tidak pernah**
+  mengirim token ke API QR pihak ketiga).
+- Tingkat 2 `ScreenMediaManager`: dibuka dengan klik "Kelola Media" pada
+  satu TV, isinya logika lama sesi #20 (upload/urutan/aktif-nonaktif/hapus
+  media) di-scope `usePromoMedia(screen.id)`, dirender `key={screen.id}`.
+- **Dependency baru `qrcode` + `@types/qrcode`** — sudah ditambahkan manual
+  ke `package.json` sesi ini (menyimpang dari Aturan Main §18.8 "jangan
+  tambah dependency tanpa alasan PRD", tapi wajar: seluruh fitur TV di luar
+  PRD, dan `html5-qrcode` yang sudah ada itu untuk MEMBACA QR, bukan
+  membuatnya). **BELUM di-`npm install` di sesi manapun** (lihat batasan di
+  bawah) — pemilik project WAJIB `npm install` sebelum `npm run build`.
+
+**Catatan `app/tv/[access_token]/page.tsx` (langkah 5, pemutar per-TV):**
+
+- Logika pemutaran (timer gambar `duration_seconds`, video `muted
+playsInline` sampai `onEnded`, lompat kalau `onError`/macet >20 detik,
+  polling 60 detik, retry 15 detik kalau gagal, Wake Lock, fullscreen via
+  klik/`F`/Enter, preload item berikutnya) **SAMA PERSIS** dengan
+  `/tv` lama sesi #20 — **hanya sumber data yang beda**
+  (`fetchScreenPlaylist(accessToken)` dari `useParams<{access_token:string}>()`,
+  bukan `fetchPlayablePromoMedia()` tanpa parameter).
+- `app/tv/page.tsx` (tanpa token) sekarang **server component** yang cuma
+  `redirect("/")` — sesuai keputusan pemilik project ("mulai bersih dari
+  nol, `/tv` lama dimatikan, saya atur ulang manual"). Bukan 404 diam-diam.
+- `middleware.ts` **tidak diubah** sesi ini — `PUBLIC_PATHS` sudah punya
+  `"/tv"` dari sesi #20 dan dicocokkan `.startsWith()`, jadi otomatis
+  mencakup path dinamis `/tv/[access_token]` tanpa edit tambahan.
+
+**Temuan sesi ini (penting untuk agent berikutnya):** `hooks/usePromoScreens.ts`
+ternyata **file kosong (0 baris)** di repo yang diserahkan pemilik project,
+padahal komentar header `usePromoMedia.ts` DAN `PromoModule.tsx` sudah
+menyebutnya sebagai _"langkah 2, sudah dibuat"_ dan mengimpor
+`usePromoScreens, buildScreenUrl, PromoScreen, PromoScreenActionResult`
+darinya. Kemungkinan besar: sesi kerja sebelumnya terputus tepat setelah
+menulis komentar rencana langkah 2 tapi SEBELUM benar-benar menulis isi
+filenya, lalu langkah 3–4 tetap ditulis dengan asumsi langkah 2 sudah ada.
+**Pelajaran:** jangan percaya komentar "(sudah dibuat)" di header file lain
+— selalu `view` file yang direferensikan itu sendiri dan cek jumlah
+barisnya sebelum melanjutkan, persis pola "PROGRESS.md basi" yang sudah
+dicatat berulang di file ini.
+
+**Langkah 7 (tambahan, masih sesi #21): alamat TV custom (slug), bukan cuma token acak**
+
+Permintaan pemilik project: link `/tv/[access_token]` acak 64-hex "terlalu
+panjang dan rumit" untuk diketik ulang manual di perangkat TV. Pertimbangan
+ulang keamanan: isi TV murni media PROMOSI publik (bukan data
+transaksi/pelanggan), jadi slug yang bisa ditebak risikonya rendah —
+paling buruk orang lihat video promosi yang sama seperti yang sudah
+terpampang di TV toko. Diimplementasikan sebagai **opsi, bukan pengganti**:
+
+| File                                                                                    | Perubahan                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `supabase/migrations/028_screen_custom_slug.sql` (+ blok sama di `supabase/schema.sql`) | CHECK constraint `promo_screens_access_token_format` — huruf kecil/angka/tanda hubung, 3-64 char, tidak diawali/diakhiri tanda hubung. Token acak bawaan migration 027 otomatis lolos pola ini (hex lowercase tanpa tanda hubung)                                                                     |
+| `hooks/usePromoScreens.ts`                                                              | `addScreen(name, customSlug?)` — param baru opsional. Fungsi baru `slugifyScreenToken(raw)` menormalkan ketikan bebas ("Kasir Depan!!" → `"kasir-depan"`), kembalikan `null` kalau hasilnya < 3 karakter. `friendlyError()` ditambah 2 pesan khusus (format ditolak constraint, slug bentrok TV lain) |
+| `app/components/promo/PromoModule.tsx`                                                  | `ScreenFormModal` — field baru "Alamat TV (opsional)", HANYA muncul di mode tambah (bukan ubah nama — mengubah token TV yang sudah ada mematahkan link/QR yang sudah ditempel di perangkat, sengaja tidak ditawarkan). Pratinjau link real-time di bawah field                                        |
+
+**Belum `npm run build`** (batasan sesi sama seperti di bawah). Migration
+`028` bergantung tabel `promo_screens` (migration 027) sudah ada — kalau
+027 belum dijalankan di production, jalankan 027 dulu baru 028.
+
+**Yang HARUS dilakukan pemilik project sebelum melanjutkan:**
+
+1. Jalankan `027_promo_screens.sql` di SQL Editor Supabase (kalau belum),
+   lalu tempel SELURUH isi `027_cek_hasil.sql` dan jalankan — kirim hasil
+   Bagian 1 (7 baris cek struktur) dan Bagian 2 (4 skenario uji `anon`) ke
+   agent berikutnya SEBELUM migration dianggap terverifikasi.
+2. `npm install` (menarik `qrcode` + `@types/qrcode` yang baru ditambahkan
+   ke `package.json`), lalu `npm run build` — belum pernah hijau untuk
+   perubahan sesi #21 di mesin manapun (lihat batasan di bawah).
+3. Uji di browser: tambah 1 TV di menu "Layar Promosi", buka link/QR-nya di
+   tab baru → harus mendarat di `/tv/[access_token]` dan memutar media
+   TV itu saja (tambahkan 1 media dulu di "Kelola Media" TV itu untuk
+   mengetesnya). Buka `/tv` tanpa token → harus melempar ke `/`.
+
+**Batasan sesi #21 (sama seperti sesi #20):** tanpa jaringan dan tanpa
+`node_modules` — `npm install`, `tsc`, `next build` tidak bisa dijalankan di
+sini (percobaan `npm install qrcode @types/qrcode` di sesi ini gagal `403`,
+mengonfirmasi tidak ada akses jaringan). Semua file di atas ditulis
+mengikuti pola yang SUDAH ada di repo (dicek manual lewat `view` + cocokkan
+nama impor/ekspor satu-satu), tapi **belum ada satu pun yang diverifikasi
+`npm run build`** — WAJIB dijalankan di mesin pemilik project sebelum
+dipakai di production.
+
+### Riwayat sesi #20 (arah lama, sudah digantikan — jangan diikuti)
+
+<details>
+<summary>Tabel & catatan asli sesi #20 (satu playlist global, migration <code>026</code>) — dibiarkan apa adanya untuk alasan historis, arahnya sudah diganti tabel di atas</summary>
+
+| #   | Langkah                                                 | File                                                                                                                                 | Status                                                                                                                                                                                                                                                                                          |
+| --- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Database: tabel, bucket, RLS, RPC urutan                | `supabase/migrations/026_promo_media.sql`                                                                                            | ✅ **Dijalankan pemilik project di production & diverifikasi** (sesi #20): 5 cek `supabase/checks/026_cek_hasil.sql` semua sesuai harapan; uji `anon` (`026_cek_anon.sql`) hanya menampilkan baris aktif. **Belum dilaporkan:** uji `select *` sebagai `anon` (harus ERROR permission denied)   |
+| 2   | Hook                                                    | `hooks/usePromoMedia.ts`                                                                                                             | ✅ Terpasang di repo pemilik project; **`npm run build` hijau** (tahap TypeScript lolos, Next 16.3.5 Turbopack). Belum dicoba di browser (belum ada UI)                                                                                                                                         |
+| 3   | Layar pengelola (upload, urutan, aktif/nonaktif, hapus) | `app/components/promo/PromoModule.tsx`                                                                                               | ✅ Terpasang di repo pemilik project; **`npm run build` hijau** (TypeScript lolos, termasuk nama ikon lucide). Belum dicoba di browser                                                                                                                                                          |
+| 4   | Wiring menu                                             | `app/components/layout/Sidebar.tsx` + `app/page.tsx` (2 edit kecil)                                                                  | 🟡 File dibuat sesi #20 — **hanya penambahan** (diff diperiksa: 0 baris lama berubah). Menu "Layar Promosi" (key `promo`, ikon `Monitor`, grup "Alat Kasir", admin+supervisor) + `dynamic()` import `PromoModule` (`ssr: false`) + baris render. Belum `npm run build`, belum dicoba di browser |
+| 5   | Pemutar publik + izinkan tanpa login                    | `app/tv/page.tsx` + `middleware.ts` (tambah `"/tv"` ke `PUBLIC_PATHS`)                                                               | ✅ Ternyata SUDAH ada & lengkap saat dicek ulang sesi #21 (wake lock, fullscreen, retry) — tabel ini sempat menandainya "Belum", lihat catatan "PROGRESS.md basi"                                                                                                                               |
+| 6   | Sinkron dokumentasi                                     | tambahkan isi `026` ke akhir `supabase/schema.sql` (aturan: tiap migration baru WAJIB ikut ditambah manual) + perbarui `PROGRESS.md` | ⬜ Masih belum — dan sekarang `027` juga ikut belum disinkron, lihat tabel sesi #21 di atas                                                                                                                                                                                                     |
+
+**Keputusan desain migration `026` (masih berlaku sebagai dasar, sebagian
+DIUBAH migration `027` — lihat bagian sesi #21 di atas untuk yang berubah):**
 
 - **`/tv` publik tanpa login** — TV sulit untuk mengetik kredensial dan sesi
   login bisa kedaluwarsa tengah malam. Risiko diterima: siapa pun yang tahu
-  alamat `/tv` bisa melihat media aktif. Jangan unggah materi internal.
-- **`anon` dibatasi dua lapis**: baris (`is_active = true` saja) DAN kolom
-  (hanya `id, title, media_type, file_url, duration_seconds, sort_order,
-is_active`). Akibat penting untuk langkah 5: **pemutar `/tv` TIDAK BOLEH
-  `select("*")`** — harus menyebut kolom satu-satu, kalau tidak Postgres
-  menolak dengan "permission denied".
+  alamat `/tv/[access_token]` bisa melihat media aktif TV itu. Jangan
+  unggah materi internal.
 - Tulis (insert/update/delete + upload/hapus file) hanya **admin+supervisor**
   lewat `public.current_user_role()` (migration 024), BUKAN subquery ke
   `profiles` (penyebab insiden rekursi sesi #18).
@@ -52,91 +212,22 @@ is_active`). Akibat penting untuk langkah 5: **pemutar `/tv` TIDAK BOLEH
   JPG/PNG/WebP/MP4/WebM. `.mov` sengaja ditolak (banyak browser TV tidak
   bisa memutarnya).
 - Urutan lewat RPC atomik `reorder_promo_media(uuid[])`.
-- Hapus = **hapus permanen** (baris + file Storage), bukan soft-delete ke
-  Sampah, dan tidak ditulis ke `activity_logs`. Untuk berhenti menayangkan
-  sementara pakai toggle `is_active`.
+- Hapus media = **hapus permanen** (baris + file Storage), bukan
+  soft-delete ke Sampah, dan tidak ditulis ke `activity_logs`. Untuk
+  berhenti menayangkan sementara pakai toggle `is_active`.
 - `duration_seconds` (3–120) hanya untuk **gambar**; video diputar sampai
   selesai dan selalu **tanpa suara** (browser memblokir autoplay bersuara).
 
-**Kontrak `hooks/usePromoMedia.ts` (langkah 2, sudah dibuat) — dipakai langkah 3 & 5:**
-
-- `usePromoMedia()` → `{ items, isLoading, error, isMutating, refetch,
-addMedia({file,title,durationSeconds}), updateMedia(id,{title?,
-duration_seconds?,is_active?}), removeMedia(id), moveItem(id,"up"|"down") }`.
-  Semua aksi tulis mengembalikan `{ ok: true } | { ok: false; error }` —
-  TIDAK melempar. `error` di hook = error MEMUAT daftar saja.
-- Konstanta yang diekspor untuk UI: `PROMO_ACCEPT` (atribut `accept` input
-  file), `PROMO_MAX_FILE_BYTES`, `PROMO_DURATION_MIN/MAX/DEFAULT`.
-- `fetchPlayablePromoMedia()` (fungsi biasa, bukan hook) untuk `/tv`: query
-  eksplisit 6 kolom + `is_active = true`, urut `sort_order` lalu `id`.
-  **Sengaja tidak `order("created_at")`** — `anon` tidak punya hak baca
-  kolom itu. MELEMPAR Error kalau gagal; pemutar sebaiknya tetap memutar
-  playlist lama.
-- Keputusan yang tadinya terbuka: **hapus baris DULU, baru file Storage**
-  (kalau file gagal terhapus cuma jadi file yatim, tidak ada media
-  "rusak" yang ditayangkan). Upload gagal-simpan → file otomatis dibersihkan.
-  UPDATE/DELETE memeriksa jumlah baris kembali (RLS menolak diam-diam).
-- Gambar dikompres (`maxWidthOrHeight: 1920`, `maxSizeMB: 1`); video tidak.
-  Video > 50 MB ditolak di client dengan pesan jelas. Video selalu disimpan
-  dengan durasi default 8 (diabaikan pemutar; kolom NOT NULL + CHECK 3..120).
-- Tidak ada indikator progres upload (supabase-js tidak menyediakannya) —
-  layar pengelola cukup menampilkan status "Mengunggah..." dari `isMutating`.
-
-**Catatan `PromoModule.tsx` (langkah 3, sudah dibuat):**
-
-- Gate akses sama polanya dengan `PengaturanModule.tsx` (admin+supervisor).
-  Ekspor default `PromoModule`, tanpa props — cocok di-`dynamic()` di
-  `app/page.tsx` dengan `{ ssr: false }` (modul memakai `window.location`
-  langsung, jadi `ssr: false` WAJIB).
-- Menampilkan alamat TV (`{origin}/tv`) sebagai tautan `target="_blank"`.
-  **Tautan itu belum berfungsi sampai langkah 5** (route `/tv` belum ada).
-- Teks bantuan di layar berjanji "perubahan muncul di TV dalam sekitar 1
-  menit" — **langkah 5 harus mengikuti angka itu** (polling ~60 detik) atau
-  teksnya diubah bersamaan.
-- Ikon `lucide-react` yang dipakai HANYA yang sudah terbukti ada di repo
-  (`AlertCircle, CheckCircle2, ChevronDown, Eye, EyeOff, Loader2, Pencil,
-PlayCircle, Plus, ShieldAlert, Trash2, Upload, X`) ditambah `ChevronUp`.
-  Untuk ikon menu di Sidebar (langkah 4) kalau memakai nama baru
-  (mis. `MonitorPlay`), build akan langsung memberi tahu kalau tidak ada.
-- Tanpa progres upload; tanpa drag-and-drop (urutan lewat tombol naik/turun).
-
-**Rencana untuk langkah 4–5 (supaya agent berikutnya tidak menurunkan ulang):**
-
-- `app/tv/page.tsx`: client component berdiri sendiri (tanpa `useAuth`),
-  pola sama seperti `app/cek-struk/page.tsx`. Polling ~60 detik (BUKAN
-  Realtime — PRD §7 membatasi Realtime hanya Kasir & Stok). Gambar tayang
-  `duration_seconds`; video `muted playsInline autoPlay`, lanjut di
-  `onEnded`; `onError` → lompat ke item berikut (jangan macet). Layar
-  kosong/idle kalau tidak ada media aktif. Preload item berikutnya. Wake Lock
-  API (`navigator.wakeLock`) supaya TV tidak sleep + fullscreen dengan
-  klik/tombol; sembunyikan kursor. Tema gelap penuh layar.
-- Sidebar (langkah 4, SUDAH dibuat): item `promo` — lihat baris tabel di atas.
-  `Header.tsx` otomatis memakai judul dari `MENU_GROUPS`, tidak perlu diubah.
-- Tidak menambah dependency baru (semua lib sudah ada di `package.json`).
-- Tema "LCO Flat" mengikat (PRD §8/§16): token `lco-*`, tanpa
-  `backdrop-blur`/shadow tebal/animasi selain `transition-colors`.
-
-**Yang HARUS dilakukan pemilik project untuk langkah 1:** jalankan
-`026_promo_media.sql` di SQL Editor Supabase, lalu jalankan 5 query "Cek
-hasil" di bagian bawah file itu (terutama uji `anon` dengan `set local role
-anon` — SQL Editor berjalan sebagai superuser sehingga tanpa itu RLS tidak
-ikut teruji). Batas 50 MB mengikuti plan gratis; kalau project punya batas
-upload global lebih kecil, upload video besar akan gagal walau bucket
-mengizinkan.
-
-**Temuan sesi ini (BUKAN bagian fitur, belum diperbaiki):** folder
+**Temuan sesi #20 (BUKAN bagian fitur, belum diperbaiki):** folder
 `supabase/migrations/` di zip yang diserahkan sesi #20 **berhenti di `022`** —
 file `023`, `024`, `025` yang disebut PROGRESS sesi #18/#19 **tidak ada di
 folder itu**, walau isinya ada di `supabase/schema.sql`. Kemungkinan belum
 di-commit ke repo. Nomor **`026`** dipilih mengikuti PROGRESS.md (karena `025`
 sudah terpakai di production). `026` bergantung pada `current_user_role()` dari
-`024` dan berhenti dengan pesan jelas kalau function itu belum ada.
+`024` dan berhenti dengan pesan jelas kalau function itu belum ada. **Belum
+diperiksa ulang sesi #21** — kemungkinan masih berlaku untuk `027` juga.
 
-**Batasan sesi #20:** tanpa jaringan dan tanpa `node_modules` — `npm install`,
-`tsc`, dan `next build` tidak bisa dijalankan; `AGENTS.md` meminta membaca
-`node_modules/next/dist/docs/` sebelum menulis kode Next.js, itu juga tidak
-bisa dilakukan. Karena itu langkah 2–5 hanya boleh memakai pola yang SUDAH ada
-di repo ini, dan wajib diverifikasi `npm run build` di mesin pemilik project.
+</details>
 
 ## Status MVP terkini (sesi #19, 2026-09-21)
 
