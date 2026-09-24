@@ -15,7 +15,130 @@
 > per langkah**, diserahkan sebagai file yang bisa diunduh — bukan banyak
 > kode sekaligus di dalam chat.
 
-## Status MVP terkini (sesi #19, 2026-09-21) — BACA INI DULU
+## Fitur baru: Layar Promosi TV (sesi #20, 2026-09-24) — BACA INI DULU
+
+**Bukan task T-xx PRD** (PRD tidak menyebut layar TV sama sekali) — permintaan
+langsung pemilik project: _"menampilkan gambar atau video di layar TV
+promosi"_. Konsep: TV / mini PC / Android box / tablet yang disambung ke TV
+membuka halaman **`/tv`** di browser; halaman itu memutar daftar media
+berulang. Admin+supervisor mengelola daftarnya dari menu baru **"Layar
+Promosi"** di app kasir. Dikerjakan **bertahap, SATU file per langkah**
+(preferensi pemilik project, lihat catatan di atas).
+
+| #   | Langkah                                                 | File                                                                                                                                 | Status                                                                                                                                                                                                                                                                                                                |
+| --- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Database: tabel, bucket, RLS, RPC urutan                | `supabase/migrations/026_promo_media.sql`                                                                                            | ✅ **Dijalankan pemilik project di production & diverifikasi** (sesi #20): 5 cek `supabase/checks/026_cek_hasil.sql` semua sesuai harapan; uji `anon` (`026_cek_anon.sql`) hanya menampilkan baris aktif. **Belum dilaporkan:** uji `select *` sebagai `anon` (harus ERROR permission denied)                         |
+| 2   | Hook                                                    | `hooks/usePromoMedia.ts`                                                                                                             | ✅ Terpasang di repo pemilik project; **`npm run build` hijau** (tahap TypeScript lolos, Next 16.3.5 Turbopack). Belum dicoba di browser (belum ada UI)                                                                                                                                                               |
+| 3   | Layar pengelola (upload, urutan, aktif/nonaktif, hapus) | `app/components/promo/PromoModule.tsx`                                                                                               | ✅ Terpasang di repo pemilik project; **`npm run build` hijau** (TypeScript lolos, termasuk nama ikon lucide). Belum dicoba di browser                                                                                                                                                                                |
+| 4   | Wiring menu                                             | `app/components/layout/Sidebar.tsx` + `app/page.tsx` (2 edit kecil)                                                                  | 🟡 File dibuat sesi #20 — **hanya penambahan** (diff diperiksa: 0 baris lama berubah). Menu "Layar Promosi" (key `promo`, ikon `Monitor`, grup "Alat Kasir", admin+supervisor) + `dynamic()` import `PromoModule` (`ssr: false`) + baris render. Belum `npm run build`, belum dicoba di browser                       |
+| 5   | Pemutar publik + izinkan tanpa login                    | `app/tv/page.tsx` + `middleware.ts` (tambah `"/tv"` ke `PUBLIC_PATHS`)                                                               | ⬜ Belum. Catatan: `npm run build` Next 16.3.5 memberi peringatan _"middleware file convention is deprecated, use proxy"_ — **PRA-EKSISTING, bukan dari fitur ini**. Langkah 5 cukup menambah `"/tv"` di `middleware.ts` seperti sekarang; JANGAN migrasi ke `proxy` di langkah yang sama (ubah satu hal per langkah) |
+| 6   | Sinkron dokumentasi                                     | tambahkan isi `026` ke akhir `supabase/schema.sql` (aturan: tiap migration baru WAJIB ikut ditambah manual) + perbarui `PROGRESS.md` | ⬜ Belum                                                                                                                                                                                                                                                                                                              |
+
+**Keputusan desain yang sudah diambil (detail lengkap di komentar header
+migration `026`):**
+
+- **`/tv` publik tanpa login** — TV sulit untuk mengetik kredensial dan sesi
+  login bisa kedaluwarsa tengah malam. Risiko diterima: siapa pun yang tahu
+  alamat `/tv` bisa melihat media aktif. Jangan unggah materi internal.
+- **`anon` dibatasi dua lapis**: baris (`is_active = true` saja) DAN kolom
+  (hanya `id, title, media_type, file_url, duration_seconds, sort_order,
+is_active`). Akibat penting untuk langkah 5: **pemutar `/tv` TIDAK BOLEH
+  `select("*")`** — harus menyebut kolom satu-satu, kalau tidak Postgres
+  menolak dengan "permission denied".
+- Tulis (insert/update/delete + upload/hapus file) hanya **admin+supervisor**
+  lewat `public.current_user_role()` (migration 024), BUKAN subquery ke
+  `profiles` (penyebab insiden rekursi sesi #18).
+- Bucket Storage `promo-media` (public), batas **50 MB/file**, hanya
+  JPG/PNG/WebP/MP4/WebM. `.mov` sengaja ditolak (banyak browser TV tidak
+  bisa memutarnya).
+- Urutan lewat RPC atomik `reorder_promo_media(uuid[])`.
+- Hapus = **hapus permanen** (baris + file Storage), bukan soft-delete ke
+  Sampah, dan tidak ditulis ke `activity_logs`. Untuk berhenti menayangkan
+  sementara pakai toggle `is_active`.
+- `duration_seconds` (3–120) hanya untuk **gambar**; video diputar sampai
+  selesai dan selalu **tanpa suara** (browser memblokir autoplay bersuara).
+
+**Kontrak `hooks/usePromoMedia.ts` (langkah 2, sudah dibuat) — dipakai langkah 3 & 5:**
+
+- `usePromoMedia()` → `{ items, isLoading, error, isMutating, refetch,
+addMedia({file,title,durationSeconds}), updateMedia(id,{title?,
+duration_seconds?,is_active?}), removeMedia(id), moveItem(id,"up"|"down") }`.
+  Semua aksi tulis mengembalikan `{ ok: true } | { ok: false; error }` —
+  TIDAK melempar. `error` di hook = error MEMUAT daftar saja.
+- Konstanta yang diekspor untuk UI: `PROMO_ACCEPT` (atribut `accept` input
+  file), `PROMO_MAX_FILE_BYTES`, `PROMO_DURATION_MIN/MAX/DEFAULT`.
+- `fetchPlayablePromoMedia()` (fungsi biasa, bukan hook) untuk `/tv`: query
+  eksplisit 6 kolom + `is_active = true`, urut `sort_order` lalu `id`.
+  **Sengaja tidak `order("created_at")`** — `anon` tidak punya hak baca
+  kolom itu. MELEMPAR Error kalau gagal; pemutar sebaiknya tetap memutar
+  playlist lama.
+- Keputusan yang tadinya terbuka: **hapus baris DULU, baru file Storage**
+  (kalau file gagal terhapus cuma jadi file yatim, tidak ada media
+  "rusak" yang ditayangkan). Upload gagal-simpan → file otomatis dibersihkan.
+  UPDATE/DELETE memeriksa jumlah baris kembali (RLS menolak diam-diam).
+- Gambar dikompres (`maxWidthOrHeight: 1920`, `maxSizeMB: 1`); video tidak.
+  Video > 50 MB ditolak di client dengan pesan jelas. Video selalu disimpan
+  dengan durasi default 8 (diabaikan pemutar; kolom NOT NULL + CHECK 3..120).
+- Tidak ada indikator progres upload (supabase-js tidak menyediakannya) —
+  layar pengelola cukup menampilkan status "Mengunggah..." dari `isMutating`.
+
+**Catatan `PromoModule.tsx` (langkah 3, sudah dibuat):**
+
+- Gate akses sama polanya dengan `PengaturanModule.tsx` (admin+supervisor).
+  Ekspor default `PromoModule`, tanpa props — cocok di-`dynamic()` di
+  `app/page.tsx` dengan `{ ssr: false }` (modul memakai `window.location`
+  langsung, jadi `ssr: false` WAJIB).
+- Menampilkan alamat TV (`{origin}/tv`) sebagai tautan `target="_blank"`.
+  **Tautan itu belum berfungsi sampai langkah 5** (route `/tv` belum ada).
+- Teks bantuan di layar berjanji "perubahan muncul di TV dalam sekitar 1
+  menit" — **langkah 5 harus mengikuti angka itu** (polling ~60 detik) atau
+  teksnya diubah bersamaan.
+- Ikon `lucide-react` yang dipakai HANYA yang sudah terbukti ada di repo
+  (`AlertCircle, CheckCircle2, ChevronDown, Eye, EyeOff, Loader2, Pencil,
+PlayCircle, Plus, ShieldAlert, Trash2, Upload, X`) ditambah `ChevronUp`.
+  Untuk ikon menu di Sidebar (langkah 4) kalau memakai nama baru
+  (mis. `MonitorPlay`), build akan langsung memberi tahu kalau tidak ada.
+- Tanpa progres upload; tanpa drag-and-drop (urutan lewat tombol naik/turun).
+
+**Rencana untuk langkah 4–5 (supaya agent berikutnya tidak menurunkan ulang):**
+
+- `app/tv/page.tsx`: client component berdiri sendiri (tanpa `useAuth`),
+  pola sama seperti `app/cek-struk/page.tsx`. Polling ~60 detik (BUKAN
+  Realtime — PRD §7 membatasi Realtime hanya Kasir & Stok). Gambar tayang
+  `duration_seconds`; video `muted playsInline autoPlay`, lanjut di
+  `onEnded`; `onError` → lompat ke item berikut (jangan macet). Layar
+  kosong/idle kalau tidak ada media aktif. Preload item berikutnya. Wake Lock
+  API (`navigator.wakeLock`) supaya TV tidak sleep + fullscreen dengan
+  klik/tombol; sembunyikan kursor. Tema gelap penuh layar.
+- Sidebar (langkah 4, SUDAH dibuat): item `promo` — lihat baris tabel di atas.
+  `Header.tsx` otomatis memakai judul dari `MENU_GROUPS`, tidak perlu diubah.
+- Tidak menambah dependency baru (semua lib sudah ada di `package.json`).
+- Tema "LCO Flat" mengikat (PRD §8/§16): token `lco-*`, tanpa
+  `backdrop-blur`/shadow tebal/animasi selain `transition-colors`.
+
+**Yang HARUS dilakukan pemilik project untuk langkah 1:** jalankan
+`026_promo_media.sql` di SQL Editor Supabase, lalu jalankan 5 query "Cek
+hasil" di bagian bawah file itu (terutama uji `anon` dengan `set local role
+anon` — SQL Editor berjalan sebagai superuser sehingga tanpa itu RLS tidak
+ikut teruji). Batas 50 MB mengikuti plan gratis; kalau project punya batas
+upload global lebih kecil, upload video besar akan gagal walau bucket
+mengizinkan.
+
+**Temuan sesi ini (BUKAN bagian fitur, belum diperbaiki):** folder
+`supabase/migrations/` di zip yang diserahkan sesi #20 **berhenti di `022`** —
+file `023`, `024`, `025` yang disebut PROGRESS sesi #18/#19 **tidak ada di
+folder itu**, walau isinya ada di `supabase/schema.sql`. Kemungkinan belum
+di-commit ke repo. Nomor **`026`** dipilih mengikuti PROGRESS.md (karena `025`
+sudah terpakai di production). `026` bergantung pada `current_user_role()` dari
+`024` dan berhenti dengan pesan jelas kalau function itu belum ada.
+
+**Batasan sesi #20:** tanpa jaringan dan tanpa `node_modules` — `npm install`,
+`tsc`, dan `next build` tidak bisa dijalankan; `AGENTS.md` meminta membaca
+`node_modules/next/dist/docs/` sebelum menulis kode Next.js, itu juga tidak
+bisa dilakukan. Karena itu langkah 2–5 hanya boleh memakai pola yang SUDAH ada
+di repo ini, dan wajib diverifikasi `npm run build` di mesin pemilik project.
+
+## Status MVP terkini (sesi #19, 2026-09-21)
 
 **Ringkasan: semua item MVP PRD §12 (fase 1.0) sudah dilaporkan berjalan oleh
 pemilik project. Sisa pekerjaan = fase 1.1/2.0 (T-12, T-13), bukan MVP.**

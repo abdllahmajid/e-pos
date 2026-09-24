@@ -18,6 +18,7 @@ import {
   Package,
   Wallet,
   Boxes,
+  Monitor,
   TrendingUp,
   Trash2,
   ClipboardList,
@@ -103,6 +104,19 @@ export const MENU_GROUPS: SidebarMenuGroup[] = [
       },
       // roles: kosong (semua role) — PRD §5 baris `kas_shift` — Kasir "✔ (sendiri)".
       { key: "kas", label: "Kas & Shift", icon: Wallet },
+      // ── TAMBAHAN (Layar Promosi) ── Pengelola gambar/video yang diputar di
+      // TV toko lewat halaman publik `/tv`. Fitur di LUAR penomoran T-xx PRD
+      // (lihat PROGRESS.md sesi #20). admin+supervisor — sama dengan
+      // keputusan Sampah/Log Aktivitas/Pengaturan, dan sejalan dengan RLS
+      // tabel `promo_media` (migration 026). Layar blokir di dalam
+      // PromoModule.tsx TETAP ada (defense in depth, sama alasannya dengan
+      // grup Laporan/Lainnya di bawah).
+      {
+        key: "promo",
+        label: "Layar Promosi",
+        icon: Monitor,
+        roles: ["admin", "supervisor"],
+      },
     ],
   },
   {

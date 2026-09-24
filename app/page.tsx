@@ -81,6 +81,13 @@ const PengaturanModule = dynamic(
   },
 );
 
+// ── TAMBAHAN (Layar Promosi) ── Modul pengelola media TV toko, admin+supervisor
+// (layar blokirnya sendiri sudah di dalam PromoModule.tsx). WAJIB `ssr: false`:
+// modul ini membaca `window.location` langsung saat render.
+const PromoModule = dynamic(() => import("./components/promo/PromoModule"), {
+  ssr: false,
+});
+
 export default function LCOPOS() {
   // ── KOREKSI (setelah login diarahkan ke Dashboard) ── Sebelumnya default
   // "kasir", jadi kasir/admin yang baru login langsung masuk layar POS.
@@ -124,6 +131,7 @@ export default function LCOPOS() {
           {activeMenu === "riwayat" && <TransactionHistoryModule />}
           {activeMenu === "stok" && <StokModule />}
           {activeMenu === "kas" && <KasModule />}
+          {activeMenu === "promo" && <PromoModule />}
           {activeMenu === "laporan" && <LaporanModule />}
           {activeMenu === "sampah" && <SampahModule />}
           {activeMenu === "log-aktivitas" && <LogAktivitasModule />}
