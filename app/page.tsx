@@ -3,6 +3,8 @@
 import { useState } from "react";
 import dynamic from "next/dynamic";
 import Sidebar from "./components/layout/Sidebar";
+// ── TAMBAHAN (header/topbar) ── Lihat catatan header lengkap di file ini.
+import Header from "./components/layout/Header";
 
 // Dynamic Imports
 const KasirModule = dynamic(() => import("./components/kasir/KasirModule"), {
@@ -101,21 +103,32 @@ export default function LCOPOS() {
           sekarang cuma shell: simpan state menu aktif + render modul yang dipilih. */}
       <Sidebar activeMenu={activeMenu} onMenuChange={setActiveMenu} />
 
-      <main className="min-h-0 flex-1 overflow-hidden">
-        {activeMenu === "dashboard" && (
-          <DashboardModule onNavigate={setActiveMenu} />
-        )}
-        {activeMenu === "kasir" && (
-          <KasirModule onNavigateToShift={goToShiftMenu} />
-        )}
-        {activeMenu === "produk" && <ProdukModule />}
-        {activeMenu === "riwayat" && <TransactionHistoryModule />}
-        {activeMenu === "stok" && <StokModule />}
-        {activeMenu === "kas" && <KasModule />}
-        {activeMenu === "laporan" && <LaporanModule />}
-        {activeMenu === "sampah" && <SampahModule />}
-        {activeMenu === "log-aktivitas" && <LogAktivitasModule />}
-        {activeMenu === "pengaturan" && <PengaturanModule />}
+      {/* ── PERUBAHAN (header/topbar) ── `main` sekarang `flex-col`: Header di
+          atas (tinggi tetap, `shrink-0` lewat className-nya sendiri), lalu
+          div pembungkus modul di bawahnya diberi `flex-1 min-h-0` supaya
+          mengambil SISA tinggi layar. Modul-modul di bawah (Dashboard, Kasir,
+          dst.) sudah pakai `h-full` di root masing-masing sejak sebelumnya,
+          jadi otomatis pas mengisi div pembungkus ini — tidak perlu ubah
+          satu pun file modul. */}
+      <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <Header activeMenu={activeMenu} />
+
+        <div className="min-h-0 flex-1">
+          {activeMenu === "dashboard" && (
+            <DashboardModule onNavigate={setActiveMenu} />
+          )}
+          {activeMenu === "kasir" && (
+            <KasirModule onNavigateToShift={goToShiftMenu} />
+          )}
+          {activeMenu === "produk" && <ProdukModule />}
+          {activeMenu === "riwayat" && <TransactionHistoryModule />}
+          {activeMenu === "stok" && <StokModule />}
+          {activeMenu === "kas" && <KasModule />}
+          {activeMenu === "laporan" && <LaporanModule />}
+          {activeMenu === "sampah" && <SampahModule />}
+          {activeMenu === "log-aktivitas" && <LogAktivitasModule />}
+          {activeMenu === "pengaturan" && <PengaturanModule />}
+        </div>
       </main>
     </div>
   );

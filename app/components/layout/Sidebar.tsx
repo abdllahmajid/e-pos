@@ -72,7 +72,11 @@ export interface SidebarMenuGroup {
 // Struktur grup mengikuti PRD §4.1 (UTAMA / ALAT KASIR / ...). Menu yang belum
 // dibangun (Stok Menipis, Laporan, Nota/Struk mandiri, dst.) belum dimasukkan ke
 // sini — tambahkan begitu modulnya sudah ada, jangan render menu ke modul kosong.
-const MENU_GROUPS: SidebarMenuGroup[] = [
+// ── TAMBAHAN (header/topbar) ── Sekarang di-`export` (sebelumnya modul-privat
+// ke file ini) supaya Header.tsx bisa mengambil judul + ikon menu aktif dari
+// SATU sumber yang sama persis dengan Sidebar — tidak ada daftar judul kedua
+// yang harus diupdate manual tiap kali menu baru ditambah di sini.
+export const MENU_GROUPS: SidebarMenuGroup[] = [
   {
     label: "Utama",
     items: [
