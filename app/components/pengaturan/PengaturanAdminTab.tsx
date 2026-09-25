@@ -14,18 +14,31 @@
 // error dari RPC), bukan sumber kebenaran permission-nya — itu tetap di
 // database.
 //
-// ── TAMBAHAN (migration 018) ── Modul ini sekarang admin+supervisor (lihat
-// PengaturanModule.tsx). Supervisor dapat 2 pengaman TAMBAHAN yang tidak
-// berlaku untuk admin, mencerminkan trigger `profiles_enforce_role_change` +
-// RPC `admin_update_user_role`/`admin_set_user_active` di migration 018:
-//   A. Baris user yang ROLE-NYA SAAT INI admin dikunci total dari supervisor
-//      (dropdown role & tombol nonaktifkan disabled) — supervisor tidak
-//      boleh menyentuh akun admin sama sekali.
-//   B. Pilihan role "Admin" disembunyikan dari dropdown supervisor sama
-//      sekali — supervisor tidak bisa mempromosikan siapa pun jadi admin.
-// UI ini cuma mencerminkan batasan itu lebih awal (disabled/disembunyikan,
-// bukan menunggu error RPC) — sumber kebenarannya tetap di database, sama
-// seperti pola pengaman self-target di atas.
+// ── REVISI (migration 028_dynamic_roles.sql, "sistem role dinamis") ──
+// Sebelumnya (migration 018) hierarki ditulis manual dengan 2 pengaman
+// khusus "supervisor tidak boleh sentuh/mempromosikan admin". Enum
+// `user_role` & 4 nama role tetap SUDAH DIHAPUS TOTAL, diganti tabel `roles`
+// dengan kolom `level` (integer, 0 = paling berwenang) — jadi kedua pengaman
+// itu DIGENERALISASI jadi perbandingan angka, berlaku untuk level berapa pun
+// (bukan cuma admin/supervisor), dan otomatis ikut kalau pemilik project
+// bikin role custom baru dengan level sendiri:
+//   A. Baris user yang ROLE-NYA SAAT INI level-nya < level caller (lebih
+//      berwenang dari caller) dikunci total dari caller — bukan lagi
+//      `isSupervisorCaller && row.role === "admin"`, tapi
+//      `row.role_level < callerLevel`. Generalisasi trigger
+//      `enforce_profiles_role_change` (migration 028).
+//   B. Dropdown role (baik ubah role per-baris maupun Tambah User) cuma
+//      menawarkan role dengan level >= level caller — bukan lagi
+//      `ROLE_OPTIONS.filter(role => role !== "admin")` yang hardcode nama.
+//      Generalisasi guard `v_new_role_level < v_caller_level` di RPC
+//      `admin_update_user_role` (migration 028) & route.ts create-user.
+// UI ini cuma mencerminkan batasan itu lebih awal (disabled/disaring,
+// bukan menunggu error RPC/route) — sumber kebenarannya tetap di database,
+// sama seperti sebelumnya.
+//
+// Daftar role sendiri (nama, level) sekarang DATA, bukan tipe compile-time —
+// diambil lewat hooks/useRoles.ts (tab "Role", langkah sebelumnya), bukan
+// lagi konstanta ROLE_LABEL/ROLE_OPTIONS yang di-hardcode di file ini.
 //
 // Pola konfirmasi: reuse gaya modal konfirmasi ProdukModule.tsx (hapus
 // produk) untuk ubah role & nonaktifkan (aksi yang berdampak ke akses login
@@ -43,10 +56,9 @@
 // UNDANGAN (bukan password sementara) — dia set password sendiri lewat link,
 // konsisten dengan pola "Kirim Reset Password" yang sudah ada di tab ini.
 // Modal Tambah User pakai batasan role yang SAMA dengan dropdown edit role
-// per-baris (`getRoleOptionsFor` — supervisor tidak bisa membuat akun Admin),
-// TIDAK pakai modal konfirmasi terpisah (submit form-nya sendiri sudah cukup
-// eksplisit, beda dari ubah role/nonaktifkan yang mengubah akun yang SUDAH
-// ada).
+// per-baris (pengaman B di atas), TIDAK pakai modal konfirmasi terpisah
+// (submit form-nya sendiri sudah cukup eksplisit, beda dari ubah
+// role/nonaktifkan yang mengubah akun yang SUDAH ada).
 
 import { useState } from "react";
 import {
@@ -61,28 +73,9 @@ import {
   UserPlus,
   UserX,
 } from "lucide-react";
-import { useAuth, type UserRole } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuth";
 import { useAdminUsers, type AdminUserRow } from "@/hooks/useAdminUsers";
-
-const ROLE_LABEL: Record<UserRole, string> = {
-  admin: "Admin",
-  supervisor: "Supervisor",
-  kasir: "Kasir",
-  qc: "QC",
-};
-
-const ROLE_OPTIONS: UserRole[] = ["admin", "supervisor", "kasir", "qc"];
-
-// ── TAMBAHAN (migration 018, pengaman B) ── Opsi role yang boleh DIPILIH
-// tergantung role pemanggil. Supervisor tidak pernah melihat "Admin" sebagai
-// pilihan (tidak bisa mempromosikan siapa pun jadi admin) — admin tetap
-// melihat semua opsi seperti sebelumnya.
-function getRoleOptionsFor(callerRole: UserRole | undefined): UserRole[] {
-  if (callerRole === "supervisor") {
-    return ROLE_OPTIONS.filter((role) => role !== "admin");
-  }
-  return ROLE_OPTIONS;
-}
+import { useRoles, type RoleRow } from "@/hooks/useRoles";
 
 function formatDate(isoString: string): string {
   return new Intl.DateTimeFormat("id-ID", { dateStyle: "medium" }).format(
@@ -90,24 +83,53 @@ function formatDate(isoString: string): string {
   );
 }
 
+// ── TAMBAHAN (migration 028, pengaman B) ── Role yang boleh DIPILIH caller
+// (baik ubah role per-baris maupun Tambah User): level-nya harus >= level
+// caller sendiri — generalisasi dari "supervisor tidak bisa membuat/memberi
+// role admin". `callerLevel` bisa `undefined` (currentUser belum termuat)
+// -> dianggap paling TIDAK berwenang (Infinity) supaya defaultnya gagal
+// closed (tidak ada opsi ditawarkan), bukan gagal open.
+function getRoleOptionsFor(
+  roles: RoleRow[],
+  callerLevel: number | undefined,
+): RoleRow[] {
+  const level = callerLevel ?? Number.POSITIVE_INFINITY;
+  return roles.filter((role) => role.level >= level);
+}
+
+// Default role paling aman untuk form Tambah User: yang levelnya PALING
+// BESAR (paling tidak berwenang) di antara opsi yang boleh dipilih caller —
+// generalisasi dari default hardcode 'kasir' lama, supaya admin harus SADAR
+// menaikkan wewenangnya sendiri, bukan ke-klik tanpa sengaja.
+function getSafestDefaultRoleId(options: RoleRow[]): string {
+  if (options.length === 0) return "";
+  return options.reduce((safest, role) =>
+    role.level > safest.level ? role : safest,
+  ).id;
+}
+
 export default function PengaturanAdminTab() {
   const { user: currentUser } = useAuth();
   const {
     users,
-    isLoading,
-    error,
+    isLoading: isUsersLoading,
+    error: usersError,
     updateUserRole,
     setUserActive,
     updateUserContact,
     sendPasswordReset,
     createUser,
   } = useAdminUsers();
+  // ── TAMBAHAN (migration 028) ── Daftar role dinamis buat dropdown — hook
+  // yang sama dipakai tab "Role", di sini cuma dibaca (tidak ada CRUD role
+  // dari tab ini).
+  const { roles, isLoading: isRolesLoading, error: rolesError } = useRoles();
 
-  // Konfirmasi ubah role — { user, newRole } sekaligus supaya modal tahu
+  // Konfirmasi ubah role — { user, newRoleId } sekaligus supaya modal tahu
   // isi "dari -> ke" untuk ditampilkan.
   const [roleChangeTarget, setRoleChangeTarget] = useState<{
     targetUser: AdminUserRow;
-    newRole: UserRole;
+    newRoleId: string;
   } | null>(null);
   // Konfirmasi nonaktifkan (aktifkan kembali tidak pakai modal, lihat catatan header).
   const [deactivateTarget, setDeactivateTarget] = useState<AdminUserRow | null>(
@@ -125,7 +147,7 @@ export default function PengaturanAdminTab() {
   const [isAddUserOpen, setIsAddUserOpen] = useState(false);
   const [newUserName, setNewUserName] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
-  const [newUserRole, setNewUserRole] = useState<UserRole>("kasir");
+  const [newUserRoleId, setNewUserRoleId] = useState("");
   const [addUserSuccess, setAddUserSuccess] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -149,10 +171,8 @@ export default function PengaturanAdminTab() {
     setAddUserSuccess(false);
     setNewUserName("");
     setNewUserEmail("");
-    // Default role paling aman: 'kasir' (bukan 'admin'/'supervisor') supaya
-    // admin harus SADAR mengangkat dropdown-nya kalau memang mau bikin role
-    // lebih tinggi, bukan ke-klik tanpa sengaja.
-    setNewUserRole("kasir");
+    // ── REVISI (migration 028) ── lihat getSafestDefaultRoleId di atas.
+    setNewUserRoleId(getSafestDefaultRoleId(roleOptions));
     setIsAddUserOpen(true);
   }
 
@@ -163,7 +183,7 @@ export default function PengaturanAdminTab() {
       await createUser({
         fullName: newUserName,
         email: newUserEmail,
-        role: newUserRole,
+        roleId: newUserRoleId,
       });
       // Beda dari modal Edit (langsung tutup) — modal ini tetap terbuka
       // sebentar menampilkan pesan sukses dulu, supaya admin sadar undangan
@@ -205,7 +225,7 @@ export default function PengaturanAdminTab() {
     try {
       await updateUserRole(
         roleChangeTarget.targetUser.id,
-        roleChangeTarget.newRole,
+        roleChangeTarget.newRoleId,
       );
       setRoleChangeTarget(null);
     } catch (err) {
@@ -260,12 +280,11 @@ export default function PengaturanAdminTab() {
     }
   }
 
-  // ── TAMBAHAN (migration 018, pengaman A/B) ── Dihitung sekali di luar
-  // loop baris, dipakai per baris di bawah.
-  const isSupervisorCaller = currentUser?.role === "supervisor";
-  const roleOptions = getRoleOptionsFor(currentUser?.role);
+  // ── REVISI (migration 028, pengaman B) ── Dihitung sekali di luar loop
+  // baris, dipakai per baris di bawah + modal Tambah User.
+  const roleOptions = getRoleOptionsFor(roles, currentUser?.role_level);
 
-  if (isLoading) {
+  if (isUsersLoading || isRolesLoading) {
     return (
       <div className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white p-10 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
         <Loader2 className="h-4 w-4 animate-spin" />
@@ -276,10 +295,17 @@ export default function PengaturanAdminTab() {
 
   return (
     <div className="space-y-4">
-      {error && (
+      {usersError && (
         <div className="flex items-center gap-2 rounded-md border border-lco-coral/30 bg-lco-coral/10 px-3 py-2 text-sm text-lco-coral">
           <AlertCircle className="h-4 w-4 shrink-0" />
-          Gagal memuat daftar user: {error}
+          Gagal memuat daftar user: {usersError}
+        </div>
+      )}
+
+      {rolesError && (
+        <div className="flex items-center gap-2 rounded-md border border-lco-coral/30 bg-lco-coral/10 px-3 py-2 text-sm text-lco-coral">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          Gagal memuat daftar role: {rolesError}
         </div>
       )}
 
@@ -316,10 +342,13 @@ export default function PengaturanAdminTab() {
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
             {users.map((row) => {
               const isSelf = row.id === currentUser?.id;
-              // Pengaman A (migration 018): supervisor tidak boleh
-              // menyentuh baris yang ROLE-NYA SAAT INI admin sama sekali.
-              const isLockedForSupervisor =
-                isSupervisorCaller && row.role === "admin";
+              // ── REVISI (migration 028, pengaman A) ── Baris yang role-nya
+              // SAAT INI lebih berwenang dari caller (level lebih kecil)
+              // dikunci total — generalisasi dari "supervisor tidak boleh
+              // menyentuh baris admin".
+              const isLockedByHierarchy =
+                row.role_level <
+                (currentUser?.role_level ?? Number.POSITIVE_INFINITY);
 
               return (
                 <tr key={row.id} className={!row.is_active ? "opacity-60" : ""}>
@@ -340,31 +369,32 @@ export default function PengaturanAdminTab() {
                   </td>
                   <td className="px-4 py-3">
                     <select
-                      value={row.role}
-                      disabled={isSelf || isLockedForSupervisor}
+                      value={row.role_id}
+                      disabled={isSelf || isLockedByHierarchy}
                       title={
-                        isLockedForSupervisor
-                          ? "Supervisor tidak bisa mengubah role akun admin"
+                        isLockedByHierarchy
+                          ? "Role user ini lebih berwenang dari Anda — tidak bisa diubah dari sini"
                           : undefined
                       }
                       onChange={(e) =>
                         setRoleChangeTarget({
                           targetUser: row,
-                          newRole: e.target.value as UserRole,
+                          newRoleId: e.target.value,
                         })
                       }
                       className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm outline-none transition-colors duration-150 focus:border-lco-teal focus:ring-1 focus:ring-lco-teal disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950"
                     >
-                      {/* ── TAMBAHAN (migration 018, pengaman B) ── Baris
-                          yang SAAT INI admin tapi selectnya disabled (lihat
-                          di atas) tetap perlu opsi "Admin" supaya value
-                          terpilih valid — roleOptions (tanpa "admin" untuk
-                          supervisor) dipakai untuk baris LAIN yang bisa
-                          diedit, bukan baris ini. */}
-                      {(row.role === "admin" ? ROLE_OPTIONS : roleOptions).map(
+                      {/* ── REVISI (migration 028, pengaman B) ── Baris yang
+                          dikunci (role saat ini lebih berwenang dari caller)
+                          tetap perlu opsi role-nya sendiri supaya value
+                          terpilih valid walau selectnya disabled — daftar
+                          penuh `roles` dipakai untuk baris ini, `roleOptions`
+                          (yang sudah disaring level) dipakai untuk baris lain
+                          yang memang bisa diedit caller. */}
+                      {(isLockedByHierarchy ? roles : roleOptions).map(
                         (role) => (
-                          <option key={role} value={role}>
-                            {ROLE_LABEL[role]}
+                          <option key={role.id} value={role.id}>
+                            {role.name}
                           </option>
                         ),
                       )}
@@ -389,12 +419,12 @@ export default function PengaturanAdminTab() {
                       <button
                         type="button"
                         title={
-                          isLockedForSupervisor
-                            ? "Supervisor tidak bisa mengedit akun admin"
+                          isLockedByHierarchy
+                            ? "Role user ini lebih berwenang dari Anda — tidak bisa diedit dari sini"
                             : "Edit nama & email"
                         }
                         onClick={() => openEdit(row)}
-                        disabled={isLockedForSupervisor}
+                        disabled={isLockedByHierarchy}
                         className="rounded-md border border-zinc-200 p-1.5 text-zinc-500 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                       >
                         <Pencil className="h-3.5 w-3.5" />
@@ -403,15 +433,15 @@ export default function PengaturanAdminTab() {
                       <button
                         type="button"
                         title={
-                          isLockedForSupervisor
-                            ? "Supervisor tidak bisa mengirim reset password akun admin"
+                          isLockedByHierarchy
+                            ? "Role user ini lebih berwenang dari Anda — tidak bisa kirim reset password dari sini"
                             : !row.email
                               ? "Isi email dulu lewat Edit sebelum kirim reset password"
                               : "Kirim email reset password"
                         }
                         onClick={() => handleSendReset(row)}
                         disabled={
-                          isLockedForSupervisor ||
+                          isLockedByHierarchy ||
                           !row.email ||
                           sendingResetForId === row.id
                         }
@@ -432,12 +462,12 @@ export default function PengaturanAdminTab() {
                           title={
                             isSelf
                               ? "Tidak bisa menonaktifkan diri sendiri"
-                              : isLockedForSupervisor
-                                ? "Supervisor tidak bisa menonaktifkan akun admin"
+                              : isLockedByHierarchy
+                                ? "Role user ini lebih berwenang dari Anda — tidak bisa dinonaktifkan dari sini"
                                 : "Nonaktifkan"
                           }
                           onClick={() => setDeactivateTarget(row)}
-                          disabled={isSelf || isLockedForSupervisor}
+                          disabled={isSelf || isLockedByHierarchy}
                           className="rounded-md border border-zinc-200 p-1.5 text-zinc-500 transition-colors duration-150 hover:bg-lco-coral/10 hover:text-lco-coral disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700"
                         >
                           <UserX className="h-3.5 w-3.5" />
@@ -446,12 +476,12 @@ export default function PengaturanAdminTab() {
                         <button
                           type="button"
                           title={
-                            isLockedForSupervisor
-                              ? "Supervisor tidak bisa mengaktifkan akun admin"
+                            isLockedByHierarchy
+                              ? "Role user ini lebih berwenang dari Anda — tidak bisa diaktifkan dari sini"
                               : "Aktifkan kembali"
                           }
                           onClick={() => handleReactivate(row)}
-                          disabled={isLockedForSupervisor}
+                          disabled={isLockedByHierarchy}
                           className="rounded-md border border-zinc-200 p-1.5 text-zinc-500 transition-colors duration-150 hover:bg-lco-green/10 hover:text-lco-green disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700"
                         >
                           <UserCheck className="h-3.5 w-3.5" />
@@ -467,7 +497,7 @@ export default function PengaturanAdminTab() {
               <tr>
                 <td colSpan={6} className="px-4 py-8 text-center text-zinc-400">
                   Belum ada user, atau Anda tidak punya izin melihat daftar ini
-                  (butuh migration 016 aktif).
+                  (butuh permission &quot;pengaturan_admin&quot;).
                 </td>
               </tr>
             )}
@@ -589,18 +619,22 @@ export default function PengaturanAdminTab() {
                 <label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
                   Role
                 </label>
-                {/* roleOptions sudah dihitung di atas lewat getRoleOptionsFor
-                    — supervisor tidak melihat opsi "Admin" di sini juga,
-                    sama seperti dropdown ubah role per-baris. */}
+                {/* roleOptions sudah dihitung di atas (pengaman B, migration
+                    028) — caller tidak melihat role yang levelnya lebih
+                    tinggi dari dirinya sendiri, sama seperti dropdown ubah
+                    role per-baris. */}
                 <select
-                  value={newUserRole}
-                  onChange={(e) => setNewUserRole(e.target.value as UserRole)}
+                  value={newUserRoleId}
+                  onChange={(e) => setNewUserRoleId(e.target.value)}
                   disabled={isSubmitting}
                   className="mb-1 w-full rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm outline-none transition-colors duration-150 focus:border-lco-teal focus:ring-1 focus:ring-lco-teal disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950"
                 >
+                  {roleOptions.length === 0 && (
+                    <option value="">Tidak ada role yang bisa diberikan</option>
+                  )}
                   {roleOptions.map((role) => (
-                    <option key={role} value={role}>
-                      {ROLE_LABEL[role]}
+                    <option key={role.id} value={role.id}>
+                      {role.name}
                     </option>
                   ))}
                 </select>
@@ -621,7 +655,7 @@ export default function PengaturanAdminTab() {
                   <button
                     type="button"
                     onClick={handleConfirmAddUser}
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || !newUserRoleId}
                     className="inline-flex items-center gap-2 rounded-md bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {isSubmitting && (
@@ -652,11 +686,12 @@ export default function PengaturanAdminTab() {
                   </span>{" "}
                   akan diubah dari{" "}
                   <span className="font-medium">
-                    {ROLE_LABEL[roleChangeTarget.targetUser.role]}
+                    {roleChangeTarget.targetUser.role_name}
                   </span>{" "}
                   menjadi{" "}
                   <span className="font-medium">
-                    {ROLE_LABEL[roleChangeTarget.newRole]}
+                    {roles.find((r) => r.id === roleChangeTarget.newRoleId)
+                      ?.name ?? "(role tidak dikenal)"}
                   </span>
                   . Akses menu & tombol user ini akan berubah sesuai role baru
                   mulai sesi login berikutnya.
