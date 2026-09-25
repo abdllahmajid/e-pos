@@ -41,7 +41,7 @@ export default function Header({ activeMenu }: HeaderProps) {
   const Icon = meta?.item.icon;
 
   return (
-    <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-zinc-200 bg-white pl-16 pr-4 dark:border-zinc-800 dark:bg-zinc-950 md:pl-6">
+    <header className="sticky top-0 z-10 flex h-17 shrink-0 items-center justify-between gap-3 border-b border-zinc-200 bg-white pl-16 pr-4 dark:border-zinc-800 dark:bg-zinc-950 md:pl-6">
       <div className="flex min-w-0 items-center gap-3">
         {Icon && (
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-lco-green/10 text-lco-green dark:bg-lco-teal/15 dark:text-lco-teal">

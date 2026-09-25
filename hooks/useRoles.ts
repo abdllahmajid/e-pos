@@ -1,76 +1,71 @@
 // hooks/useRoles.ts
 // ── TAMBAHAN (migration 028_dynamic_roles.sql, "sistem role dinamis") ──
-// Hook domain tab BARU "Role" di Pengaturan (sejajar "Toko & Struk" dan
-// "Pengaturan Admin" — menyusul revisi PengaturanModule.tsx/PengaturanAdminTab.tsx
-// di langkah terpisah). Tanggung jawab: daftar role + checklist permission
-// per role (CRUD role), dan katalog permission tetap (cuma dibaca, TIDAK
-// bisa ditambah/diubah dari sini — lihat catatan di bawah).
+// Sub-tab "Role" di PengaturanModule.tsx. CRUD role + checklist permission
+// per role, lewat hooks/useRoles.ts.
 //
-// Pembagian tanggung jawab dengan database:
-// - Validasi SIAPA boleh CRUD role sepenuhnya di RLS (`roles_write_pengaturan_role`
-//   / `role_permissions_write_pengaturan_role`, migration 028) — permission
-//   'pengaturan_role'. Hook ini TIDAK menduplikasi cek itu di client; kalau
-//   user tidak berwenang, Supabase balikin error RLS dan hook melempar Error
-//   apa adanya (pola sama seperti useAdminUsers.ts).
-// - Pengaman STRUKTURAL (role bawaan sistem tidak bisa dihapus, role yang
-//   masih dipakai user tidak bisa dihapus, tidak boleh sampai 0 role level=0)
-//   ada di trigger `protect_role_mutation` (migration 028) — pesan errornya
-//   RAISE EXCEPTION dari Postgres, diteruskan apa adanya lewat `error.message`
-//   supaya UI tidak perlu menerka alasan penolakan.
-// - Katalog `permissions` (10 menu tetap) SENGAJA read-only dari UI manapun
-//   (tidak ada fungsi insert/update/delete permission di hook ini) — nambah
-//   menu baru wajib migration baru, sesuai keputusan desain di migration 028.
-//   RLS tabel ini sempat bug (SELECT ikut ke-deny total, bukan cuma
-//   insert/update/delete) — sudah diperbaiki migration 029.
-//
-// Model permission per role (migration 028): baris `role_permissions` cuma
-// ada untuk kombinasi role+menu yang DIIZINKAN (allowed selalu true di semua
-// baris yang kita tulis dari sini) — tidak ada baris = otomatis ditolak.
-// Jadi `updateRole` SELALU replace total (hapus semua baris lama milik role
-// itu, tulis ulang cuma yang tercentang) daripada hitung diff tambah/kurang —
-// lebih simpel dan tidak mungkin nyisa baris usang.
-//
-// createRole/updateRole/deleteRole masing-masing MULTI-LANGKAH (insert/update
-// tabel roles, lalu insert/delete tabel role_permissions terpisah — Postgres
-// REST API Supabase tidak menyediakan transaksi multi-tabel dari client).
-// Kalau langkah kedua gagal setelah langkah pertama sukses, hook mencoba
-// rollback (khusus createRole: hapus lagi role yang baru dibuat, pola sama
-// dengan app/api/admin/create-user/route.ts) SUPAYA tidak nyisa role
-// "kosong" nyasar tanpa permission apa pun cuma gara-gara separuh gagal.
-// Ketiga fungsi SELALU refetch di `finally` (bukan cuma saat sukses seperti
-// hook lain) — supaya kalau ternyata gagal di tengah, list yang ditampilkan
-// tetap mencerminkan kondisi database yang sesungguhnya, bukan state lama
-// yang sudah tidak akurat.
+// ── REVISI (migration 031, "permission granular per aksi") ── Model
+// permission per role sekarang 4 aksi (Lihat/Tambah/Ubah/Hapus) per menu,
+// bukan lagi 1 flag `allowed` all-or-nothing. Konsekuensi di hook ini:
+// - `Permission` (katalog) dapat 3 field baru `supportsCreate/supportsEdit/
+//   supportsDelete` — metadata TETAP yang menentukan tombol CRUD mana yang
+//   relevan ditampilkan buat menu itu di UI (mis. Laporan cuma render tombol
+//   Lihat, Produk render keempatnya). Field ini SELALU read dari database
+//   (kolom `permissions.supports_create/edit/delete`, migration 031) — bukan
+//   hardcode di frontend — supaya kalau kapasitas suatu menu berubah lewat
+//   migration baru nanti, UI otomatis ikut menyesuaikan tanpa deploy ulang.
+// - `RoleRow.permission_keys` (dulu string[] hasil filter allowed=true)
+//   diganti `RoleRow.permissionMatrix` — map permission_key -> 4 boolean
+//   (PermissionActions dari hooks/useAuth.ts, dipakai ulang di sini supaya
+//   satu sumber definisi tipe).
+// - `RoleFields.permissionKeys` (string[]) diganti `RoleFields.permissionMatrix`
+//   (Record<string, PermissionActions>) — cuma entry dengan `view: true` yang
+//   ditulis ke database (entry dengan view:false dibuang sebelum submit,
+//   sama seperti dulu cuma entry allowed:true yang ditulis).
+// - createRole/updateRole tetap replace-total (hapus semua baris lama, tulis
+//   ulang yang aktif) — TIDAK berubah dari migration 028, cuma kolom yang
+//   ditulis sekarang 4 (can_view/can_create/can_edit/can_delete), bukan 1.
 
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import type { PermissionActions } from "@/hooks/useAuth";
 
 const supabase = createClient();
 
-// Urutan tampil checklist di UI — mengikuti urutan menu di app (sama seperti
-// pemetaan permission_key di komentar header migration 028), BUKAN urutan
-// insert ke database (Postgres tidak menjamin itu tanpa ORDER BY eksplisit).
-// Kunci yang tidak ada di daftar ini (permission baru dari migration
-// mendatang) tetap muncul, ditaruh di akhir supaya tidak hilang dari UI.
+// Urutan tampil di dalam grupnya masing-masing (lib/pos/permissionMenuMeta.ts
+// yang menentukan urutan GRUP + urutan menu ANTAR grup; ini cadangan kalau
+// katalog nambah key baru yang belum sempat dipetakan ke grup manapun —
+// tetap muncul di akhir daripada hilang dari UI, sama seperti perilaku lama).
 const PERMISSION_ORDER = [
   "kasir",
   "produk",
+  "retur_void",
   "stok",
-  "laporan",
   "promo",
-  "log_aktivitas",
+  "laporan",
   "sampah",
+  "log_aktivitas",
   "pengaturan_toko",
   "pengaturan_admin",
   "pengaturan_role",
 ];
 
+export const EMPTY_ACTIONS: PermissionActions = {
+  view: false,
+  create: false,
+  edit: false,
+  delete: false,
+};
+
 export interface Permission {
   key: string;
   label: string;
   description: string | null;
+  /** Metadata TETAP (bukan per-role) — kapasitas CRUD menu ini, migration 031. */
+  supportsCreate: boolean;
+  supportsEdit: boolean;
+  supportsDelete: boolean;
 }
 
 export interface RoleRow {
@@ -79,8 +74,12 @@ export interface RoleRow {
   level: number;
   lintas_kasir: boolean;
   is_system: boolean;
-  /** permission_key yang allowed=true untuk role ini (lihat catatan model di atas). */
-  permission_keys: string[];
+  /**
+   * ── REVISI (migration 031) ── permission_key -> 4 aksi granular untuk role
+   * ini. Key yang tidak ada di map berarti keempat aksinya false (tidak ada
+   * baris role_permissions untuk kombinasi itu).
+   */
+  permissionMatrix: Record<string, PermissionActions>;
 }
 
 interface RoleFields {
@@ -89,12 +88,13 @@ interface RoleFields {
   level: number;
   /** Boleh lihat/kelola shift & held-order kasir LAIN, bukan cuma milik sendiri. */
   lintasKasir: boolean;
-  permissionKeys: string[];
+  /** Cuma entry dengan `view: true` yang ditulis ke database saat submit. */
+  permissionMatrix: Record<string, PermissionActions>;
 }
 
 interface UseRolesResult {
   roles: RoleRow[];
-  /** Katalog tetap 10 menu (read-only, lihat catatan header) — dipakai render checklist. */
+  /** Katalog tetap (read-only, lihat catatan header) — dipakai render checklist. */
   permissions: Permission[];
   isLoading: boolean;
   error: string | null;
@@ -120,11 +120,13 @@ export function useRoles(): UseRolesResult {
       supabase
         .from("roles")
         .select(
-          "id, name, level, lintas_kasir, is_system, role_permissions ( permission_key, allowed )",
+          "id, name, level, lintas_kasir, is_system, role_permissions ( permission_key, can_view, can_create, can_edit, can_delete )",
         )
         .order("level", { ascending: true })
         .order("name", { ascending: true }),
-      supabase.from("permissions").select("key, label, description"),
+      supabase
+        .from("permissions")
+        .select("key, label, description, supports_create, supports_edit, supports_delete"),
     ]);
 
     if (rolesRes.error) {
@@ -140,15 +142,22 @@ export function useRoles(): UseRolesResult {
           : row.role_permissions
             ? [row.role_permissions]
             : [];
+        const permissionMatrix: Record<string, PermissionActions> = {};
+        for (const rp of rpRows) {
+          permissionMatrix[rp.permission_key] = {
+            view: rp.can_view,
+            create: rp.can_create,
+            edit: rp.can_edit,
+            delete: rp.can_delete,
+          };
+        }
         return {
           id: row.id,
           name: row.name,
           level: row.level,
           lintas_kasir: row.lintas_kasir,
           is_system: row.is_system,
-          permission_keys: rpRows
-            .filter((rp) => rp.allowed)
-            .map((rp) => rp.permission_key),
+          permissionMatrix,
         };
       });
       setRoles(rows);
@@ -167,7 +176,16 @@ export function useRoles(): UseRolesResult {
         return (ia === -1 ? PERMISSION_ORDER.length : ia) -
           (ib === -1 ? PERMISSION_ORDER.length : ib);
       });
-      setPermissions(sorted);
+      setPermissions(
+        sorted.map((p) => ({
+          key: p.key,
+          label: p.label,
+          description: p.description,
+          supportsCreate: p.supports_create,
+          supportsEdit: p.supports_edit,
+          supportsDelete: p.supports_delete,
+        })),
+      );
     }
 
     setIsLoading(false);
@@ -186,6 +204,26 @@ export function useRoles(): UseRolesResult {
       return "Level harus angka bulat 0 atau lebih (0 = paling tinggi/paling berwenang).";
     }
     return "";
+  }
+
+  /**
+   * Cuma entry dengan `view: true` yang berarti apa-apa (lihat catatan model
+   * di header file & migration 031: constraint `role_permissions_view_required`
+   * di database menolak baris can_create/edit/delete true tanpa can_view
+   * true) — entry lain dibuang di sini sebelum ditulis, supaya tidak nyisa
+   * baris "kosong" (keempatnya false) yang tidak ada gunanya disimpan.
+   */
+  function toInsertRows(roleId: string, matrix: Record<string, PermissionActions>) {
+    return Object.entries(matrix)
+      .filter(([, actions]) => actions.view)
+      .map(([key, actions]) => ({
+        role_id: roleId,
+        permission_key: key,
+        can_view: true,
+        can_create: actions.create,
+        can_edit: actions.edit,
+        can_delete: actions.delete,
+      }));
   }
 
   const createRole = useCallback(
@@ -217,16 +255,11 @@ export function useRoles(): UseRolesResult {
           throw new Error(insertError?.message || "Gagal membuat role.");
         }
 
-        if (fields.permissionKeys.length > 0) {
+        const rows = toInsertRows(newRole.id, fields.permissionMatrix);
+        if (rows.length > 0) {
           const { error: permError } = await supabase
             .from("role_permissions")
-            .insert(
-              fields.permissionKeys.map((key) => ({
-                role_id: newRole.id,
-                permission_key: key,
-                allowed: true,
-              })),
-            );
+            .insert(rows);
 
           if (permError) {
             // Rollback — lihat catatan header, supaya tidak nyisa role
@@ -282,16 +315,11 @@ export function useRoles(): UseRolesResult {
           );
         }
 
-        if (fields.permissionKeys.length > 0) {
+        const rows = toInsertRows(id, fields.permissionMatrix);
+        if (rows.length > 0) {
           const { error: permError } = await supabase
             .from("role_permissions")
-            .insert(
-              fields.permissionKeys.map((key) => ({
-                role_id: id,
-                permission_key: key,
-                allowed: true,
-              })),
-            );
+            .insert(rows);
 
           if (permError) {
             throw new Error(

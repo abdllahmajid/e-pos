@@ -40,7 +40,7 @@ import {
   type AdjustStockResult,
 } from "@/hooks/useStock";
 import { useProducts, type ProductWithCategory } from "@/hooks/useProducts";
-import { useAuth, hasPermission } from "@/hooks/useAuth";
+import { useAuth, hasPermission, hasPermissionAction } from "@/hooks/useAuth";
 
 const FILTER_TYPES: StockMovementType[] = [
   "sale",
@@ -459,6 +459,12 @@ export default function StokModule() {
   // ── REVISI (migration 028/030) ── `user?.role` (string admin/supervisor)
   // sudah dihapus, diganti permission dinamis "stok".
   const canManageStock = hasPermission(user, "stok");
+  // ── TAMBAHAN (migration 031, "permission granular per aksi") ── Modul ini
+  // tetap digate seluruhnya oleh akses Lihat (`canManageStock`, di bawah),
+  // TAPI tombol "Opname / Penyesuaian" (RPC `adjust_stock`) sekarang punya
+  // gate sendiri — role bisa saja diberi akses Lihat riwayat mutasi stok
+  // TANPA boleh melakukan opname/penyesuaian sendiri.
+  const canAdjustStock = hasPermissionAction(user, "stok", "edit");
 
   const toggleType = (type: StockMovementType) => {
     setActiveTypes((prev) =>

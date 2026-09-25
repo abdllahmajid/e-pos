@@ -410,7 +410,7 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
           type="button"
           onClick={() => setMobileOpen(true)}
           aria-label="Buka menu"
-          className="fixed left-3 top-3 z-30 inline-flex h-11 w-11 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-700 shadow-md active:scale-95 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 md:hidden"
+          className="fixed left-3 top-3 z-30 inline-flex h-10 w-10 items-center justify-center rounded-lg  border-zinc-200 bg-white text-zinc-700  active:scale-95 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 md:hidden"
         >
           <Menu className="h-5 w-5" />
         </button>

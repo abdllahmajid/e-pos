@@ -23,7 +23,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
-import { useAuth, hasPermission } from "@/hooks/useAuth";
+import { useAuth, hasPermission, hasPermissionAction } from "@/hooks/useAuth";
 import { useProducts, type ProductWithCategory } from "@/hooks/useProducts";
 import {
   createProduct,
@@ -73,16 +73,27 @@ export default function ProdukModule() {
   // backend-nya sudah mengizinkan).
   const { user } = useAuth();
   //
-  // ── TAMBAHAN (migration 025) ── `canManageProducts` mengatur tombol
-  // Tambah/Edit produk + tab Kategori. Kasir hanya boleh LIHAT produk (PRD §5
-  // baris `produk`). Selaras dengan RLS `products`/`categories` (migration
-  // 025: tulis cuma admin+supervisor) — tombol disembunyikan supaya kasir tidak
-  // melihat error database mentah. Selama profil belum termuat (`user` null)
-  // nilainya false, jadi tombol muncul sesudah role diketahui, bukan sebaliknya.
+  // ── TAMBAHAN (migration 025) ── `canManageProducts` mengatur tab Kategori
+  // + kolom Aksi tabel produk MUNCUL atau tidak (gate kasar, "punya akses
+  // manajemen produk sama sekali atau tidak"). Kasir hanya boleh LIHAT
+  // produk (PRD §5 baris `produk`). Selama profil belum termuat (`user`
+  // null) nilainya false, jadi tombol muncul sesudah role diketahui, bukan
+  // sebaliknya.
   // ── REVISI (migration 028/030) ── `user?.role` (string admin/supervisor)
   // sudah dihapus, diganti permission dinamis "produk".
+  // ── REVISI (migration 031, "permission granular per aksi") ── Tombol
+  // Tambah/Edit/Hapus PRODUK sekarang masing-masing dicek aksi granularnya
+  // sendiri (`hasPermissionAction`), BUKAN lagi disamakan ke satu flag
+  // `canManageProducts`. `canDeleteProduct` SEBELUMNYA = `canManageProducts`
+  // (bug: tombol tampil walau RPC `soft_delete_product` sebenarnya mensyaratkan
+  // permission 'sampah' — lihat catatan migration 031 header) — migration
+  // itu SEKALIAN memindah gate `soft_delete_product` ke aksi 'delete' milik
+  // 'produk' sendiri, jadi baris di bawah ini sekarang benar-benar cocok
+  // dengan RLS/RPC backend-nya.
   const canManageProducts = hasPermission(user, "produk");
-  const canDeleteProduct = canManageProducts;
+  const canCreateProduct = hasPermissionAction(user, "produk", "create");
+  const canEditProduct = hasPermissionAction(user, "produk", "edit");
+  const canDeleteProduct = hasPermissionAction(user, "produk", "delete");
 
   const { products, isLoading, error, refetch } = useProducts();
 
@@ -248,7 +259,7 @@ export default function ProdukModule() {
             </p>
           </div>
 
-          {activeTab === "produk" && canManageProducts && (
+          {activeTab === "produk" && canCreateProduct && (
             <button
               type="button"
               onClick={openForm}
@@ -386,7 +397,7 @@ export default function ProdukModule() {
                         : "Belum ada produk. Minta admin atau supervisor menambahkannya."}
                   </p>
 
-                  {!search && canManageProducts && (
+                  {!search && canCreateProduct && (
                     <button
                       type="button"
                       onClick={openForm}
@@ -430,7 +441,7 @@ export default function ProdukModule() {
                           Status
                         </th>
 
-                        {canManageProducts && (
+                        {(canEditProduct || canDeleteProduct) && (
                           <th className="px-4 py-3 text-right text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
                             Aksi
                           </th>
@@ -529,20 +540,22 @@ export default function ProdukModule() {
                               </span>
                             </td>
 
-                            {canManageProducts && (
+                            {(canEditProduct || canDeleteProduct) && (
                               <td className="px-4 py-3 text-right">
                                 <div className="inline-flex items-center gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => openEditForm(product)}
-                                    title="Edit produk"
-                                    className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
-                                  >
-                                    <Pencil className="h-3.5 w-3.5" />
-                                    Edit
-                                  </button>
+                                  {canEditProduct && (
+                                    <button
+                                      type="button"
+                                      onClick={() => openEditForm(product)}
+                                      title="Edit produk"
+                                      className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                      Edit
+                                    </button>
+                                  )}
 
-                                  {/* Hapus (T-09): admin+supervisor sejak migration 015 (lihat komentar di atas). */}
+                                  {/* Hapus (T-09/migration 031): sekarang aksi 'delete' milik permission 'produk' sendiri (lihat catatan di atas). */}
                                   {canDeleteProduct && (
                                     <button
                                       type="button"

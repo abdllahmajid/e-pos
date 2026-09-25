@@ -31,6 +31,20 @@ const supabase = createClient();
 //   TransactionDetailModal) HARUS diganti `hasPermission(user, "kunci_nya")`
 //   — belum dikerjakan di langkah ini, menyusul langkah terpisah supaya
 //   tetap satu file per langkah.
+// ── TAMBAHAN (migration 031, "permission granular per aksi") ── Sebelumnya
+// tiap baris role_permissions cuma punya 1 flag `allowed` (all-or-nothing per
+// menu). Sekarang dipecah 4 aksi (lihat migration 031 & PengaturanRoleTab.tsx):
+// Lihat/Tambah/Ubah/Hapus per menu. `PermissionActions` merepresentasikan
+// baris itu di sisi client — `view` SELALU jadi prasyarat (kalau false, 3
+// lainnya pasti false juga, ditegakkan constraint DB
+// `role_permissions_view_required`, bukan cuma konvensi frontend).
+export interface PermissionActions {
+  view: boolean;
+  create: boolean;
+  edit: boolean;
+  delete: boolean;
+}
+
 export interface AuthUser {
   id: string;
   email: string | null;
@@ -39,7 +53,23 @@ export interface AuthUser {
   role_name: string;
   role_level: number;
   lintas_kasir: boolean;
+  /**
+   * ── PERTAHANKAN (migration 031) ── Daftar permission_key yang can_view=true
+   * untuk role user ini — SAMA PERSIS artinya dengan `permissions` sebelum
+   * migration 031 (dulu sumbernya `allowed=true`, sekarang `can_view=true`),
+   * supaya semua caller lama `hasPermission(user, key)` (gate Sidebar, gate
+   * modul per-halaman) tetap jalan tanpa perlu diubah satu per satu.
+   */
   permissions: string[];
+  /**
+   * ── TAMBAHAN (migration 031) ── Detail 4 aksi per permission_key, dipakai
+   * caller yang butuh granularitas lebih dari sekadar "boleh buka menu ini
+   * atau tidak" (mis. tombol Tambah/Ubah/Hapus produk, opname stok, retur
+   * vs void). Key yang TIDAK ADA di map ini berarti keempat aksinya false
+   * (tidak ada baris role_permissions untuk kombinasi itu — lihat migration
+   * 031, "tidak ada baris = ditolak semua aksi").
+   */
+  permissionActions: Record<string, PermissionActions>;
   is_active: boolean;
 }
 
@@ -50,11 +80,27 @@ export interface AuthUser {
 // closure, tiap komponen yang destructure `{ hasPermission }` dari hook lain
 // harus ikut re-render tiap useAuth() re-render — fungsi murni begini lebih
 // ringan, sama sekali tidak butuh hook context).
+//
+// ── PERTAHANKAN (migration 031) ── Tetap berarti "boleh Lihat menu ini",
+// TIDAK berubah walau model permission di belakangnya sekarang granular —
+// pemakai lama (Sidebar, gate top-level tiap modul) tidak perlu disentuh.
 export function hasPermission(
   user: AuthUser | null,
   permissionKey: string
 ): boolean {
   return user?.permissions.includes(permissionKey) ?? false;
+}
+
+// ── TAMBAHAN (migration 031) ── Cek aksi granular spesifik (bukan cuma
+// Lihat) — dipakai buat menampilkan/menyembunyikan tombol Tambah/Ubah/Hapus
+// per menu sesuai checklist role (lihat PengaturanRoleTab.tsx). Fail-closed:
+// key yang tidak dikenal / user null selalu balik false.
+export function hasPermissionAction(
+  user: AuthUser | null,
+  permissionKey: string,
+  action: keyof PermissionActions
+): boolean {
+  return user?.permissionActions[permissionKey]?.[action] ?? false;
 }
 
 interface UseAuthResult {
@@ -78,13 +124,16 @@ export function useAuth(): UseAuthResult {
     // perlu query kedua di setiap komponen yang butuh cek permission.
     // `roles!inner` (bukan left join) aman karena profiles.role_id NOT NULL
     // dengan FK ke roles, tidak mungkin ada baris profiles tanpa role.
+    // ── REVISI (migration 031) ── `role_permissions ( permission_key, allowed )`
+    // jadi `role_permissions ( permission_key, can_view, can_create, can_edit,
+    // can_delete )` — kolom `allowed` tunggal sudah di-drop dari skema.
     const { data, error: profileError } = await supabase
       .from("profiles")
       .select(
         `full_name, is_active, role_id,
          roles!inner (
            name, level, lintas_kasir,
-           role_permissions ( permission_key, allowed )
+           role_permissions ( permission_key, can_view, can_create, can_edit, can_delete )
          )`
       )
       .eq("id", authUserId)
@@ -104,9 +153,35 @@ export function useAuth(): UseAuthResult {
     // bentuk itu tanpa perlu import Database types generated (belum ada di
     // project ini, lihat catatan lib/supabase/client.ts).
     const roleRow = Array.isArray(data.roles) ? data.roles[0] : data.roles;
-    const permissions = (roleRow?.role_permissions ?? [])
-      .filter((rp: { permission_key: string; allowed: boolean }) => rp.allowed)
-      .map((rp: { permission_key: string; allowed: boolean }) => rp.permission_key);
+    type RolePermissionRow = {
+      permission_key: string;
+      can_view: boolean;
+      can_create: boolean;
+      can_edit: boolean;
+      can_delete: boolean;
+    };
+    const rpRows: RolePermissionRow[] = roleRow?.role_permissions ?? [];
+
+    // Sama seperti sebelum migration 031: cuma baris can_view=true yang
+    // berarti "boleh Lihat menu ini" — dipertahankan buat caller lama
+    // `hasPermission(user, key)`.
+    const permissions = rpRows
+      .filter((rp) => rp.can_view)
+      .map((rp) => rp.permission_key);
+
+    // ── TAMBAHAN (migration 031) ── Map lengkap 4 aksi per permission_key,
+    // dipakai `hasPermissionAction`. Key yang tidak ada baris-nya otomatis
+    // tidak masuk map ini -> hasPermissionAction balik false (fail-closed),
+    // konsisten dengan "tidak ada baris = ditolak semua aksi" di migration 031.
+    const permissionActions: Record<string, PermissionActions> = {};
+    for (const rp of rpRows) {
+      permissionActions[rp.permission_key] = {
+        view: rp.can_view,
+        create: rp.can_create,
+        edit: rp.can_edit,
+        delete: rp.can_delete,
+      };
+    }
 
     setUser({
       id: authUserId,
@@ -117,6 +192,7 @@ export function useAuth(): UseAuthResult {
       role_level: roleRow?.level ?? 99,
       lintas_kasir: roleRow?.lintas_kasir ?? false,
       permissions,
+      permissionActions,
       is_active: data.is_active,
     });
   }
