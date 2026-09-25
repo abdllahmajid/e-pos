@@ -33,12 +33,23 @@
 //
 // Pola sama dengan hooks/useTrash.ts: query ringan (field seperlunya),
 // mutasi melempar Error yang ditangani UI (bukan RPC yang ditelan diam-diam).
+//
+// ── REVISI (migration 028_dynamic_roles.sql, "sistem role dinamis") ──
+// `role: UserRole` (enum tetap) DIHAPUS dari AdminUserRow, diganti
+// `role_id`/`role_name`/`role_level` (join ke tabel `roles` baru — role
+// sekarang data yang dibuat bebas lewat tab "Role", bukan 4 pilihan tetap).
+// `updateUserRole` & `createUser` sekarang menerima `roleId` (uuid), bukan
+// lagi string `'admin'|'supervisor'|'kasir'|'qc'`. RPC
+// `admin_update_user_role`/`admin_set_user_active` di database SUDAH
+// divalidasi ulang dari sisi permission (`pengaturan_admin`) & hierarki
+// (`level`) di migration 028 — hook ini TIDAK menduplikasi validasi itu di
+// client, cuma meneruskan & melempar pesan error dari RPC (sama seperti
+// sebelumnya).
 
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { UserRole } from "@/hooks/useAuth";
 
 const supabase = createClient();
 
@@ -46,7 +57,9 @@ export interface AdminUserRow {
   id: string;
   full_name: string | null;
   email: string | null;
-  role: UserRole;
+  role_id: string;
+  role_name: string;
+  role_level: number;
   is_active: boolean;
   created_at: string;
 }
@@ -56,8 +69,8 @@ interface UseAdminUsersResult {
   isLoading: boolean;
   error: string | null;
   refetch: () => void;
-  /** Ubah role user (bukan diri sendiri — ditolak RPC, lihat migration 016). */
-  updateUserRole: (userId: string, newRole: UserRole) => Promise<void>;
+  /** Ubah role user (bukan diri sendiri — ditolak RPC, lihat migration 016/028). */
+  updateUserRole: (userId: string, newRoleId: string) => Promise<void>;
   /** Aktifkan/nonaktifkan user (bukan diri sendiri — ditolak RPC). */
   setUserActive: (userId: string, isActive: boolean) => Promise<void>;
   /** Ubah nama & email kontak (bukan role/status) — update langsung, tanpa RPC. */
@@ -81,7 +94,7 @@ interface UseAdminUsersResult {
   createUser: (fields: {
     fullName: string;
     email: string;
-    role: UserRole;
+    roleId: string;
   }) => Promise<void>;
 }
 
@@ -94,20 +107,42 @@ export function useAdminUsers(): UseAdminUsersResult {
     setIsLoading(true);
     setError(null);
 
+    // ── REVISI (migration 028) ── `role` polos -> join `roles!inner(name,
+    // level)`, pola sama seperti hooks/useAuth.ts. `!inner` aman karena
+    // profiles.role_id NOT NULL + FK ke roles.
     const { data, error: fetchError } = await supabase
       .from("profiles")
-      .select("id, full_name, email, role, is_active, created_at")
+      .select(
+        "id, full_name, email, is_active, created_at, role_id, roles!inner ( name, level )",
+      )
       .order("created_at", { ascending: true });
 
     if (fetchError) {
-      // Kemungkinan besar penyebabnya: user login bukan admin/supervisor
-      // (RLS profiles_select_admin_supervisor menolak diam-diam, hasilnya
-      // baris kosong, BUKAN error) — jadi kalau fetchError benar-benar
-      // muncul di sini, itu masalah lain (jaringan, dsb.), bukan permission.
+      // Kemungkinan besar penyebabnya: user login tidak punya permission
+      // 'pengaturan_admin' (RLS profiles_select_pengaturan_admin menolak
+      // diam-diam, hasilnya baris kosong, BUKAN error) — jadi kalau
+      // fetchError benar-benar muncul di sini, itu masalah lain (jaringan,
+      // dsb.), bukan permission.
       setError(fetchError.message);
       setUsers([]);
     } else {
-      setUsers((data ?? []) as AdminUserRow[]);
+      const rows: AdminUserRow[] = (data ?? []).map((row) => {
+        // Sama seperti useAuth.ts: bentuk hasil join relasi many-to-one bisa
+        // typed sebagai objek tunggal atau array tergantung versi tipe
+        // supabase-js — jaga dua-duanya tanpa perlu generated Database types.
+        const roleRow = Array.isArray(row.roles) ? row.roles[0] : row.roles;
+        return {
+          id: row.id,
+          full_name: row.full_name,
+          email: row.email,
+          is_active: row.is_active,
+          created_at: row.created_at,
+          role_id: row.role_id,
+          role_name: roleRow?.name ?? "",
+          role_level: roleRow?.level ?? 99,
+        };
+      });
+      setUsers(rows);
     }
 
     setIsLoading(false);
@@ -118,10 +153,12 @@ export function useAdminUsers(): UseAdminUsersResult {
   }, [fetchUsers]);
 
   const updateUserRole = useCallback(
-    async (userId: string, newRole: UserRole) => {
+    async (userId: string, newRoleId: string) => {
+      // ── REVISI (migration 028) ── p_new_role (enum) -> p_new_role_id
+      // (uuid). Validasi hierarki (level) & permission sepenuhnya di RPC.
       const { error: rpcError } = await supabase.rpc("admin_update_user_role", {
         p_user_id: userId,
-        p_new_role: newRole,
+        p_new_role_id: newRoleId,
       });
 
       if (rpcError) {
@@ -201,7 +238,7 @@ export function useAdminUsers(): UseAdminUsersResult {
   }, []);
 
   const createUser = useCallback(
-    async (fields: { fullName: string; email: string; role: UserRole }) => {
+    async (fields: { fullName: string; email: string; roleId: string }) => {
       const trimmedName = fields.fullName.trim();
       const trimmedEmail = fields.email.trim();
 
@@ -211,16 +248,22 @@ export function useAdminUsers(): UseAdminUsersResult {
       if (!trimmedEmail || !trimmedEmail.includes("@")) {
         throw new Error("Email tidak valid.");
       }
+      if (!fields.roleId) {
+        throw new Error("Role wajib dipilih.");
+      }
 
       let response: Response;
       try {
+        // ── REVISI (migration 028) ── body `role` (string enum) -> `roleId`
+        // (uuid) — lihat app/api/admin/create-user/route.ts (menyusul
+        // langkah terpisah) untuk validasi server-side yang baru.
         response = await fetch("/api/admin/create-user", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             fullName: trimmedName,
             email: trimmedEmail,
-            role: fields.role,
+            roleId: fields.roleId,
           }),
         });
       } catch {

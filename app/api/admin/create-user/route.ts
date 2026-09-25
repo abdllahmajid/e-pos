@@ -19,10 +19,17 @@
 //
 // Alur:
 // 1. Baca cookie sesi pemanggil (pola sama seperti middleware.ts) -> siapa dia.
-// 2. Lookup role pemanggil di `profiles` pakai client ANON biasa (tunduk RLS,
-//    bukan service role) -> pastikan admin/supervisor & aktif.
-// 3. Guard sama seperti UI (PengaturanAdminTab.tsx getRoleOptionsFor):
-//    supervisor tidak boleh membuat user dengan role 'admin'.
+// 2. Cek permission pemanggil pakai RPC `has_permission`/`current_role_level`
+//    lewat client ANON biasa (tunduk RLS, bukan service role) -> pastikan
+//    punya permission 'pengaturan_admin' & aktif. (── REVISI migration 028:
+//    sebelumnya cek `role === 'admin' || role === 'supervisor'` langsung dari
+//    kolom `profiles.role` — sekarang lewat 2 RPC yang sama dipakai RLS &
+//    RPC admin_update_user_role/admin_set_user_active, supaya SATU sumber
+//    kebenaran, bukan logic permission yang diketik ulang di 3 tempat.)
+// 3. Guard hierarki: role TUJUAN levelnya harus >= level pemanggil (── REVISI
+//    migration 028: generalisasi dari guard lama "supervisor tidak boleh
+//    membuat user dengan role admin" — sekarang berlaku untuk level berapa
+//    pun, bukan cuma admin/supervisor).
 // 4. Baru pakai client SERVICE ROLE untuk: (a) inviteUserByEmail, lalu
 //    (b) insert baris `profiles` (bypass RLS, sengaja — sudah divalidasi di
 //    langkah 1-3), dan (c) tulis activity_logs (pola sama dgn migration 016).
@@ -33,13 +40,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { createClient as createSupabaseAdminClient } from "@supabase/supabase-js";
 
-type UserRole = "admin" | "supervisor" | "kasir" | "qc";
-
-const ROLE_OPTIONS: UserRole[] = ["admin", "supervisor", "kasir", "qc"];
-
 export async function POST(request: NextRequest) {
   // ── Validasi input dasar ──
-  let body: { fullName?: string; email?: string; role?: string };
+  let body: { fullName?: string; email?: string; roleId?: string };
   try {
     body = await request.json();
   } catch {
@@ -51,7 +54,7 @@ export async function POST(request: NextRequest) {
 
   const fullName = (body.fullName ?? "").trim();
   const email = (body.email ?? "").trim().toLowerCase();
-  const role = body.role as UserRole;
+  const roleId = (body.roleId ?? "").trim();
 
   if (!fullName) {
     return NextResponse.json(
@@ -65,14 +68,14 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     );
   }
-  if (!ROLE_OPTIONS.includes(role)) {
+  if (!roleId) {
     return NextResponse.json(
-      { error: "Role tidak valid." },
+      { error: "Role wajib dipilih." },
       { status: 400 },
     );
   }
 
-  // ── Langkah 1-2: siapa yang memanggil, apa role-nya (client ANON, tunduk RLS) ──
+  // ── Langkah 1: siapa yang memanggil (client ANON, tunduk RLS) ──
   const cookieStore = request.cookies;
   const supabaseUser = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -100,26 +103,44 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { data: callerProfile } = await supabaseUser
-    .from("profiles")
-    .select("role, is_active")
-    .eq("id", caller.id)
-    .single();
+  // ── Langkah 2: permission (RPC has_permission — SECURITY DEFINER, sudah
+  // otomatis mengembalikan false kalau caller tidak aktif, lihat definisinya
+  // di migration 028). Dipanggil lewat client ANON (bukan admin) supaya
+  // auth.uid() di dalam fungsi itu benar-benar merujuk ke pemanggil sesi ini.
+  const { data: canManageUsers, error: permError } = await supabaseUser.rpc(
+    "has_permission",
+    { p_key: "pengaturan_admin" },
+  );
 
-  const callerRole = callerProfile?.role as UserRole | undefined;
-  const callerActive = callerProfile?.is_active === true;
-
-  if (!callerActive || (callerRole !== "admin" && callerRole !== "supervisor")) {
+  if (permError || !canManageUsers) {
     return NextResponse.json(
       { error: "Anda tidak punya izin untuk membuat user baru." },
       { status: 403 },
     );
   }
 
-  // ── Langkah 3: guard sama seperti UI — supervisor tidak boleh bikin admin ──
-  if (callerRole === "supervisor" && role === "admin") {
+  // ── Langkah 3: guard hierarki — role tujuan levelnya harus >= level caller ──
+  const { data: callerLevel } = await supabaseUser.rpc("current_role_level");
+
+  const { data: targetRole, error: targetRoleError } = await supabaseUser
+    .from("roles")
+    .select("id, level")
+    .eq("id", roleId)
+    .single();
+
+  if (targetRoleError || !targetRole) {
     return NextResponse.json(
-      { error: "Supervisor tidak bisa membuat user dengan role Admin." },
+      { error: "Role tujuan tidak ditemukan." },
+      { status: 400 },
+    );
+  }
+
+  if (typeof callerLevel === "number" && targetRole.level < callerLevel) {
+    return NextResponse.json(
+      {
+        error:
+          "Anda tidak bisa memberikan role dengan level lebih tinggi dari level Anda sendiri.",
+      },
       { status: 403 },
     );
   }
@@ -169,7 +190,7 @@ export async function POST(request: NextRequest) {
   const { error: profileError } = await supabaseAdmin.from("profiles").insert({
     id: newUserId,
     full_name: fullName,
-    role,
+    role_id: roleId,
     is_active: true,
   });
 
@@ -192,13 +213,13 @@ export async function POST(request: NextRequest) {
     action: "user_create",
     entity: "user",
     entity_id: newUserId,
-    meta: { target_name: fullName, email, role },
+    meta: { target_name: fullName, email, role_id: roleId },
   });
 
   return NextResponse.json({
     success: true,
     user_id: newUserId,
     email,
-    role,
+    role_id: roleId,
   });
 }

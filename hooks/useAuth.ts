@@ -14,15 +14,47 @@ import { createClient } from "@/lib/supabase/client";
 // ke instance singleton yang sama dipakai semua hook lain di app ini.
 const supabase = createClient();
 
-// Harus sinkron dengan enum Postgres `user_role` di migration 002_setup_profiles_and_roles.sql
-export type UserRole = "admin" | "supervisor" | "kasir" | "qc";
-
+// ── REVISI (migration 028_dynamic_roles.sql, "sistem role dinamis") ──
+// Enum Postgres `user_role` (admin/supervisor/kasir/qc hardcode) SUDAH
+// DIHAPUS TOTAL di database, diganti tabel `roles`/`permissions`/
+// `role_permissions` — role sekarang bebas dibuat pemilik project lewat tab
+// "Role" di Pengaturan (menyusul, belum ada UI-nya), bukan lagi 4 pilihan
+// tetap. Konsekuensinya:
+// - Tipe `UserRole` DIHAPUS (tidak ada lagi daftar nama role yang pasti/
+//   diketahui saat compile time — role sekarang data, bukan tipe).
+// - `AuthUser.role` (string tunggal) DIHAPUS, diganti `role_id`/`role_name`/
+//   `role_level`/`lintas_kasir` + `permissions` (daftar permission_key yang
+//   allowed=true untuk role user ini, sumbernya tabel role_permissions).
+// - Semua pengecekan akses yang TADINYA `user?.role === "admin" ||
+//   user?.role === "supervisor"` di 7 file modul (StokModule, ProdukModule,
+//   PromoModule, LaporanModule, SampahModule, LogAktivitasModule,
+//   TransactionDetailModal) HARUS diganti `hasPermission(user, "kunci_nya")`
+//   — belum dikerjakan di langkah ini, menyusul langkah terpisah supaya
+//   tetap satu file per langkah.
 export interface AuthUser {
   id: string;
   email: string | null;
   full_name: string | null;
-  role: UserRole;
+  role_id: string;
+  role_name: string;
+  role_level: number;
+  lintas_kasir: boolean;
+  permissions: string[];
   is_active: boolean;
+}
+
+// ── TAMBAHAN ── Helper murni (bukan hook) supaya bisa dipanggil dari mana
+// saja tanpa import tambahan — pola pemakaian: `hasPermission(user, "stok")`.
+// Sengaja bukan method di dalam AuthUser (AuthUser cuma data hasil query,
+// bukan class) dan bukan dikembalikan sebagai closure dari useAuth() (kalau
+// closure, tiap komponen yang destructure `{ hasPermission }` dari hook lain
+// harus ikut re-render tiap useAuth() re-render — fungsi murni begini lebih
+// ringan, sama sekali tidak butuh hook context).
+export function hasPermission(
+  user: AuthUser | null,
+  permissionKey: string
+): boolean {
+  return user?.permissions.includes(permissionKey) ?? false;
 }
 
 interface UseAuthResult {
@@ -39,9 +71,22 @@ export function useAuth(): UseAuthResult {
   const [error, setError] = useState<string | null>(null);
 
   async function loadProfile(authUserId: string, email: string | null) {
+    // ── REVISI (migration 028) ── Satu query nested (bukan lagi
+    // `.select("full_name, role, is_active")` polos) buat sekalian tarik
+    // nama/level/lintas_kasir role-nya DAN daftar permission_key yang
+    // allowed=true — supaya AuthUser lengkap dalam satu round-trip, tidak
+    // perlu query kedua di setiap komponen yang butuh cek permission.
+    // `roles!inner` (bukan left join) aman karena profiles.role_id NOT NULL
+    // dengan FK ke roles, tidak mungkin ada baris profiles tanpa role.
     const { data, error: profileError } = await supabase
       .from("profiles")
-      .select("full_name, role, is_active")
+      .select(
+        `full_name, is_active, role_id,
+         roles!inner (
+           name, level, lintas_kasir,
+           role_permissions ( permission_key, allowed )
+         )`
+      )
       .eq("id", authUserId)
       .single();
 
@@ -53,11 +98,25 @@ export function useAuth(): UseAuthResult {
       return;
     }
 
+    // Supabase-js mengetik hasil join sebagai objek tunggal untuk relasi
+    // many-to-one (`roles!inner`), tapi tipe generatednya kadang lebih aman
+    // dianggap array — `Array.isArray` di sini jaga-jaga dua kemungkinan
+    // bentuk itu tanpa perlu import Database types generated (belum ada di
+    // project ini, lihat catatan lib/supabase/client.ts).
+    const roleRow = Array.isArray(data.roles) ? data.roles[0] : data.roles;
+    const permissions = (roleRow?.role_permissions ?? [])
+      .filter((rp: { permission_key: string; allowed: boolean }) => rp.allowed)
+      .map((rp: { permission_key: string; allowed: boolean }) => rp.permission_key);
+
     setUser({
       id: authUserId,
       email,
       full_name: data.full_name,
-      role: data.role,
+      role_id: data.role_id,
+      role_name: roleRow?.name ?? "",
+      role_level: roleRow?.level ?? 99,
+      lintas_kasir: roleRow?.lintas_kasir ?? false,
+      permissions,
       is_active: data.is_active,
     });
   }
