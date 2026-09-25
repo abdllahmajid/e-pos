@@ -53,7 +53,7 @@ import {
   type ReceivableRow,
   type ReceivableStatus,
 } from "@/hooks/useReports";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth, hasPermission } from "@/hooks/useAuth";
 import { formatRupiah } from "@/lib/pos/cartLogic";
 import { uploadPaymentProofs } from "@/lib/pos/transactionApi";
 import { exportReportToExcel, exportReportToPdf } from "@/lib/pos/reportExport";
@@ -754,8 +754,10 @@ export default function LaporanModule() {
     }
   };
 
-  // Lihat catatan ASUMSI di header file & hooks/useReports.ts.
-  const canViewReports = user?.role === "admin" || user?.role === "supervisor";
+  // ── REVISI (migration 028/030) ── `user?.role` (string admin/supervisor)
+  // sudah dihapus, diganti permission dinamis "laporan". Lihat juga catatan
+  // ASUMSI di header file & hooks/useReports.ts.
+  const canViewReports = hasPermission(user, "laporan");
 
   const receivablesUnsettledCount = useMemo(
     () => receivables.filter((r) => !r.is_settled).length,

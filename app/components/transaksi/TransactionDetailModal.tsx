@@ -5,9 +5,10 @@
 // 2. Retur (sebagian) & Void, memakai RPC `return_transaction` / `void_transaction` yang
 //    sudah dibuat di migration 004_return_and_void.sql tapi belum pernah dipanggil frontend.
 //
-// Aturan permission (PRD §5): kasir cuma boleh lihat & cetak ulang. Retur & void hanya
-// admin/supervisor — tombolnya disembunyikan untuk role lain, tapi RPC sendiri tetap
-// validasi ulang role di server (jangan andalkan sembunyi tombol saja sebagai keamanan).
+// Aturan permission (PRD §5, digeneralisasi migration 030): retur & void butuh
+// permission "retur_void" (default: Admin & Supervisor) — tombolnya disembunyikan
+// untuk role yang tidak punya, tapi RPC sendiri tetap validasi ulang permission yang
+// sama di server (jangan andalkan sembunyi tombol saja sebagai keamanan).
 
 import { useEffect, useState } from "react";
 import {
@@ -23,7 +24,7 @@ import {
   ChevronDown,
   MessageCircle,
 } from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth, hasPermission } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings"; // ── TAMBAHAN ── Untuk mendapatkan paperNota setting
 import {
   getTransactionDetail,
@@ -71,7 +72,13 @@ export default function TransactionDetailModal({
   onChanged,
 }: TransactionDetailModalProps) {
   const { user } = useAuth();
-  const canManage = user?.role === "admin" || user?.role === "supervisor";
+  // ── REVISI (migration 030) ── `user?.role` (string admin/supervisor) sudah
+  // dihapus sejak migration 028. Gate retur/void sekarang pakai permission
+  // dinamis `retur_void` (RPC `void_transaction`/`return_transaction` di
+  // migration 030 juga sudah divalidasi ulang pakai has_permission yang sama
+  // di server — sembunyikan tombol di sini murni UX, bukan satu-satunya lapis
+  // keamanan).
+  const canManage = hasPermission(user, "retur_void");
   const { settings: posSettings } = useSettings();
 
   const [detail, setDetail] = useState<TransactionDetail | null>(null);

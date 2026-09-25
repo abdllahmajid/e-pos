@@ -23,7 +23,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth, hasPermission } from "@/hooks/useAuth";
 import { useProducts, type ProductWithCategory } from "@/hooks/useProducts";
 import {
   createProduct,
@@ -79,8 +79,9 @@ export default function ProdukModule() {
   // 025: tulis cuma admin+supervisor) — tombol disembunyikan supaya kasir tidak
   // melihat error database mentah. Selama profil belum termuat (`user` null)
   // nilainya false, jadi tombol muncul sesudah role diketahui, bukan sebaliknya.
-  const canManageProducts =
-    user?.role === "admin" || user?.role === "supervisor";
+  // ── REVISI (migration 028/030) ── `user?.role` (string admin/supervisor)
+  // sudah dihapus, diganti permission dinamis "produk".
+  const canManageProducts = hasPermission(user, "produk");
   const canDeleteProduct = canManageProducts;
 
   const { products, isLoading, error, refetch } = useProducts();

@@ -30,7 +30,7 @@
 
 import { useMemo, useState } from "react";
 import { AlertCircle, ClipboardList, Loader2, ShieldAlert } from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth, hasPermission } from "@/hooks/useAuth";
 import {
   useActivityLogs,
   useActivityLogUsers,
@@ -90,9 +90,9 @@ const chipToneClass: Record<ReturnType<typeof activityActionTone>, string> = {
 
 export default function LogAktivitasModule() {
   const { user, isLoading: isAuthLoading } = useAuth();
-  // Sama dengan SampahModule.tsx — admin+supervisor, keputusan migration 015.
-  const canAccessActivityLogs =
-    user?.role === "admin" || user?.role === "supervisor";
+  // ── REVISI (migration 028/030) ── `user?.role` (string admin/supervisor)
+  // sudah dihapus, diganti permission dinamis "log_aktivitas".
+  const canAccessActivityLogs = hasPermission(user, "log_aktivitas");
 
   const [entityFilter, setEntityFilter] = useState<ActivityLogEntity | "all">(
     "all",

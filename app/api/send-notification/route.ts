@@ -16,12 +16,27 @@
 // `app/api/admin/create-user/route.ts`: validasi cookie sesi pemanggil DULU
 // pakai client ANON (tunduk RLS), baru lanjut ke logika inti kalau lolos.
 //
+// ── REVISI (migration 028/030) ── Baris `.select("role, is_active")` di
+// bawah TADINYA baca kolom `profiles.role` (enum lama), yang sudah dihapus
+// total sejak migration 028 — kelewat waktu 7 modul frontend dibereskan,
+// baru ketahuan waktu scan project-wide. Endpoint ini TIDAK dipetakan ke
+// permission_key manapun di katalog `permissions` (bukan menu, murni
+// keputusan "staf cukup senior boleh kirim notifikasi sistem" — lihat
+// alasan di atas), jadi gate-nya digeneralisasi pakai `current_role_level()`
+// (RPC yang sama dipakai hierarki admin_update_user_role di migration 028),
+// BUKAN `has_permission()`. Threshold `<= 1` dipilih supaya perilaku persis
+// sama dengan sebelumnya untuk 4 role bawaan (Admin level 0, Supervisor
+// level 1 lolos; Kasir/QC level 2 tidak) — kalau nanti pemilik project bikin
+// role custom yang levelnya sengaja ditaruh 0/1, role itu ikut lolos juga
+// (konsisten dengan makna "level" di seluruh sistem: makin kecil, makin
+// senior/dipercaya).
+//
 // ── Kenapa BUKAN dibatasi "cuma bisa kirim ke diri sendiri" ──
 // Kalau begitu endpoint ini tidak berguna sama sekali — semua notifikasi
 // yang bisa dibayangkan PRD (mis. "ada transaksi TEMPO baru, admin dikasih
 // tahu", "shift ditutup dengan selisih kas, supervisor dikasih tahu") justru
-// SELALU dari satu user ke user LAIN. Makanya batasannya di ROLE pemanggil
-// (admin/supervisor), bukan di HUBUNGAN pemanggil-target.
+// SELALU dari satu user ke user LAIN. Makanya batasannya di LEVEL role
+// pemanggil, bukan di HUBUNGAN pemanggil-target.
 //
 // ── Belum dikerjakan sesi ini (di luar scope langkah ini) ──
 // - Belum ada pemanggil sungguhan (KasirModule.tsx dkk belum ada yang
@@ -30,14 +45,16 @@
 //   TEMPO baru, shift selisih, dst.) menyusul, PRD §17 T-12 tidak merinci
 //   event mana saja jadi belum diasumsikan sendiri di sini.
 // - Belum ada rate limiting — risikonya rendah (endpoint sudah dibatasi
-//   admin/supervisor aktif saja, bukan publik), tapi dicatat sebagai utang
+//   level role cukup senior saja, bukan publik), tapi dicatat sebagai utang
 //   teknis kalau nanti dipakai untuk broadcast massal.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { sendPushToUser } from "@/lib/notifications/sendPush";
 
-type UserRole = "admin" | "supervisor" | "kasir" | "qc";
+// Ambang batas level yang boleh kirim notifikasi — 0 (Admin) & 1 (Supervisor)
+// di seed bawaan migration 028, lihat catatan REVISI di atas.
+const MIN_CALLER_LEVEL = 1;
 
 export async function POST(request: NextRequest) {
   // ── Validasi input dasar ──
@@ -69,8 +86,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // ── Siapa yang memanggil, apa role-nya (client ANON, tunduk RLS) ──
-  // Pola sama persis app/api/admin/create-user/route.ts.
+  // ── Siapa yang memanggil, level role-nya berapa (client ANON, tunduk RLS) ──
+  // Pola sama persis app/api/admin/create-user/route.ts: RPC `current_role_level`
+  // (SECURITY DEFINER, migration 028) — otomatis NULL kalau caller tidak aktif/
+  // tidak ditemukan, jadi tidak perlu query `is_active` terpisah lagi seperti
+  // versi lama.
   const cookieStore = request.cookies;
   const supabaseUser = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -98,16 +118,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { data: callerProfile } = await supabaseUser
-    .from("profiles")
-    .select("role, is_active")
-    .eq("id", caller.id)
-    .single();
+  const { data: callerLevel, error: levelError } =
+    await supabaseUser.rpc("current_role_level");
 
-  const callerRole = callerProfile?.role as UserRole | undefined;
-  const callerActive = callerProfile?.is_active === true;
-
-  if (!callerActive || (callerRole !== "admin" && callerRole !== "supervisor")) {
+  if (
+    levelError ||
+    typeof callerLevel !== "number" ||
+    callerLevel > MIN_CALLER_LEVEL
+  ) {
     return NextResponse.json(
       { error: "Anda tidak punya izin untuk mengirim notifikasi." },
       { status: 403 }

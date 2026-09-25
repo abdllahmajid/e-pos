@@ -28,7 +28,7 @@ import {
   ShieldAlert,
   Trash2,
 } from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth, hasPermission } from "@/hooks/useAuth";
 import {
   useTrash,
   type TrashedProduct,
@@ -53,10 +53,12 @@ const STATUS_LABEL: Record<TrashedTransaction["status"], string> = {
 
 export default function SampahModule() {
   const { user, isLoading: isAuthLoading } = useAuth();
-  // ── PERUBAHAN (migration 015) ── admin+supervisor, sebelumnya admin only.
-  // Keputusan sadar pemilik project, menyimpang dari matriks PRD §5 asli —
-  // lihat komentar header migration 015 untuk detail & konsekuensinya.
-  const canAccessTrash = user?.role === "admin" || user?.role === "supervisor";
+  // ── REVISI (migration 028/030) ── `user?.role` (string admin/supervisor)
+  // sudah dihapus, diganti permission dinamis "sampah" (default masih
+  // admin+supervisor lewat seed role_permissions migration 028, keputusan
+  // migration 015 tetap terjaga — lihat komentar header migration 015 untuk
+  // konteks kenapa admin+supervisor, bukan admin only).
+  const canAccessTrash = hasPermission(user, "sampah");
 
   const {
     products,

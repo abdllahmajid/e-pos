@@ -40,7 +40,7 @@ import {
   type AdjustStockResult,
 } from "@/hooks/useStock";
 import { useProducts, type ProductWithCategory } from "@/hooks/useProducts";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth, hasPermission } from "@/hooks/useAuth";
 
 const FILTER_TYPES: StockMovementType[] = [
   "sale",
@@ -456,7 +456,9 @@ export default function StokModule() {
   // perlu diopname — beda dengan layar Kasir yang hanya boleh menjual yang aktif.
   const { products } = useProducts({ includeInactive: true });
 
-  const canManageStock = user?.role === "admin" || user?.role === "supervisor";
+  // ── REVISI (migration 028/030) ── `user?.role` (string admin/supervisor)
+  // sudah dihapus, diganti permission dinamis "stok".
+  const canManageStock = hasPermission(user, "stok");
 
   const toggleType = (type: StockMovementType) => {
     setActiveTypes((prev) =>

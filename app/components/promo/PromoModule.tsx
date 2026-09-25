@@ -53,7 +53,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth, hasPermission } from "@/hooks/useAuth";
 import {
   PROMO_ACCEPT,
   PROMO_DURATION_DEFAULT,
@@ -1062,7 +1062,9 @@ function ScreenMediaManager({
 
 export default function PromoModule() {
   const { user, isLoading: isAuthLoading } = useAuth();
-  const canManage = user?.role === "admin" || user?.role === "supervisor";
+  // ── REVISI (migration 028/030) ── `user?.role` (string admin/supervisor)
+  // sudah dihapus, diganti permission dinamis "promo".
+  const canManage = hasPermission(user, "promo");
 
   const {
     screens,

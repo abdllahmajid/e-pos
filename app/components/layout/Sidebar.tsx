@@ -33,7 +33,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useAuth, type UserRole } from "@/hooks/useAuth";
+import { useAuth, hasPermission, type AuthUser } from "@/hooks/useAuth";
 // ── TAMBAHAN (T-12) ── Dipanggil DI SINI SAJA (satu-satunya titik panggil di
 // seluruh app, lihat catatan header hooks/useFcmToken.ts) — bukan per-device
 // admin-only, jadi tombolnya harus terlihat SEMUA role, bukan di
@@ -53,16 +53,21 @@ export interface SidebarMenuItem {
   label: string;
   icon: LucideIcon;
   /**
-   * ── TAMBAHAN (T-10) ── Role yang boleh MELIHAT menu ini, sesuai matriks
-   * permission PRD §5 (kolom "view" tiap modul). Kosongkan (undefined) untuk
-   * menu yang boleh dilihat SEMUA role aktif (dashboard/kasir/produk/riwayat/
-   * kas_shift — semuanya minimal "view" di §5). Role `qc` sengaja diperlakukan
-   * seperti `kasir` (paling terbatas) untuk menu yang tidak eksplisit
-   * disebut di matriks §5 (kolomnya cuma Kasir/Supervisor/Admin) — belum ada
-   * keputusan pemilik project soal qc, jadi default paling aman (tidak
-   * elevated) dipakai sampai ada keputusan lain.
+   * ── REVISI (migration 028/030, "sistem role dinamis") ── Sebelumnya field
+   * ini `roles?: UserRole[]` (daftar nama role tetap admin/supervisor/kasir/
+   * qc, dicocokkan ke `user.role` string tunggal). Role sekarang data bebas
+   * (tabel `roles`), bukan lagi 4 pilihan pasti, jadi menu TIDAK BISA lagi
+   * digate per nama role — diganti daftar permission_key dari katalog
+   * `permissions` (lihat migration 028, sama persis dipakai tab Pengaturan >
+   * Role buat checklist). Menu tampil kalau user punya SALAH SATU (OR) dari
+   * permission_key di sini — array biasanya cuma 1 key (mis. `["stok"]`),
+   * kecuali menu "Pengaturan" yang tampil asal user punya minimal satu dari
+   * 3 permission tab-nya. Kosongkan (undefined) untuk menu yang boleh
+   * dilihat SEMUA role aktif (dashboard/kasir/produk/riwayat/kas_shift —
+   * semuanya minimal "view" di PRD §5, dan tidak ada baris permission
+   * khususnya di katalog).
    */
-  roles?: UserRole[];
+  permissions?: string[];
 }
 
 export interface SidebarMenuGroup {
@@ -95,12 +100,13 @@ export const MENU_GROUPS: SidebarMenuGroup[] = [
       // "Produk" sendiri sengaja dibiarkan di grup Utama seperti sebelumnya —
       // memindahkannya bukan bagian task ini dan bisa membingungkan kasir yang
       // sudah hafal posisi menu.
-      // roles: PRD §5 baris `stok` — Kasir "—", Supervisor/Admin "✔".
+      // permissions: PRD §5 baris `stok` — gate lama admin/supervisor
+      // digeneralisasi jadi permission "stok" (migration 028/030).
       {
         key: "stok",
         label: "Stok & Opname",
         icon: Boxes,
-        roles: ["admin", "supervisor"],
+        permissions: ["stok"],
       },
       // roles: kosong (semua role) — PRD §5 baris `kas_shift` — Kasir "✔ (sendiri)".
       { key: "kas", label: "Kas & Shift", icon: Wallet },
@@ -115,7 +121,7 @@ export const MENU_GROUPS: SidebarMenuGroup[] = [
         key: "promo",
         label: "Layar Promosi",
         icon: Monitor,
-        roles: ["admin", "supervisor"],
+        permissions: ["promo"],
       },
     ],
   },
@@ -137,7 +143,7 @@ export const MENU_GROUPS: SidebarMenuGroup[] = [
         key: "laporan",
         label: "Laporan",
         icon: TrendingUp,
-        roles: ["admin", "supervisor"],
+        permissions: ["laporan"],
       },
     ],
   },
@@ -161,13 +167,13 @@ export const MENU_GROUPS: SidebarMenuGroup[] = [
         key: "sampah",
         label: "Sampah",
         icon: Trash2,
-        roles: ["admin", "supervisor"],
+        permissions: ["sampah"],
       },
       {
         key: "log-aktivitas",
         label: "Log Aktivitas",
         icon: ClipboardList,
-        roles: ["admin", "supervisor"],
+        permissions: ["log_aktivitas"],
       },
     ],
   },
@@ -180,52 +186,54 @@ export const MENU_GROUPS: SidebarMenuGroup[] = [
     // sebagai section sendiri di diagram §4.1, bukan di bawah "Sampah/Log
     // Aktivitas").
     //
-    // ── REVISI (migration 018) ── `roles` semula `["admin"]` saja, sekarang
-    // `["admin", "supervisor"]` — pemilik project MINTA LANGSUNG akses
-    // supervisor ke modul ini untuk keperluan pengujian, sama alasannya
-    // dengan migration 015 (akun pemilik/penguji sehari-hari berrole
-    // `supervisor`). Ini keputusan sadar, menyimpang dari PRD §5 asli
-    // (baris `settings` = "Admin" saja) — lihat komentar header migration
-    // `018_pengaturan_supervisor_access.sql` untuk detail lengkap & 2
-    // pengaman tambahan (supervisor tidak bisa menyentuh/membuat akun
-    // admin) yang TIDAK ada di migration 015 karena modul ini beda kelas
-    // risiko (bisa ubah role user lain, bukan cuma restore data).
+    // ── REVISI (migration 028/030) ── Riwayat lama: `roles` semula
+    // `["admin"]`, lalu migration 018 melonggarkan ke `["admin",
+    // "supervisor"]` (keputusan sadar pemilik project, lihat header
+    // `018_pengaturan_supervisor_access.sql`). Sejak migration 028 role
+    // sudah dinamis, jadi gate ini digeneralisasi ke permission: menu
+    // tampil kalau user punya SALAH SATU dari 3 permission tab Pengaturan
+    // (Toko/Admin/Role) — sama persis dengan gate `canAccessSettings` di
+    // PengaturanModule.tsx ("minimal satu dari tiga"), supaya role custom
+    // yang cuma dikasih satu tab pun tetap melihat menunya.
     label: "Administrasi",
     items: [
       {
         key: "pengaturan",
         label: "Pengaturan",
         icon: Settings,
-        roles: ["admin", "supervisor"],
+        permissions: ["pengaturan_toko", "pengaturan_admin", "pengaturan_role"],
       },
     ],
   },
 ];
 
 /**
- * ── TAMBAHAN (T-10) ── Saring MENU_GROUPS sesuai role user aktif. Item tanpa
- * `roles` (undefined) lolos untuk role manapun. Grup yang jadi kosong setelah
- * disaring (semua itemnya tersaring) TIDAK dirender sama sekali — supaya
- * tidak ada judul grup menggantung tanpa isi (mis. kasir tidak akan melihat
- * judul grup "Administrasi" kalau satu-satunya isinya, "Pengaturan",
- * tersaring).
+ * ── REVISI (migration 028/030) ── Saring MENU_GROUPS sesuai permission user
+ * aktif (sebelumnya sesuai `role` string tunggal dicocokkan ke daftar nama
+ * role tetap — lihat riwayat lengkap di komentar `SidebarMenuItem.permissions`
+ * di atas). Item tanpa `permissions` (undefined) lolos untuk user manapun.
+ * Item DENGAN `permissions` lolos kalau user punya SALAH SATU (OR) dari
+ * permission_key di daftar itu — cukup satu match, bukan harus semua
+ * (dipakai menu "Pengaturan" yang bisa tampil dari 3 permission berbeda).
+ * Grup yang jadi kosong setelah disaring (semua itemnya tersaring) TIDAK
+ * dirender sama sekali — supaya tidak ada judul grup menggantung tanpa isi.
  *
- * `role` boleh `undefined` (auth masih loading) — dalam kondisi itu semua
- * item yang PUNYA `roles` ikut disembunyikan dulu (default paling aman),
- * baru muncul begitu role user selesai dimuat. Ini sengaja, supaya tidak ada
- * "kedipan" menu sensitif tampil sebentar lalu hilang saat auth masih
- * resolve (pola yang sama seperti kehati-hatian anti-blink di modul lain,
- * lihat catatan blink LaporanModule.tsx/SampahModule.tsx di PROGRESS.md).
+ * `user` boleh `null` (auth masih loading / belum login) — dalam kondisi itu
+ * `hasPermission` selalu false, jadi semua item yang PUNYA `permissions`
+ * ikut disembunyikan dulu (default paling aman), baru muncul begitu profil
+ * user selesai dimuat. Ini sengaja, supaya tidak ada "kedipan" menu sensitif
+ * tampil sebentar lalu hilang saat auth masih resolve (pola yang sama
+ * seperti kehati-hatian anti-blink di modul lain, lihat catatan blink
+ * LaporanModule.tsx/SampahModule.tsx di PROGRESS.md).
  */
-function filterMenuGroups(
-  groups: SidebarMenuGroup[],
-  role: UserRole | undefined,
-) {
+function filterMenuGroups(groups: SidebarMenuGroup[], user: AuthUser | null) {
   return groups
     .map((group) => ({
       ...group,
       items: group.items.filter(
-        (item) => !item.roles || (role && item.roles.includes(role)),
+        (item) =>
+          !item.permissions ||
+          item.permissions.some((key) => hasPermission(user, key)),
       ),
     }))
     .filter((group) => group.items.length > 0);
@@ -321,14 +329,6 @@ function ThemeToggle() {
   );
 }
 
-// ── TAMBAHAN (logout) ── Label role untuk ditampilkan di footer Sidebar.
-const ROLE_LABELS: Record<UserRole, string> = {
-  admin: "Admin",
-  supervisor: "Supervisor",
-  kasir: "Kasir",
-  qc: "QC",
-};
-
 interface SidebarProps {
   activeMenu: string;
   onMenuChange: (menu: string) => void;
@@ -342,7 +342,7 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
   // berubah sama sekali, konsisten dengan komentar header file ini
   // ("tidak perlu sentuh page.tsx sama sekali" untuk urusan menu).
   const { user, signOut } = useAuth();
-  const visibleGroups = filterMenuGroups(MENU_GROUPS, user?.role);
+  const visibleGroups = filterMenuGroups(MENU_GROUPS, user);
 
   // ── TAMBAHAN (responsif) ── Di bawah breakpoint `md` (tablet portrait &
   // HP), sidebar sebelumnya `hidden` total — tidak ada cara buka menu sama
@@ -500,7 +500,12 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
                   {user.full_name || user.email || "Pengguna"}
                 </p>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                  {ROLE_LABELS[user.role] ?? user.role}
+                  {/* ── REVISI (migration 028/030) ── `ROLE_LABELS[user.role]`
+                      (lookup ke 4 nama role tetap) dihapus — role sekarang
+                      data bebas, namanya sudah human-readable apa adanya
+                      dari tabel `roles` (mis. "Admin", "Kasir Cabang"),
+                      tidak perlu translasi lagi. */}
+                  {user.role_name}
                 </p>
               </div>
             )}
