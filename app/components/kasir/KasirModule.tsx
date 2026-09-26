@@ -22,10 +22,18 @@ import {
 import BarcodeScanModal, { type ScanFeedback } from "./BarcodeScanModal";
 import PaymentModal from "./PaymentModal";
 import {
-  printThermalReceipt,
   shareReceiptViaWhatsApp,
   type ReceiptData,
 } from "@/lib/pos/printLogic";
+// ── PERBAIKAN (auto-print munculkan dialog cetak sistem) ── Sebelumnya file
+// ini memanggil printThermalReceipt() langsung dari lib/pos/printLogic.ts,
+// yang SELALU lewat window.print() (dialog cetak OS/browser SELALU muncul,
+// itu batasan platform). Sekarang pakai printReceipt() dari
+// usePrinterProfiles: kalau printer default kasir bertipe Bluetooth/USB,
+// struk dikirim sebagai byte ESC/POS langsung ke device — TANPA dialog sama
+// sekali. Dialog cetak sistem hanya muncul kalau printer default kasir
+// masih "Printer Sistem (Browser)" (lihat Pengaturan > Printer).
+import { usePrinterProfiles } from "@/hooks/usePrinterProfiles";
 import { useProducts, ProductWithCategory } from "@/hooks/useProducts";
 import { useCategories } from "@/hooks/useCategories";
 import { CartItem } from "@/lib/pos/types";
@@ -84,6 +92,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
 
   const { settings: posSettings } = useSettings();
   const { activeShift, isLoading: isShiftLoading } = useShifts();
+  const { printReceipt } = usePrinterProfiles();
   const {
     heldOrders,
     isLoading: isHeldOrdersLoading,
@@ -406,7 +415,11 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   // sendiri aman dipanggil berkali-kali.
   const handlePrintReceipt = () => {
     if (!lastReceipt) return;
-    printThermalReceipt(lastReceipt);
+    // Tidak perlu await/tangani hasilnya di sini — kegagalan (mis. printer
+    // Bluetooth tiba-tiba mati) sudah cukup terlihat dari status printer di
+    // Pengaturan > Printer, dan kasir tetap punya tombol ini untuk coba
+    // cetak ulang kalau kertas macet, sama seperti sebelumnya.
+    void printReceipt(lastReceipt);
   };
 
   // ── TAMBAHAN (T-11 bagian 1) ── Handler Hold Order.

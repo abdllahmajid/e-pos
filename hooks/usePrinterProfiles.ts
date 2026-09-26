@@ -30,6 +30,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  buildReceiptBytes,
   buildTestPrintBytes,
   connectBluetoothPrinter,
   disconnectBluetoothPrinter,
@@ -45,7 +46,11 @@ import {
   type MinimalBluetoothRemoteGATTCharacteristic,
   type MinimalUsbDevice,
 } from "@/lib/pos/printerConnection";
-import { printBrowserTestPage } from "@/lib/pos/printLogic";
+import {
+  printBrowserTestPage,
+  printThermalReceipt,
+  type ReceiptData,
+} from "@/lib/pos/printLogic";
 
 export type PrinterConnectionType = "bluetooth" | "usb" | "browser";
 export type PrinterStatus = "connected" | "disconnected" | "unknown";
@@ -165,6 +170,19 @@ interface UsePrinterProfilesResult {
   scanUsb: () => Promise<PrinterActionResult>;
   testConnection: (id: string) => Promise<PrinterActionResult>;
   testPrint: (id: string, storeName: string) => Promise<PrinterActionResult>;
+  /**
+   * Cetak struk TRANSAKSI SUNGGUHAN ke printer default (atau `id` tertentu
+   * kalau dikirim). BEDA dari testPrint(): kalau printer default bertipe
+   * bluetooth/usb, ini TIDAK PERNAH memunculkan dialog cetak apa pun —
+   * langsung menulis byte ESC/POS ke device. Dialog cetak sistem HANYA
+   * muncul kalau printer default kasir memang masih bertipe "Printer
+   * Sistem (Browser)" (mis. belum sempat menyambungkan printer fisik) —
+   * itu bukan bug, itu satu-satunya cara mencetak lewat OS print driver.
+   */
+  printReceipt: (
+    data: ReceiptData,
+    id?: string,
+  ) => Promise<PrinterActionResult>;
   setDefaultPrinter: (id: string) => void;
   renamePrinter: (id: string, name: string) => void;
   removePrinter: (id: string) => PrinterActionResult;
@@ -461,6 +479,71 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
     [resolveBluetoothDevice, resolveUsbDevice, touchLastConnected],
   );
 
+  // ── PERBAIKAN (auto-print munculkan dialog padahal sudah ada printer
+  // bluetooth/usb) ── Sebelumnya KasirModule.tsx & TransactionDetailModal.tsx
+  // memanggil printThermalReceipt() langsung, TIDAK PEDULI printer default
+  // kasir bertipe apa — selalu lewat window.print(), selalu memunculkan
+  // dialog cetak sistem walau kasir sudah menyambungkan printer Bluetooth/
+  // USB di Pengaturan > Printer. testPrint() di atas SUDAH benar (branching
+  // per connectionType) tapi cuma dipakai tombol "Tes Print" di Pengaturan,
+  // tidak pernah dipanggil dari alur pembayaran. printReceipt() ini pola
+  // yang SAMA dengan testPrint(), hanya isinya struk transaksi asli
+  // (buildReceiptBytes) bukan halaman tes — supaya alur pembayaran &
+  // cetak ulang bisa pakai jalur tanpa-dialog yang sama.
+  const printReceipt = useCallback(
+    async (data: ReceiptData, id?: string): Promise<PrinterActionResult> => {
+      const profile = id
+        ? profilesRef.current.find((p) => p.id === id)
+        : profilesRef.current.find((p) => p.isDefault);
+      if (!profile) return { ok: false, error: "Printer tidak ditemukan." };
+
+      if (profile.connectionType === "browser") {
+        // Satu-satunya jalur yang TIDAK BISA menghindari dialog cetak —
+        // window.print() selalu memunculkannya, ini batasan browser, bukan
+        // sesuatu yang bisa "diperbaiki" dari sisi kode. Kalau kasir tidak
+        // mau lihat dialog sama sekali, solusinya menyambungkan printer
+        // fisik lewat Bluetooth/USB di Pengaturan > Printer, bukan
+        // memaksa jalur "Printer Sistem (Browser)" ini diam-diam.
+        printThermalReceipt(data);
+        return { ok: true };
+      }
+
+      setBusyId(profile.id);
+      try {
+        const bytes = buildReceiptBytes(data);
+
+        if (profile.connectionType === "bluetooth") {
+          let entry = deviceRegistryRef.current.get(profile.id);
+          if (!entry || entry.type !== "bluetooth") {
+            const device = await resolveBluetoothDevice(profile);
+            const characteristic = await connectBluetoothPrinter(device);
+            entry = { type: "bluetooth", device, characteristic };
+            deviceRegistryRef.current.set(profile.id, entry);
+          }
+          await writeToBluetoothPrinter(entry.characteristic, bytes);
+        } else {
+          let entry = deviceRegistryRef.current.get(profile.id);
+          if (!entry || entry.type !== "usb") {
+            const device = await resolveUsbDevice(profile);
+            entry = { type: "usb", device };
+            deviceRegistryRef.current.set(profile.id, entry);
+          }
+          await writeToUsbPrinter(entry.device, bytes);
+        }
+
+        setStatuses((prev) => ({ ...prev, [profile.id]: "connected" }));
+        touchLastConnected(profile.id);
+        return { ok: true };
+      } catch (err) {
+        setStatuses((prev) => ({ ...prev, [profile.id]: "disconnected" }));
+        return { ok: false, error: friendlyPrinterError(err) };
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [resolveBluetoothDevice, resolveUsbDevice, touchLastConnected],
+  );
+
   const setDefaultPrinter = useCallback(
     (id: string) => {
       const next = profilesRef.current.map((p) => ({
@@ -530,6 +613,7 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
     scanUsb,
     testConnection,
     testPrint,
+    printReceipt,
     setDefaultPrinter,
     renamePrinter,
     removePrinter,

@@ -67,11 +67,15 @@ const METHOD_LABELS: Record<string, string> = {
   TEMPO: "Tempo / Piutang",
 };
 
-function formatMethod(method: string): string {
+// ── PERBAIKAN (auto-print tanpa dialog) ── Di-export supaya bisa dipakai
+// ulang oleh lib/pos/printerConnection.ts (buildReceiptBytes) untuk
+// mencetak struk ke printer Bluetooth/USB lewat ESC/POS mentah, tanpa
+// duplikasi logika format uang/metode pembayaran.
+export function formatMethod(method: string): string {
   return METHOD_LABELS[method] ?? method.toUpperCase();
 }
 
-function formatMoney(amount: number): string {
+export function formatMoney(amount: number): string {
   return Math.round(amount).toLocaleString("id-ID");
 }
 

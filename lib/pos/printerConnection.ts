@@ -125,6 +125,14 @@ function getNav(): NavigatorWithPrinterApis {
   return navigator as NavigatorWithPrinterApis;
 }
 
+// ── TAMBAHAN (auto-print tanpa dialog sistem) ── Import type-only (tidak
+// bikin circular import karena printLogic.ts tidak mengimpor apa pun dari
+// file ini) + dua formatter kecil yang sebelumnya private di printLogic.ts,
+// supaya format Rupiah/label metode pembayaran di struk ESC/POS SELALU
+// identik dengan struk HTML (window.print), tidak ditulis ulang dua kali.
+import type { ReceiptData } from "./printLogic";
+import { formatMethod, formatMoney } from "./printLogic";
+
 export function isWebBluetoothSupported(): boolean {
   return typeof navigator !== "undefined" && !!getNav().bluetooth;
 }
@@ -177,6 +185,113 @@ export function buildTestPrintBytes(
   text("benar dan siap dipakai.\n");
   text("\n\n\n");
   raw(GS, 0x56, 0x42, 0x00); // potong kertas parsial (didukung kebanyakan printer mini)
+  return new Uint8Array(bytes);
+}
+
+// ── TAMBAHAN (auto-print tanpa dialog sistem) ── Builder ESC/POS untuk
+// struk TRANSAKSI SUNGGUHAN (bukan tes print) — dipakai `printReceipt()` di
+// hooks/usePrinterProfiles.ts saat printer aktif kasir bertipe Bluetooth/
+// USB. Berbeda dari printThermalReceipt()/printA6Nota() di printLogic.ts:
+// dua fungsi itu menghasilkan HTML lalu memanggil window.print() (SELALU
+// memunculkan dialog cetak browser/OS — batasan platform, bukan bug), fungsi
+// ini menghasilkan BYTE MENTAH yang ditulis langsung ke printer lewat GATT
+// characteristic (Bluetooth) / endpoint OUT (USB) — tidak pernah menyentuh
+// window.print(), jadi tidak pernah ada dialog apa pun.
+//
+// Lebar kertas diasumsikan 32 karakter (standar printer thermal 58mm font
+// default). Kalau toko pakai printer 80mm, lebar ini bisa dijadikan
+// parameter nanti — sengaja belum, supaya tidak menambah kompleksitas
+// sebelum benar-benar dibutuhkan.
+const RECEIPT_WIDTH = 32;
+
+/** Ratakan `left` di kiri dan `right` di kanan dalam `width` karakter (mis. "Total" ...... "15.000"). */
+function padLine(left: string, right: string, width = RECEIPT_WIDTH): string {
+  const space = width - left.length - right.length;
+  if (space <= 0) return `${left} ${right}`;
+  return left + " ".repeat(space) + right;
+}
+
+/** Bangun byte mentah ESC/POS untuk SATU struk transaksi (dipakai bluetooth/usb). */
+export function buildReceiptBytes(data: ReceiptData): Uint8Array {
+  const encoder = new TextEncoder();
+  const bytes: number[] = [];
+  const raw = (...values: number[]) => bytes.push(...values);
+  const text = (value: string) => bytes.push(...Array.from(encoder.encode(value)));
+  const line = (value: string = "") => {
+    text(value);
+    raw(0x0a); // LF
+  };
+  const divider = () => line("-".repeat(RECEIPT_WIDTH));
+
+  const dateStr = new Date(data.createdAt ?? Date.now()).toLocaleString(
+    "id-ID",
+    { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" },
+  );
+  const discount = data.discount ?? 0;
+  const tax = data.tax ?? 0;
+
+  raw(ESC, 0x40); // reset printer
+
+  if (data.isReprint) {
+    raw(ESC, 0x61, 0x01); // tengah
+    line("*** CETAK ULANG ***");
+  }
+
+  raw(ESC, 0x61, 0x01); // tengah
+  raw(ESC, 0x21, 0x30); // font besar untuk nama toko
+  line(data.storeName || "Langitan.co");
+  raw(ESC, 0x21, 0x00); // font normal
+  if (data.storeAddress) line(data.storeAddress);
+  if (data.storePhone) line(data.storePhone);
+
+  raw(ESC, 0x61, 0x00); // rata kiri
+  divider();
+  line(`No. Struk : ${data.receiptNo}`);
+  line(`Waktu     : ${dateStr}`);
+  line(`Kasir     : ${data.cashierName ?? "-"}`);
+  if (data.customerName) line(`Pelanggan : ${data.customerName}`);
+  line(`Metode    : ${formatMethod(data.method)}`);
+  divider();
+
+  for (const item of data.items) {
+    line(item.name);
+    const qtyPrice = `${item.qty}x ${formatMoney(item.price)}`;
+    const subtotal = formatMoney(item.subtotal ?? item.qty * item.price);
+    line(padLine(qtyPrice, subtotal));
+  }
+  divider();
+
+  line(padLine("Subtotal", formatMoney(data.subtotal)));
+  if (discount > 0) line(padLine("Diskon", `-${formatMoney(discount)}`));
+  if (tax > 0) line(padLine("Pajak", formatMoney(tax)));
+  raw(ESC, 0x45, 0x01); // bold on
+  line(padLine("Total", formatMoney(data.total)));
+  raw(ESC, 0x45, 0x00); // bold off
+  line(padLine("Bayar", formatMoney(data.paidAmount)));
+  line(padLine("Kembali", formatMoney(data.changeAmount)));
+  divider();
+
+  raw(ESC, 0x61, 0x01); // tengah
+  line(data.footerText || "Terima kasih atas kunjungan Anda");
+  line();
+
+  // Barcode nomor struk pakai perintah barcode NATIVE printer (GS k, CODE128
+  // subset B) — bukan buildBarcodeSvgSafe() dari barcode.ts (itu khusus SVG
+  // untuk struk HTML/window.print, tidak relevan untuk byte mentah).
+  try {
+    const code128Payload = `{B${data.receiptNo}`; // "{B" = pilih subset B (Epson GS k spec)
+    const codeBytes = Array.from(encoder.encode(code128Payload));
+    raw(GS, 0x68, 64); // tinggi barcode 64 dot
+    raw(GS, 0x77, 2); // lebar modul barcode
+    raw(GS, 0x48, 2); // teks HRI dicetak di bawah barcode
+    raw(GS, 0x6b, 73, codeBytes.length, ...codeBytes); // GS k m n d1..dn (m=73 -> CODE128)
+  } catch {
+    // Nomor struk mengandung karakter di luar dukungan — lewati barcode,
+    // jangan sampai gagal cetak seluruh struk gara-gara ini.
+  }
+
+  raw(0x0a, 0x0a, 0x0a); // feed sebelum potong
+  raw(GS, 0x56, 0x42, 0x00); // potong kertas parsial
   return new Uint8Array(bytes);
 }
 

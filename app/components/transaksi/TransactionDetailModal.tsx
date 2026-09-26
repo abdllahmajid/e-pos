@@ -33,11 +33,18 @@ import {
   type TransactionDetail,
 } from "@/lib/pos/transactionApi";
 import {
-  printThermalReceipt,
   printA6Nota,
   shareReceiptViaWhatsApp,
   type ReceiptData,
 } from "@/lib/pos/printLogic";
+// ── PERBAIKAN (auto-print munculkan dialog cetak sistem) ── format
+// "thermal" sekarang lewat printReceipt() (lihat catatan yang sama di
+// KasirModule.tsx) supaya cetak ulang struk thermal juga tidak memunculkan
+// dialog cetak kalau printer default kasir bertipe Bluetooth/USB. Format
+// "nota" (A6/A5) TETAP pakai printA6Nota() / window.print() — itu memang
+// ditujukan untuk printer kertas biasa (bukan thermal ESC/POS), jadi
+// dialog cetak sistem di sana bukan bug, melainkan cara satu-satunya.
+import { usePrinterProfiles } from "@/hooks/usePrinterProfiles";
 import { formatRupiah } from "@/lib/pos/cartLogic";
 
 type PanelMode = "detail" | "retur" | "void";
@@ -88,6 +95,7 @@ export default function TransactionDetailModal({
   const canRetur = hasPermissionAction(user, "retur_void", "create");
   const canVoid = hasPermissionAction(user, "retur_void", "delete");
   const { settings: posSettings } = useSettings();
+  const { printReceipt } = usePrinterProfiles();
 
   const [detail, setDetail] = useState<TransactionDetail | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -210,7 +218,7 @@ export default function TransactionDetailModal({
     if (format === "nota") {
       printA6Nota(printData, (posSettings.paperNota as "A6" | "A5") ?? "A6");
     } else {
-      printThermalReceipt(printData);
+      void printReceipt(printData);
     }
   }
 
