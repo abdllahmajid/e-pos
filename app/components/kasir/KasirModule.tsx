@@ -23,7 +23,6 @@ import BarcodeScanModal, { type ScanFeedback } from "./BarcodeScanModal";
 import PaymentModal from "./PaymentModal";
 import {
   printThermalReceipt,
-  printA6Nota,
   shareReceiptViaWhatsApp,
   type ReceiptData,
 } from "@/lib/pos/printLogic";
@@ -147,14 +146,6 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   const [lastCustomerPhone, setLastCustomerPhone] = useState<string | null>(
     null,
   );
-  // ── TAMBAHAN (konsep baru: preview struk + cetak manual) ── Format cetak
-  // yang dipilih kasir di form pembayaran (thermal/nota), dipakai
-  // handlePrintReceipt() saat tombol "Cetak" di layar sukses ditekan —
-  // dipisah dari lastReceipt karena ReceiptData sendiri tidak menyimpan
-  // format kertas.
-  const [lastPrintFormat, setLastPrintFormat] = useState<"thermal" | "nota">(
-    "thermal",
-  );
 
   // ── TAMBAHAN (T-11 bagian 1) ── Modal konfirmasi "Tunda" (isi label opsional).
   const [isHoldModalOpen, setIsHoldModalOpen] = useState(false);
@@ -218,7 +209,6 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       customerName?: string;
       customerPhone?: string;
       dueDate?: string;
-      printFormat?: "thermal" | "nota";
     },
   ): Promise<{ paymentId: string }> => {
     if (cart.length === 0) throw new Error("Keranjang masih kosong.");
@@ -270,14 +260,13 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         method,
       };
 
-      // ── PERBAIKAN (konsep baru: preview struk + cetak manual) ── Sebelumnya
-      // printThermalReceipt()/printA6Nota() dipanggil OTOMATIS di sini, tepat
-      // setelah transaksi tersimpan. Sekarang TIDAK — cetak hanya dipicu kalau
-      // kasir menekan tombol "Cetak" di layar sukses (lihat handlePrintReceipt
-      // & prop onPrint di <PaymentModal> di bawah). Format yang dipilih kasir
-      // di form pembayaran tetap disimpan (lastPrintFormat) supaya tombol itu
-      // tahu harus cetak thermal atau nota.
-      setLastPrintFormat(extra?.printFormat === "nota" ? "nota" : "thermal");
+      // ── PERBAIKAN (auto-print setelah bayar) ── Sebelumnya cetak hanya
+      // dipicu manual lewat tombol "Cetak" di layar sukses. Sekarang
+      // PaymentModal memanggil onPrint() OTOMATIS begitu layar sukses
+      // muncul (lihat handlePrintReceipt & prop onPrint di <PaymentModal>
+      // di bawah) — kasir tidak perlu menekan apa pun, dan selalu ke
+      // printer thermal (pemilihan format thermal/nota hanya tersisa di
+      // alur "Cetak Ulang" pada Riwayat Transaksi).
 
       // ── TAMBAHAN (013) ── Simpan struk + no. HP transaksi ini supaya tombol
       // "Kirim WA" di layar sukses PaymentModal (dipanggil lewat onSendWhatsApp
@@ -320,7 +309,6 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     extra?: {
       customerName?: string;
       customerPhone?: string;
-      printFormat?: "thermal" | "nota";
     },
   ): Promise<{ payments: CreatedPayment[] }> => {
     if (cart.length === 0) throw new Error("Keranjang masih kosong.");
@@ -369,10 +357,9 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         method: methodLabel,
       };
 
-      // ── PERBAIKAN (konsep baru: preview struk + cetak manual) ── Sama seperti
-      // handleConfirmPayment di atas — tidak lagi auto-print di sini.
-      setLastPrintFormat(extra?.printFormat === "nota" ? "nota" : "thermal");
-
+      // ── PERBAIKAN (auto-print setelah bayar) ── Sama seperti
+      // handleConfirmPayment di atas — auto-print thermal dipicu PaymentModal
+      // sendiri lewat onPrint saat layar sukses muncul.
       setLastReceipt(receiptData);
       setLastCustomerPhone(extra?.customerPhone ?? null);
 
@@ -406,19 +393,20 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     return shareReceiptViaWhatsApp(lastReceipt, lastCustomerPhone);
   };
 
-  // ── TAMBAHAN (konsep baru: preview struk + cetak manual) ── Dipanggil
-  // PaymentModal saat kasir menekan tombol "Cetak" di layar sukses/preview
-  // struk. Sama seperti handleSendWhatsApp di atas — pakai lastReceipt dari
-  // state, karena tombol ini hanya bisa ditekan SETELAH handleConfirmPayment/
-  // handleConfirmSplitPayment selesai mengisinya. Boleh ditekan berkali-kali
-  // (mis. kertas macet / kasir ingin cetak ulang).
+  // ── PERBAIKAN (auto-print setelah bayar) ── Dulu dipanggil manual saat
+  // kasir menekan tombol "Cetak" di layar sukses, dan bisa mencetak thermal
+  // ATAU nota tergantung pilihan kasir di form pembayaran. Sekarang
+  // dipanggil OTOMATIS oleh PaymentModal (lihat prop onPrint di bawah) tepat
+  // saat layar sukses muncul — kasir tidak perlu menekan apa pun — dan
+  // SELALU ke printer thermal. Pilihan format nota (A6/A5) tidak hilang,
+  // hanya dipindah sepenuhnya ke alur "Cetak Ulang" di Riwayat Transaksi
+  // (lihat handleReprint di TransactionDetailModal.tsx), yang tetap
+  // menawarkan thermal maupun nota untuk cetak ulang. Tetap boleh terpanggil
+  // lagi kalau suatu saat dibutuhkan (mis. kertas macet) — printThermalReceipt
+  // sendiri aman dipanggil berkali-kali.
   const handlePrintReceipt = () => {
     if (!lastReceipt) return;
-    if (lastPrintFormat === "nota") {
-      printA6Nota(lastReceipt, (posSettings.paperNota as "A6" | "A5") ?? "A6");
-    } else {
-      printThermalReceipt(lastReceipt);
-    }
+    printThermalReceipt(lastReceipt);
   };
 
   // ── TAMBAHAN (T-11 bagian 1) ── Handler Hold Order.
@@ -987,9 +975,6 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         subtotal={subtotal}
         tax={tax}
         total={grandTotal}
-        defaultPrintFormat={
-          (posSettings.printDefault as "thermal" | "nota") ?? "thermal"
-        }
         onConfirmPayment={handleConfirmPayment}
         // ── TAMBAHAN (021, T-11 bagian 2) ── Sebelum ini, prop tidak pernah
         // dikirim sama sekali — pilihan "Split Bayar" di PaymentModal.tsx
@@ -997,7 +982,9 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         // jadi tombolnya baru bisa terlihat/dipakai mulai dari baris ini.
         onConfirmSplitPayment={handleConfirmSplitPayment}
         onSendWhatsApp={handleSendWhatsApp}
-        // ── TAMBAHAN (konsep baru: preview struk + cetak manual) ──
+        // ── PERBAIKAN (auto-print setelah bayar) ── onPrint sekarang dipanggil
+        // OTOMATIS oleh PaymentModal begitu layar sukses muncul, bukan lewat
+        // klik tombol "Cetak" manual lagi.
         receipt={lastReceipt}
         onPrint={handlePrintReceipt}
       />

@@ -15,7 +15,6 @@ import {
   Trash2,
   User,
   Phone,
-  Printer,
   MessageCircle,
   ArrowRight,
 } from "lucide-react";
@@ -40,6 +39,7 @@ import {
 // TypeScript selalu tahu bentuk data struk yang benar tanpa perlu disalin
 // manual lagi.
 import type { ReceiptData } from "@/lib/pos/printLogic";
+import Toast from "@/app/components/ui/Toast";
 
 // ── TAMBAHAN (bug: preview tidak sama dengan hasil cetak) ── Duplikat kecil
 // dari METHOD_LABELS/formatMethod() di printLogic.ts (tidak diexport dari
@@ -66,8 +66,6 @@ type PaymentModalProps = {
   subtotal: number;
   tax: number;
   total: number;
-  /** Format cetak default dari pengaturan toko */
-  defaultPrintFormat: "thermal" | "nota";
   onConfirmPayment: (
     method: PaymentMethod,
     paidAmount: number,
@@ -77,7 +75,6 @@ type PaymentModalProps = {
       /** ── TAMBAHAN (013) ── Nomor HP pelanggan, opsional untuk semua metode. */
       customerPhone?: string;
       dueDate?: string;
-      printFormat?: "thermal" | "nota";
     },
   ) => Promise<{ paymentId: string }>;
   /**
@@ -93,7 +90,6 @@ type PaymentModalProps = {
     extra?: {
       customerName?: string;
       customerPhone?: string;
-      printFormat?: "thermal" | "nota";
     },
   ) => Promise<{ payments: CreatedPayment[] }>;
   /**
@@ -115,12 +111,13 @@ type PaymentModalProps = {
    */
   receipt?: ReceiptData | null;
   /**
-   * ── TAMBAHAN (konsep baru: preview struk + cetak manual) ── Dipanggil saat
-   * kasir menekan tombol "Cetak" di layar sukses. TIDAK lagi dipanggil
-   * otomatis oleh parent setelah transaksi tersimpan — dialog print sistem
-   * hanya boleh muncul atas aksi eksplisit kasir. Boleh ditekan berkali-kali
-   * (cetak ulang). Opsional: kalau parent tidak mengirim prop ini, tombol
-   * "Cetak" disembunyikan.
+   * ── PERBAIKAN (auto-print setelah bayar) ── Dipanggil OTOMATIS, sekali,
+   * tepat saat layar sukses pertama kali muncul — kasir TIDAK perlu menekan
+   * tombol apa pun lagi untuk mencetak. Parent (KasirModule) selalu mencetak
+   * ke printer thermal lewat callback ini; pemilihan format thermal/nota
+   * sekarang hanya ada di alur "Cetak Ulang" pada Riwayat Transaksi.
+   * Opsional: kalau parent tidak mengirim prop ini, tidak ada auto-print
+   * ataupun notif "Struk berhasil dicetak" yang muncul.
    */
   onPrint?: () => void;
 };
@@ -165,7 +162,6 @@ export default function PaymentModal({
   subtotal,
   tax,
   total,
-  defaultPrintFormat,
   onConfirmPayment,
   onConfirmSplitPayment,
   onSendWhatsApp,
@@ -204,11 +200,6 @@ export default function PaymentModal({
     QRIS: null,
   });
 
-  // State untuk pilihan format cetak
-  const [printFormat, setPrintFormat] = useState<"thermal" | "nota">(
-    defaultPrintFormat,
-  );
-
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploadingProof, setIsUploadingProof] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -227,10 +218,20 @@ export default function PaymentModal({
   >(null);
   const [waError, setWaError] = useState<string | null>(null);
 
-  // ── TAMBAHAN (konsep baru: preview struk + cetak manual) ── Status tombol
-  // "Cetak" di layar sukses — bukan untuk memblokir klik ulang (kasir boleh
-  // cetak berkali-kali, mis. kertas macet), hanya untuk label tombol.
-  const [printCount, setPrintCount] = useState(0);
+  // ── PERBAIKAN (auto-print setelah bayar) ── `autoPrintedRef` mencegah
+  // `onPrint()` terpanggil lebih dari sekali untuk satu transaksi sukses yang
+  // sama (mis. kalau komponen re-render selagi isSuccess masih true — lihat
+  // efek di bawah). Pakai ref (bukan state) karena nilainya tidak boleh
+  // memicu render ulang sendiri, hanya dibaca di dalam efek.
+  const autoPrintedRef = useRef(false);
+  // Notif pop-up "Struk berhasil dicetak" — muncul tepat saat auto-print
+  // terpicu, hilang otomatis lewat timeout di bawah (Toast.tsx sendiri cuma
+  // urusan tampilan, tidak menyimpan timer-nya sendiri).
+  const [printToastVisible, setPrintToastVisible] = useState(false);
+  const printToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const PRINT_TOAST_DURATION_MS = 3000;
 
   useEffect(() => {
     if (isOpen) {
@@ -245,7 +246,6 @@ export default function PaymentModal({
       setSplitAmount(emptyMethodAmounts());
       setSplitCashReceived(0);
       setSplitProofs({ BANK_TRANSFER: [], QRIS: [] });
-      setPrintFormat(defaultPrintFormat);
       setIsProcessing(false);
       setIsUploadingProof(false);
       setIsSuccess(false);
@@ -254,9 +254,38 @@ export default function PaymentModal({
       setWaStatus("idle");
       setWaMethod(null);
       setWaError(null);
-      setPrintCount(0);
+      autoPrintedRef.current = false;
+      if (printToastTimeoutRef.current) {
+        clearTimeout(printToastTimeoutRef.current);
+        printToastTimeoutRef.current = null;
+      }
+      setPrintToastVisible(false);
     }
-  }, [isOpen, defaultPrintFormat]);
+  }, [isOpen]);
+
+  // ── PERBAIKAN (auto-print setelah bayar) ── Begitu layar sukses muncul
+  // (isSuccess true), langsung cetak struk sekali ke printer thermal tanpa
+  // kasir perlu menekan tombol apa pun, lalu tampilkan notif pop-up "Struk
+  // berhasil dicetak" selama PRINT_TOAST_DURATION_MS. Dijaga `autoPrintedRef`
+  // supaya tidak tercetak berkali-kali kalau komponen re-render selagi masih
+  // di layar sukses yang sama.
+  useEffect(() => {
+    if (!isOpen || !isSuccess || !onPrint || autoPrintedRef.current) return;
+    autoPrintedRef.current = true;
+    onPrint();
+    setPrintToastVisible(true);
+    if (printToastTimeoutRef.current) clearTimeout(printToastTimeoutRef.current);
+    printToastTimeoutRef.current = setTimeout(() => {
+      setPrintToastVisible(false);
+    }, PRINT_TOAST_DURATION_MS);
+  }, [isOpen, isSuccess, onPrint]);
+
+  // Bersihkan timer toast kalau komponen unmount selagi toast masih berjalan.
+  useEffect(() => {
+    return () => {
+      if (printToastTimeoutRef.current) clearTimeout(printToastTimeoutRef.current);
+    };
+  }, []);
 
   if (!isOpen) return null;
 
@@ -392,7 +421,6 @@ export default function PaymentModal({
           customerName: customerName.trim() || undefined,
           customerPhone: trimmedPhone || undefined,
           dueDate: method === "TEMPO" ? dueDate : undefined,
-          printFormat: printFormat,
         },
       );
 
@@ -457,7 +485,6 @@ export default function PaymentModal({
       const { payments } = await onConfirmSplitPayment(splitLines, {
         customerName: customerName.trim() || undefined,
         customerPhone: customerPhone.trim() || undefined,
-        printFormat,
       });
 
       const warnings: string[] = [];
@@ -526,18 +553,20 @@ export default function PaymentModal({
     onClose();
   }
 
-  // ── TAMBAHAN (konsep baru: preview struk + cetak manual) ── Dipanggil dari
-  // tombol "Cetak" di layar sukses. Cetak sekarang murni aksi manual kasir —
-  // dialog print sistem tidak lagi muncul otomatis setelah bayar.
-  function handlePrintClick() {
-    if (!onPrint) return;
-    onPrint();
-    setPrintCount((c) => c + 1);
-  }
-
   if (isSuccess) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/30 p-4">
+      <>
+        {/* ── PERBAIKAN (auto-print setelah bayar) ── Toast dirender sebagai
+            saudara (bukan anak) dari overlay modal di bawah, supaya posisinya
+            benar-benar "tengah-atas LAYAR" (fixed viewport), bukan cuma
+            tengah-atas kartu modal. */}
+        <Toast
+          visible={printToastVisible}
+          message="Struk berhasil dicetak"
+          variant="success"
+          durationMs={PRINT_TOAST_DURATION_MS}
+        />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/30 p-4">
         {/* ── Satu kartu menyatu: konfirmasi sukses di atas, preview struk
             (selalu putih, seperti kertas struk asli — tidak ikut dark mode)
             di tengah, lalu tombol aksi di bawah. ── */}
@@ -549,7 +578,7 @@ export default function PaymentModal({
             </h2>
             <p className="text-zinc-500 text-xs">
               {receipt
-                ? "Cek preview struk di bawah, lalu cetak atau kirim ke pelanggan."
+                ? "Struk otomatis tercetak. Kirim ke pelanggan atau lanjut ke transaksi berikutnya."
                 : "Kirim struk digital ke pelanggan atau lanjut ke transaksi berikutnya."}
             </p>
           </div>
@@ -720,30 +749,9 @@ export default function PaymentModal({
             </div>
           )}
 
-          {/* ── Aksi: Cetak / Kirim / Selesai ── */}
+          {/* ── Aksi: Kirim WA / Selesai (cetak sudah otomatis, lihat efek
+              isSuccess di atas — tinggal 2 tombol sesuai permintaan). ── */}
           <div className="px-6 pb-6 pt-1 flex flex-col shrink-0">
-            {/* ── TAMBAHAN (konsep baru: preview struk + cetak manual) ──
-                Tombol Cetak: dialog print sistem HANYA muncul lewat sini,
-                tidak pernah otomatis. */}
-            {onPrint && (
-              <div className="w-full mb-3">
-                <button
-                  type="button"
-                  onClick={handlePrintClick}
-                  className="w-full flex items-center justify-center gap-2 py-3 rounded-md border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-900 text-sm font-semibold transition-colors duration-150"
-                >
-                  <Printer className="w-4 h-4" />
-                  {printCount > 0 ? "Cetak Ulang" : "Cetak Struk"}
-                </button>
-                {printCount > 0 && (
-                  <p className="mt-1.5 text-[11px] text-zinc-400">
-                    Sudah dicetak {printCount}x. Dialog print tidak muncul? Cek
-                    pop-up blocker browser.
-                  </p>
-                )}
-              </div>
-            )}
-
             {onSendWhatsApp && (
               <div className="w-full mb-3">
                 <button
@@ -794,7 +802,8 @@ export default function PaymentModal({
             </button>
           </div>
         </div>
-      </div>
+        </div>
+      </>
     );
   }
 
@@ -1404,42 +1413,6 @@ export default function PaymentModal({
               </div>
             </div>
           )}
-        </div>
-
-        {/* Pilihan Radio Format Cetak */}
-        <div className="p-4 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 flex justify-between items-center shrink-0">
-          <div className="flex items-center gap-2">
-            <Printer className="w-4 h-4 text-zinc-400" />
-            <span className="text-[10px] uppercase font-semibold text-zinc-500">
-              Format Cetak:
-            </span>
-          </div>
-          <div className="flex bg-zinc-100 dark:bg-zinc-900 rounded-md p-0.5 border border-zinc-200 dark:border-zinc-800">
-            <button
-              type="button"
-              onClick={() => setPrintFormat("thermal")}
-              disabled={isProcessing}
-              className={`px-3 py-1.5 text-xs font-medium rounded-sm transition-colors ${
-                printFormat === "thermal"
-                  ? "bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 shadow-sm"
-                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-              }`}
-            >
-              Struk Thermal
-            </button>
-            <button
-              type="button"
-              onClick={() => setPrintFormat("nota")}
-              disabled={isProcessing}
-              className={`px-3 py-1.5 text-xs font-medium rounded-sm transition-colors ${
-                printFormat === "nota"
-                  ? "bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 shadow-sm"
-                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-              }`}
-            >
-              Nota Kertas
-            </button>
-          </div>
         </div>
 
         <div className="p-5 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 shrink-0">
