@@ -24,7 +24,7 @@ import {
   ChevronDown,
   MessageCircle,
 } from "lucide-react";
-import { useAuth, hasPermission } from "@/hooks/useAuth";
+import { useAuth, hasPermissionAction } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings"; // ── TAMBAHAN ── Untuk mendapatkan paperNota setting
 import {
   getTransactionDetail,
@@ -78,7 +78,15 @@ export default function TransactionDetailModal({
   // migration 030 juga sudah divalidasi ulang pakai has_permission yang sama
   // di server — sembunyikan tombol di sini murni UX, bukan satu-satunya lapis
   // keamanan).
-  const canManage = hasPermission(user, "retur_void");
+  // ── REVISI (migration 031, "permission granular per aksi") ── Retur & Void
+  // dulu SATU flag gabungan (`canManage`), sekarang 2 aksi terpisah pada
+  // permission yang sama: Retur = aksi "Tambah" (bikin baris transaksi RETURN
+  // baru), Void = aksi "Hapus" (membatalkan keabsahan transaksi) — lihat
+  // catatan lengkap soal keputusan ini di header migration 031. Role bisa
+  // saja diberi salah satu tanpa yang lain (mis. kasir senior boleh Retur
+  // tapi Void cuma untuk supervisor ke atas).
+  const canRetur = hasPermissionAction(user, "retur_void", "create");
+  const canVoid = hasPermissionAction(user, "retur_void", "delete");
   const { settings: posSettings } = useSettings();
 
   const [detail, setDetail] = useState<TransactionDetail | null>(null);
@@ -711,33 +719,33 @@ export default function TransactionDetailModal({
               Kirim WA
             </button>
 
-            {canManage && canStillAct && (
-              <>
-                <button
-                  onClick={() => {
-                    setActionError(null);
-                    setActionSuccess(null);
-                    setMode("retur");
-                    setIsPrintDropdownOpen(false);
-                  }}
-                  className="flex-1 min-w-32 flex items-center justify-center gap-2 py-2.5 rounded-md border border-lco-mustard/50 bg-white dark:bg-zinc-950 text-lco-mustard hover:bg-lco-mustard/10 text-xs font-semibold transition-colors duration-150"
-                >
-                  <Undo2 className="w-4 h-4" />
-                  Retur
-                </button>
-                <button
-                  onClick={() => {
-                    setActionError(null);
-                    setActionSuccess(null);
-                    setMode("void");
-                    setIsPrintDropdownOpen(false);
-                  }}
-                  className="flex-1 min-w-32 flex items-center justify-center gap-2 py-2.5 rounded-md border border-lco-coral/50 bg-white dark:bg-zinc-950 text-lco-coral hover:bg-lco-coral/10 text-xs font-semibold transition-colors duration-150"
-                >
-                  <Ban className="w-4 h-4" />
-                  Void
-                </button>
-              </>
+            {canRetur && canStillAct && (
+              <button
+                onClick={() => {
+                  setActionError(null);
+                  setActionSuccess(null);
+                  setMode("retur");
+                  setIsPrintDropdownOpen(false);
+                }}
+                className="flex-1 min-w-32 flex items-center justify-center gap-2 py-2.5 rounded-md border border-lco-mustard/50 bg-white dark:bg-zinc-950 text-lco-mustard hover:bg-lco-mustard/10 text-xs font-semibold transition-colors duration-150"
+              >
+                <Undo2 className="w-4 h-4" />
+                Retur
+              </button>
+            )}
+            {canVoid && canStillAct && (
+              <button
+                onClick={() => {
+                  setActionError(null);
+                  setActionSuccess(null);
+                  setMode("void");
+                  setIsPrintDropdownOpen(false);
+                }}
+                className="flex-1 min-w-32 flex items-center justify-center gap-2 py-2.5 rounded-md border border-lco-coral/50 bg-white dark:bg-zinc-950 text-lco-coral hover:bg-lco-coral/10 text-xs font-semibold transition-colors duration-150"
+              >
+                <Ban className="w-4 h-4" />
+                Void
+              </button>
             )}
           </div>
         )}

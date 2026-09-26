@@ -516,14 +516,16 @@ export default function StokModule() {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setIsModalOpen(true)}
-          className="flex items-center justify-center gap-2 rounded-md bg-lco-green px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-lco-green-hover"
-        >
-          <ClipboardCheck className="h-4 w-4" />
-          Opname / Penyesuaian
-        </button>
+        {canAdjustStock && (
+          <button
+            type="button"
+            onClick={() => setIsModalOpen(true)}
+            className="flex items-center justify-center gap-2 rounded-md bg-lco-green px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-lco-green-hover"
+          >
+            <ClipboardCheck className="h-4 w-4" />
+            Opname / Penyesuaian
+          </button>
+        )}
       </div>
 
       {error && (

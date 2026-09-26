@@ -82,6 +82,31 @@ function formatFileSize(bytes: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** Tanggal lengkap untuk atribut `title` (tooltip saat hover), mis. "12 Mar 2026". */
+function formatScreenDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("id-ID", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
+/** Waktu relatif ringkas untuk kartu TV, mis. "5 hari lalu". */
+function relativeScreenTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "-";
+  const diffDays = Math.floor((Date.now() - date.getTime()) / 86_400_000);
+
+  if (diffDays <= 0) return "Hari ini";
+  if (diffDays === 1) return "Kemarin";
+  if (diffDays < 7) return `${diffDays} hari lalu`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)} minggu lalu`;
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)} bulan lalu`;
+  return `${Math.floor(diffDays / 365)} tahun lalu`;
+}
+
 const LABEL_CLASS =
   "mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500 dark:text-zinc-400";
 
@@ -94,6 +119,14 @@ const ICON_BUTTON_BASE =
 const ICON_BUTTON_CLASS = `${ICON_BUTTON_BASE} text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100`;
 
 const ICON_BUTTON_DANGER_CLASS = `${ICON_BUTTON_BASE} text-zinc-600 hover:bg-lco-coral/10 hover:text-lco-coral dark:text-zinc-400 dark:hover:bg-lco-coral/10 dark:hover:text-lco-coral`;
+
+// Aksi sekunder di kartu TV (rename/hapus) — tanpa kotak/border, cuma
+// ikon polos + latar saat hover, supaya tidak bersaing dengan CTA utama.
+const CARD_GHOST_ICON_CLASS =
+  "inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 transition-colors duration-150 hover:bg-zinc-100 hover:text-zinc-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-zinc-500 dark:hover:bg-zinc-900 dark:hover:text-zinc-200";
+
+const CARD_GHOST_ICON_DANGER_CLASS =
+  "inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 transition-colors duration-150 hover:bg-lco-coral/10 hover:text-lco-coral disabled:cursor-not-allowed disabled:opacity-40 dark:text-zinc-500";
 
 // ── Kode QR ─────────────────────────────────────────────────────────────
 
@@ -1191,16 +1224,40 @@ export default function PromoModule() {
         </div>
 
         {successMessage && (
-          <div className="mb-3 flex items-start gap-2 border border-lco-teal/40 bg-white p-3 text-xs text-lco-green dark:bg-zinc-950 dark:text-lco-teal">
-            <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <p>{successMessage}</p>
+          <div className="mb-3 flex items-start gap-3 rounded-xl bg-lco-teal/10 p-3.5 dark:bg-lco-teal/10">
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-lco-teal/20 text-lco-green dark:text-lco-teal">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            </div>
+            <p className="flex-1 pt-0.5 text-sm text-lco-green dark:text-lco-teal">
+              {successMessage}
+            </p>
+            <button
+              type="button"
+              onClick={() => setSuccessMessage("")}
+              aria-label="Tutup notifikasi"
+              className="shrink-0 rounded-md p-1 text-lco-green/50 transition-colors duration-150 hover:bg-lco-teal/20 hover:text-lco-green dark:text-lco-teal/60 dark:hover:text-lco-teal"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         )}
 
         {actionError && (
-          <div className="mb-3 flex items-start gap-2 border border-lco-coral/30 bg-white p-3 text-xs text-lco-coral dark:bg-zinc-950">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <p>{actionError}</p>
+          <div className="mb-3 flex items-start gap-3 rounded-xl bg-lco-coral/10 p-3.5">
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-lco-coral/20 text-lco-coral">
+              <AlertCircle className="h-3.5 w-3.5" />
+            </div>
+            <p className="flex-1 pt-0.5 text-sm text-lco-coral">
+              {actionError}
+            </p>
+            <button
+              type="button"
+              onClick={() => setActionError("")}
+              aria-label="Tutup notifikasi"
+              className="shrink-0 rounded-md p-1 text-lco-coral/50 transition-colors duration-150 hover:bg-lco-coral/20 hover:text-lco-coral"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         )}
 
@@ -1231,45 +1288,25 @@ export default function PromoModule() {
             </p>
           </div>
         ) : (
-          <ul className="space-y-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {screens.map((screen) => (
-              <li
+              <div
                 key={screen.id}
-                className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950"
+                className="flex flex-col rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
               >
-                <div
-                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-zinc-200 dark:border-zinc-800 ${
-                    screen.is_active ? "" : "opacity-40"
-                  }`}
-                >
-                  <Monitor className="h-5 w-5 text-zinc-500 dark:text-zinc-400" />
-                </div>
-
-                <div className="min-w-0 flex-1 basis-40">
-                  <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                    {screen.name}
-                  </p>
-                  <p
-                    className={`mt-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                {/* Header: avatar TV + toggle status (pola sama seperti
+                    toggle "Save/Saved" — tapi di sini untuk aktif/nonaktif) */}
+                <div className="flex items-start justify-between gap-3">
+                  <div
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ring-1 ${
                       screen.is_active
-                        ? "text-lco-green dark:text-lco-teal"
-                        : "text-zinc-400"
+                        ? "bg-lco-teal/10 text-lco-teal ring-lco-teal/30"
+                        : "bg-zinc-100 text-zinc-400 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-800"
                     }`}
                   >
-                    {screen.is_active ? "Aktif" : "Nonaktif"}
-                  </p>
-                </div>
+                    <Monitor className="h-4 w-4" />
+                  </div>
 
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <button
-                    type="button"
-                    title="Link & kode QR"
-                    aria-label="Link & kode QR"
-                    onClick={() => setLinkModalScreen(screen)}
-                    className={ICON_BUTTON_CLASS}
-                  >
-                    <QrCode className="h-4 w-4" />
-                  </button>
                   <button
                     type="button"
                     title={screen.is_active ? "Nonaktifkan TV" : "Aktifkan TV"}
@@ -1282,52 +1319,100 @@ export default function PromoModule() {
                         setScreenActive(screen.id, !screen.is_active),
                       )
                     }
-                    className={ICON_BUTTON_CLASS}
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
+                      screen.is_active
+                        ? "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                        : "border border-zinc-200 text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
+                    }`}
                   >
                     {screen.is_active ? (
-                      <Eye className="h-4 w-4" />
+                      <Eye className="h-3.5 w-3.5" />
                     ) : (
-                      <EyeOff className="h-4 w-4" />
+                      <EyeOff className="h-3.5 w-3.5" />
                     )}
+                    {screen.is_active ? "Aktif" : "Nonaktif"}
                   </button>
-                  <button
-                    type="button"
-                    title="Ubah nama"
-                    aria-label="Ubah nama"
-                    disabled={isMutating}
-                    onClick={() => {
-                      setActionError("");
-                      setSuccessMessage("");
-                      setScreenFormTarget({ mode: "rename", screen });
-                    }}
-                    className={ICON_BUTTON_CLASS}
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </button>
-                  <button
-                    type="button"
-                    title="Hapus TV"
-                    aria-label="Hapus TV"
-                    disabled={isMutating}
-                    onClick={() => {
-                      setDeleteError("");
-                      setDeletingScreen(screen);
-                    }}
-                    className={ICON_BUTTON_DANGER_CLASS}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                </div>
+
+                {/* Judul: label kecil + waktu relatif, lalu nama TV besar
+                    (mengikuti hierarki "Amazon · 5 days ago" → judul tebal) */}
+                <div className="mt-3">
+                  <p className="flex items-center gap-1.5 text-xs text-zinc-400 dark:text-zinc-500">
+                    <span className="font-medium text-zinc-500 dark:text-zinc-400">
+                      Layar TV
+                    </span>
+                    <span aria-hidden>·</span>
+                    <span title={formatScreenDate(screen.created_at)}>
+                      {relativeScreenTime(screen.created_at)}
+                    </span>
+                  </p>
+                  <h3 className="mt-0.5 truncate text-base font-semibold text-zinc-900 dark:text-zinc-100">
+                    {screen.name}
+                  </h3>
+                </div>
+
+                {/* Tag alamat akses, gaya badge sama seperti "Part-Time" dst. */}
+                <div className="mt-2.5">
+                  <span className="inline-flex max-w-full items-center truncate rounded-lg bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+                    /{screen.access_token}
+                  </span>
+                </div>
+
+                <div className="mt-4 border-t border-zinc-100 pt-3 dark:border-zinc-900" />
+
+                {/* Footer: aksi sekunder (ikon polos) di kiri, CTA utama di kanan */}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      title="Link & kode QR"
+                      aria-label="Link & kode QR"
+                      onClick={() => setLinkModalScreen(screen)}
+                      className={CARD_GHOST_ICON_CLASS}
+                    >
+                      <QrCode className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Ubah nama"
+                      aria-label="Ubah nama"
+                      disabled={isMutating}
+                      onClick={() => {
+                        setActionError("");
+                        setSuccessMessage("");
+                        setScreenFormTarget({ mode: "rename", screen });
+                      }}
+                      className={CARD_GHOST_ICON_CLASS}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Hapus TV"
+                      aria-label="Hapus TV"
+                      disabled={isMutating}
+                      onClick={() => {
+                        setDeleteError("");
+                        setDeletingScreen(screen);
+                      }}
+                      className={CARD_GHOST_ICON_DANGER_CLASS}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+
                   <button
                     type="button"
                     onClick={() => setSelectedScreen(screen)}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-lco-green px-3 py-1.5 text-xs font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
                   >
+                    <PlayCircle className="h-4 w-4" />
                     Kelola Media
                   </button>
                 </div>
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </div>
 
