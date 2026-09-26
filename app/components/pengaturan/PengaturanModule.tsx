@@ -46,13 +46,21 @@
 // sudah pernah diperbaiki di modul-modul lain (LogAktivitasModule.tsx dkk).
 
 import { useEffect, useState } from "react";
-import { KeyRound, Loader2, ShieldAlert, Store, Users } from "lucide-react";
+import {
+  KeyRound,
+  Loader2,
+  Printer,
+  ShieldAlert,
+  Store,
+  Users,
+} from "lucide-react";
 import { hasPermission, useAuth } from "@/hooks/useAuth";
 import PengaturanTokoTab from "./PengaturanTokoTab";
 import PengaturanAdminTab from "./PengaturanAdminTab";
 import PengaturanRoleTab from "./PengaturanRoleTab";
+import PengaturanPrinterTab from "./PengaturanPrinterTab";
 
-type PengaturanTab = "toko" | "admin" | "role";
+type PengaturanTab = "toko" | "admin" | "role" | "printer";
 
 // ── REVISI (migration 028) ── Tiap tab sekarang bawa permission_key
 // sendiri (katalog `permissions`, migration 028) — dipakai `visibleTabs`
@@ -79,6 +87,20 @@ const TABS: {
   { key: "role", label: "Role", icon: KeyRound, permission: "pengaturan_role" },
 ];
 
+// ── TAMBAHAN (Setting Printer) ── SENGAJA di luar array TABS di atas —
+// tab ini TIDAK dicek lewat hasPermission seperti 3 tab lain. Printer adalah
+// pengaturan PER-DEVICE (localStorage, lihat catatan header
+// hooks/usePrinterProfiles.ts), bukan data toko yang perlu RLS admin-only.
+// Siapa pun yang sudah lolos gate `canAccessSettings` di bawah (sudah punya
+// minimal satu dari 3 permission Pengaturan) boleh mengatur printer di
+// device yang sedang dia pakai — termasuk kasir yang cuma punya akses ke
+// salah satu dari 3 tab lain.
+const PRINTER_TAB: { key: PengaturanTab; label: string; icon: typeof Store } = {
+  key: "printer",
+  label: "Printer",
+  icon: Printer,
+};
+
 export default function PengaturanModule() {
   const { user, isLoading: isAuthLoading } = useAuth();
 
@@ -87,8 +109,18 @@ export default function PengaturanModule() {
   // ── REVISI (migration 028) ── Dihitung tiap render (bukan disimpan di
   // state) — murni turunan dari `user.permissions`, tidak ada alasan
   // disimpan terpisah dan berisiko basi.
-  const visibleTabs = TABS.filter((tab) => hasPermission(user, tab.permission));
-  const canAccessSettings = visibleTabs.length > 0;
+  const visiblePermissionTabs = TABS.filter((tab) =>
+    hasPermission(user, tab.permission),
+  );
+  const canAccessSettings = visiblePermissionTabs.length > 0;
+  // ── TAMBAHAN (Setting Printer) ── PRINTER_TAB ditempel manual di akhir
+  // (bukan ikut TABS.filter di atas) — lihat komentar di deklarasinya.
+  // Cuma muncul kalau user sudah lolos gate 3 permission lain, supaya user
+  // yang benar-benar 0 akses Pengaturan tetap kena "Akses Ditolak" seperti
+  // sebelumnya (bukan celah baru buat lihat tab Printer sendirian).
+  const visibleTabs = canAccessSettings
+    ? [...visiblePermissionTabs, PRINTER_TAB]
+    : [];
 
   // ── TAMBAHAN (migration 028) ── Jaga activeTab selalu salah satu tab yang
   // memang terlihat — inisialisasi ke tab pertama yang terlihat begitu user
@@ -132,47 +164,50 @@ export default function PengaturanModule() {
   }
 
   return (
-    <section className="h-full overflow-y-auto bg-zinc-100 dark:bg-zinc-950">
-      <div className="mx-auto max-w-5xl p-4 md:p-6">
-        <div className="mb-4">
-          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-            Pengaturan
-          </h2>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Pengaturan toko/struk, kelola user, dan kelola role — PRD §17 T-10,
-            migration 028.
-          </p>
-        </div>
-
-        {/* Tab switcher — cuma render tab yang memang terlihat untuk role
-            user ini (lihat visibleTabs di atas), pola tombol sama seperti
-            sebelumnya. */}
-        <div className="mb-4 flex gap-1 border-b border-zinc-200 dark:border-zinc-800">
-          {visibleTabs.map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              onClick={() => setActiveTab(key)}
-              className={`flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors duration-150 ${
-                activeTab === key
-                  ? "border-lco-teal text-lco-teal"
-                  : "border-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {/* Render sub-tab sungguhan. Dirender kondisional dengan && (bukan
-            CSS hidden), jadi tab yang tidak aktif memang UNMOUNT — state
-            form di tiap tab otomatis reset tiap kali tab dibuka lagi.
-            Konsisten dengan pola tab lain di project ini. */}
-        {activeTab === "toko" && <PengaturanTokoTab />}
-        {activeTab === "admin" && <PengaturanAdminTab />}
-        {/* ── TAMBAHAN (migration 028) ── */}
-        {activeTab === "role" && <PengaturanRoleTab />}
+    <div className="flex h-full flex-col overflow-y-auto bg-zinc-100 p-4 dark:bg-zinc-950 md:p-6">
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+          Pengaturan
+        </h2>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          Pengaturan toko/struk, kelola user, kelola role, dan kelola printer —
+          PRD §17 T-10, migration 028.
+        </p>
       </div>
-    </section>
+
+      {/* Tab switcher — cuma render tab yang memang terlihat untuk role
+          user ini (lihat visibleTabs di atas). Gaya "segmented control":
+          dibungkus kontainer beruas (bg-zinc-100/bg-zinc-900) supaya
+          kelihatan seperti sekelompok tombol, bukan cuma teks bergaris
+          bawah — tab aktif dapat latar putih + sedikit shadow untuk kesan
+          "terangkat", mirip pola toggle switch lain di aplikasi ini. */}
+      <div className="mb-4 inline-flex w-fit flex-wrap gap-1 rounded-xl bg-zinc-200/70 p-1 dark:bg-zinc-900">
+        {visibleTabs.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            onClick={() => setActiveTab(key)}
+            className={`flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors duration-150 ${
+              activeTab === key
+                ? "bg-white text-lco-green shadow-sm dark:bg-zinc-800 dark:text-lco-teal"
+                : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            }`}
+          >
+            <Icon className="h-4 w-4" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Render sub-tab sungguhan. Dirender kondisional dengan && (bukan
+          CSS hidden), jadi tab yang tidak aktif memang UNMOUNT — state
+          form di tiap tab otomatis reset tiap kali tab dibuka lagi.
+          Konsisten dengan pola tab lain di project ini. */}
+      {activeTab === "toko" && <PengaturanTokoTab />}
+      {activeTab === "admin" && <PengaturanAdminTab />}
+      {/* ── TAMBAHAN (migration 028) ── */}
+      {activeTab === "role" && <PengaturanRoleTab />}
+      {/* ── TAMBAHAN (Setting Printer) ── */}
+      {activeTab === "printer" && <PengaturanPrinterTab />}
+    </div>
   );
 }

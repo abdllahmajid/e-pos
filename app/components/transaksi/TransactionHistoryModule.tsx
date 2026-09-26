@@ -160,21 +160,21 @@ export default function TransactionHistoryModule() {
         </div>
       </div>
 
-      <div className="flex gap-4 border-b border-zinc-200 dark:border-zinc-800 mb-4">
+      {/* Tab status — gaya "segmented control", konsisten dengan tab switcher
+          di PengaturanModule.tsx: dibungkus satu kontainer beruas supaya
+          kelihatan seperti sekelompok tombol, bukan teks bergaris bawah. */}
+      <div className="mb-4 inline-flex w-fit flex-wrap gap-1 rounded-xl bg-zinc-200/70 p-1 dark:bg-zinc-900">
         {TABS.map((tab) => (
           <button
             key={tab.label}
             onClick={() => setActiveTab(tab.group)}
-            className={`pb-3 text-xs font-semibold uppercase tracking-[0.12em] transition-colors duration-150 relative ${
+            className={`rounded-lg px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.12em] transition-colors duration-150 ${
               activeTab === tab.group
-                ? "text-lco-teal"
-                : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                ? "bg-white text-lco-green shadow-sm dark:bg-zinc-800 dark:text-lco-teal"
+                : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
             }`}
           >
             {tab.label}
-            {activeTab === tab.group && (
-              <span className="absolute bottom-0 left-0 w-full h-0.5 bg-lco-teal rounded-t-full" />
-            )}
           </button>
         ))}
       </div>

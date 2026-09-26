@@ -749,273 +749,266 @@ function ScreenMediaManager({
   const activeCount = items.filter((item) => item.is_active).length;
 
   return (
-    <section className="h-full overflow-y-auto bg-zinc-100 dark:bg-zinc-950">
-      <div className="mx-auto max-w-5xl p-4 md:p-6">
-        <button
-          type="button"
-          onClick={onBack}
-          className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 transition-colors duration-150 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Daftar TV
-        </button>
+    <div className="flex h-full flex-col overflow-y-auto bg-zinc-100 p-4 dark:bg-zinc-950 md:p-6">
+      <button
+        type="button"
+        onClick={onBack}
+        className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 transition-colors duration-150 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Daftar TV
+      </button>
 
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="truncate text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-              {screen.name}
-            </h2>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              Gambar dan video yang diputar berulang di TV ini.
-            </p>
-          </div>
-
-          <div className="flex shrink-0 gap-2">
-            <button
-              type="button"
-              onClick={() => setShowLinkModal(true)}
-              className="inline-flex items-center gap-2 rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
-            >
-              <QrCode className="h-4 w-4" />
-              Link & QR
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setActionError("");
-                setSuccessMessage("");
-                setFormTarget({ mode: "add" });
-              }}
-              className="inline-flex items-center gap-2 rounded-md bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
-            >
-              <Plus className="h-4 w-4" />
-              Tambah Media
-            </button>
-          </div>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="truncate text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            {screen.name}
+          </h2>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            Gambar dan video yang diputar berulang di TV ini.
+          </p>
         </div>
 
-        <div className="mb-4 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-          <ul className="list-disc space-y-1 pl-5 text-xs text-zinc-500 dark:text-zinc-400">
-            <li>
-              Gambar tayang sesuai durasinya; video diputar sampai selesai,
-              tanpa suara.
-            </li>
-            <li>
-              Perubahan di daftar ini muncul di TV ini dalam sekitar 1 menit
-              tanpa perlu memuat ulang.
-            </li>
-            <li>
-              Media di sini HANYA tayang di{" "}
-              <span className="font-medium">{screen.name}</span> — TV lain punya
-              daftarnya sendiri. Klik &quot;Link &amp; QR&quot; untuk alamat TV
-              ini.
-            </li>
-          </ul>
+        <div className="flex shrink-0 gap-2">
+          <button
+            type="button"
+            onClick={() => setShowLinkModal(true)}
+            className="inline-flex items-center gap-2 rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+          >
+            <QrCode className="h-4 w-4" />
+            Link & QR
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActionError("");
+              setSuccessMessage("");
+              setFormTarget({ mode: "add" });
+            }}
+            className="inline-flex items-center gap-2 rounded-md bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
+          >
+            <Plus className="h-4 w-4" />
+            Tambah Media
+          </button>
         </div>
+      </div>
 
-        {successMessage && (
-          <div className="mb-3 flex items-start gap-2 border border-lco-teal/40 bg-white p-3 text-xs text-lco-green dark:bg-zinc-950 dark:text-lco-teal">
-            <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <p>{successMessage}</p>
-          </div>
-        )}
+      <div className="mb-4 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+        <ul className="list-disc space-y-1 pl-5 text-xs text-zinc-500 dark:text-zinc-400">
+          <li>
+            Gambar tayang sesuai durasinya; video diputar sampai selesai, tanpa
+            suara.
+          </li>
+          <li>
+            Perubahan di daftar ini muncul di TV ini dalam sekitar 1 menit tanpa
+            perlu memuat ulang.
+          </li>
+          <li>
+            Media di sini HANYA tayang di{" "}
+            <span className="font-medium">{screen.name}</span> — TV lain punya
+            daftarnya sendiri. Klik &quot;Link &amp; QR&quot; untuk alamat TV
+            ini.
+          </li>
+        </ul>
+      </div>
 
-        {actionError && (
-          <div className="mb-3 flex items-start gap-2 border border-lco-coral/30 bg-white p-3 text-xs text-lco-coral dark:bg-zinc-950">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <p>{actionError}</p>
-          </div>
-        )}
+      {successMessage && (
+        <div className="mb-3 flex items-start gap-2 border border-lco-teal/40 bg-white p-3 text-xs text-lco-green dark:bg-zinc-950 dark:text-lco-teal">
+          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <p>{successMessage}</p>
+        </div>
+      )}
 
-        {isLoading ? (
-          <div className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white p-10 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Memuat daftar media...
-          </div>
-        ) : error ? (
-          <div className="rounded-xl border border-lco-coral/30 bg-white p-6 text-center dark:bg-zinc-950">
-            <AlertCircle className="mx-auto mb-2 h-5 w-5 text-lco-coral" />
-            <p className="text-sm text-lco-coral">{error}</p>
-            <button
-              type="button"
-              onClick={() => void refetch()}
-              className="mt-3 rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
-            >
-              Coba lagi
-            </button>
-          </div>
-        ) : items.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-300 bg-white p-10 text-center dark:border-zinc-700 dark:bg-zinc-950">
-            <Upload className="mx-auto mb-2 h-6 w-6 text-zinc-400" />
-            <p className="text-sm font-medium">Belum ada media</p>
-            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-              Klik &quot;Tambah Media&quot; untuk mengunggah gambar atau video
-              pertama. Selama kosong, TV ini menampilkan layar tunggu.
-            </p>
-          </div>
-        ) : (
-          <>
-            <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
-              <span className="font-mono tabular-nums">{items.length}</span>{" "}
-              media ·{" "}
-              <span className="font-mono tabular-nums">{activeCount}</span>{" "}
-              tayang di TV ini
-            </p>
+      {actionError && (
+        <div className="mb-3 flex items-start gap-2 border border-lco-coral/30 bg-white p-3 text-xs text-lco-coral dark:bg-zinc-950">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <p>{actionError}</p>
+        </div>
+      )}
 
-            <ul className="space-y-2">
-              {items.map((item, index) => (
-                <li
-                  key={item.id}
-                  className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950"
+      {isLoading ? (
+        <div className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white p-10 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Memuat daftar media...
+        </div>
+      ) : error ? (
+        <div className="rounded-xl border border-lco-coral/30 bg-white p-6 text-center dark:bg-zinc-950">
+          <AlertCircle className="mx-auto mb-2 h-5 w-5 text-lco-coral" />
+          <p className="text-sm text-lco-coral">{error}</p>
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            className="mt-3 rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+          >
+            Coba lagi
+          </button>
+        </div>
+      ) : items.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-zinc-300 bg-white p-10 text-center dark:border-zinc-700 dark:bg-zinc-950">
+          <Upload className="mx-auto mb-2 h-6 w-6 text-zinc-400" />
+          <p className="text-sm font-medium">Belum ada media</p>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            Klik &quot;Tambah Media&quot; untuk mengunggah gambar atau video
+            pertama. Selama kosong, TV ini menampilkan layar tunggu.
+          </p>
+        </div>
+      ) : (
+        <>
+          <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+            <span className="font-mono tabular-nums">{items.length}</span> media
+            · <span className="font-mono tabular-nums">{activeCount}</span>{" "}
+            tayang di TV ini
+          </p>
+
+          <ul className="space-y-2">
+            {items.map((item, index) => (
+              <li
+                key={item.id}
+                className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950"
+              >
+                <span className="w-6 shrink-0 text-center font-mono text-sm tabular-nums text-zinc-400">
+                  {index + 1}
+                </span>
+
+                <div
+                  className={`relative aspect-video w-28 shrink-0 overflow-hidden rounded-md bg-zinc-950 ${
+                    item.is_active ? "" : "opacity-40"
+                  }`}
                 >
-                  <span className="w-6 shrink-0 text-center font-mono text-sm tabular-nums text-zinc-400">
-                    {index + 1}
-                  </span>
-
-                  <div
-                    className={`relative aspect-video w-28 shrink-0 overflow-hidden rounded-md bg-zinc-950 ${
-                      item.is_active ? "" : "opacity-40"
-                    }`}
-                  >
-                    {item.media_type === "image" ? (
-                      // eslint-disable-next-line @next/next/no-img-element -- URL publik Supabase Storage, tampilan kecil
-                      <img
-                        src={item.file_url}
-                        alt={item.title}
+                  {item.media_type === "image" ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- URL publik Supabase Storage, tampilan kecil
+                    <img
+                      src={item.file_url}
+                      alt={item.title}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <>
+                      {/* #t=0.1 supaya browser menampilkan satu frame sebagai gambar mini */}
+                      <video
+                        src={`${item.file_url}#t=0.1`}
+                        preload="metadata"
+                        muted
+                        playsInline
                         className="h-full w-full object-cover"
                       />
-                    ) : (
+                      <PlayCircle className="absolute left-1/2 top-1/2 h-6 w-6 -translate-x-1/2 -translate-y-1/2 text-white/80" />
+                    </>
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1 basis-40">
+                  <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                    {item.title}
+                  </p>
+                  <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                    {item.media_type === "image" ? (
                       <>
-                        {/* #t=0.1 supaya browser menampilkan satu frame sebagai gambar mini */}
-                        <video
-                          src={`${item.file_url}#t=0.1`}
-                          preload="metadata"
-                          muted
-                          playsInline
-                          className="h-full w-full object-cover"
-                        />
-                        <PlayCircle className="absolute left-1/2 top-1/2 h-6 w-6 -translate-x-1/2 -translate-y-1/2 text-white/80" />
+                        Gambar ·{" "}
+                        <span className="font-mono tabular-nums">
+                          {item.duration_seconds}
+                        </span>{" "}
+                        dtk
                       </>
+                    ) : (
+                      <>Video · sampai selesai</>
+                    )}{" "}
+                    ·{" "}
+                    <span className="font-mono tabular-nums">
+                      {formatFileSize(item.file_size)}
+                    </span>
+                  </p>
+                  <p
+                    className={`mt-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                      item.is_active
+                        ? "text-lco-green dark:text-lco-teal"
+                        : "text-zinc-400"
+                    }`}
+                  >
+                    {item.is_active ? "Tayang" : "Disembunyikan"}
+                  </p>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <button
+                    type="button"
+                    title="Naikkan urutan"
+                    aria-label="Naikkan urutan"
+                    disabled={isMutating || index === 0}
+                    onClick={() =>
+                      void runAction(() => moveItem(item.id, "up"))
+                    }
+                    className={ICON_BUTTON_CLASS}
+                  >
+                    <ChevronUp className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Turunkan urutan"
+                    aria-label="Turunkan urutan"
+                    disabled={isMutating || index === items.length - 1}
+                    onClick={() =>
+                      void runAction(() => moveItem(item.id, "down"))
+                    }
+                    className={ICON_BUTTON_CLASS}
+                  >
+                    <ChevronDown className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title={
+                      item.is_active ? "Sembunyikan dari TV" : "Tayangkan di TV"
+                    }
+                    aria-label={
+                      item.is_active ? "Sembunyikan dari TV" : "Tayangkan di TV"
+                    }
+                    disabled={isMutating}
+                    onClick={() =>
+                      void runAction(() =>
+                        updateMedia(item.id, { is_active: !item.is_active }),
+                      )
+                    }
+                    className={ICON_BUTTON_CLASS}
+                  >
+                    {item.is_active ? (
+                      <Eye className="h-4 w-4" />
+                    ) : (
+                      <EyeOff className="h-4 w-4" />
                     )}
-                  </div>
-
-                  <div className="min-w-0 flex-1 basis-40">
-                    <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                      {item.title}
-                    </p>
-                    <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                      {item.media_type === "image" ? (
-                        <>
-                          Gambar ·{" "}
-                          <span className="font-mono tabular-nums">
-                            {item.duration_seconds}
-                          </span>{" "}
-                          dtk
-                        </>
-                      ) : (
-                        <>Video · sampai selesai</>
-                      )}{" "}
-                      ·{" "}
-                      <span className="font-mono tabular-nums">
-                        {formatFileSize(item.file_size)}
-                      </span>
-                    </p>
-                    <p
-                      className={`mt-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] ${
-                        item.is_active
-                          ? "text-lco-green dark:text-lco-teal"
-                          : "text-zinc-400"
-                      }`}
-                    >
-                      {item.is_active ? "Tayang" : "Disembunyikan"}
-                    </p>
-                  </div>
-
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    <button
-                      type="button"
-                      title="Naikkan urutan"
-                      aria-label="Naikkan urutan"
-                      disabled={isMutating || index === 0}
-                      onClick={() =>
-                        void runAction(() => moveItem(item.id, "up"))
-                      }
-                      className={ICON_BUTTON_CLASS}
-                    >
-                      <ChevronUp className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      title="Turunkan urutan"
-                      aria-label="Turunkan urutan"
-                      disabled={isMutating || index === items.length - 1}
-                      onClick={() =>
-                        void runAction(() => moveItem(item.id, "down"))
-                      }
-                      className={ICON_BUTTON_CLASS}
-                    >
-                      <ChevronDown className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      title={
-                        item.is_active
-                          ? "Sembunyikan dari TV"
-                          : "Tayangkan di TV"
-                      }
-                      aria-label={
-                        item.is_active
-                          ? "Sembunyikan dari TV"
-                          : "Tayangkan di TV"
-                      }
-                      disabled={isMutating}
-                      onClick={() =>
-                        void runAction(() =>
-                          updateMedia(item.id, { is_active: !item.is_active }),
-                        )
-                      }
-                      className={ICON_BUTTON_CLASS}
-                    >
-                      {item.is_active ? (
-                        <Eye className="h-4 w-4" />
-                      ) : (
-                        <EyeOff className="h-4 w-4" />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      title="Ubah judul / durasi"
-                      aria-label="Ubah judul / durasi"
-                      disabled={isMutating}
-                      onClick={() => {
-                        setActionError("");
-                        setSuccessMessage("");
-                        setFormTarget({ mode: "edit", item });
-                      }}
-                      className={ICON_BUTTON_CLASS}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      title="Hapus"
-                      aria-label="Hapus"
-                      disabled={isMutating}
-                      onClick={() => {
-                        setDeleteError("");
-                        setDeletingItem(item);
-                      }}
-                      className={ICON_BUTTON_DANGER_CLASS}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-      </div>
+                  </button>
+                  <button
+                    type="button"
+                    title="Ubah judul / durasi"
+                    aria-label="Ubah judul / durasi"
+                    disabled={isMutating}
+                    onClick={() => {
+                      setActionError("");
+                      setSuccessMessage("");
+                      setFormTarget({ mode: "edit", item });
+                    }}
+                    className={ICON_BUTTON_CLASS}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Hapus"
+                    aria-label="Hapus"
+                    disabled={isMutating}
+                    onClick={() => {
+                      setDeleteError("");
+                      setDeletingItem(item);
+                    }}
+                    className={ICON_BUTTON_DANGER_CLASS}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       {formTarget && (
         <MediaFormModal
@@ -1087,7 +1080,7 @@ function ScreenMediaManager({
           </div>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -1196,225 +1189,221 @@ export default function PromoModule() {
   }
 
   return (
-    <section className="h-full overflow-y-auto bg-zinc-100 dark:bg-zinc-950">
-      <div className="mx-auto max-w-5xl p-4 md:p-6">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-              Layar Promosi
-            </h2>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              TV yang menampilkan promosi toko — tiap TV punya link akses dan
-              daftar media sendiri.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setActionError("");
-              setSuccessMessage("");
-              setScreenFormTarget({ mode: "add" });
-            }}
-            className="inline-flex items-center gap-2 rounded-md bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
-          >
-            <Plus className="h-4 w-4" />
-            Tambah TV
-          </button>
+    <div className="flex h-full flex-col overflow-y-auto bg-zinc-100 p-4 dark:bg-zinc-950 md:p-6">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            Layar Promosi
+          </h2>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            TV yang menampilkan promosi toko — tiap TV punya link akses dan
+            daftar media sendiri.
+          </p>
         </div>
 
-        {successMessage && (
-          <div className="mb-3 flex items-start gap-3 rounded-xl bg-lco-teal/10 p-3.5 dark:bg-lco-teal/10">
-            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-lco-teal/20 text-lco-green dark:text-lco-teal">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-            </div>
-            <p className="flex-1 pt-0.5 text-sm text-lco-green dark:text-lco-teal">
-              {successMessage}
-            </p>
-            <button
-              type="button"
-              onClick={() => setSuccessMessage("")}
-              aria-label="Tutup notifikasi"
-              className="shrink-0 rounded-md p-1 text-lco-green/50 transition-colors duration-150 hover:bg-lco-teal/20 hover:text-lco-green dark:text-lco-teal/60 dark:hover:text-lco-teal"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        )}
-
-        {actionError && (
-          <div className="mb-3 flex items-start gap-3 rounded-xl bg-lco-coral/10 p-3.5">
-            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-lco-coral/20 text-lco-coral">
-              <AlertCircle className="h-3.5 w-3.5" />
-            </div>
-            <p className="flex-1 pt-0.5 text-sm text-lco-coral">
-              {actionError}
-            </p>
-            <button
-              type="button"
-              onClick={() => setActionError("")}
-              aria-label="Tutup notifikasi"
-              className="shrink-0 rounded-md p-1 text-lco-coral/50 transition-colors duration-150 hover:bg-lco-coral/20 hover:text-lco-coral"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        )}
-
-        {isLoading ? (
-          <div className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white p-10 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Memuat daftar TV...
-          </div>
-        ) : error ? (
-          <div className="rounded-xl border border-lco-coral/30 bg-white p-6 text-center dark:bg-zinc-950">
-            <AlertCircle className="mx-auto mb-2 h-5 w-5 text-lco-coral" />
-            <p className="text-sm text-lco-coral">{error}</p>
-            <button
-              type="button"
-              onClick={() => void refetch()}
-              className="mt-3 rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
-            >
-              Coba lagi
-            </button>
-          </div>
-        ) : screens.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-300 bg-white p-10 text-center dark:border-zinc-700 dark:bg-zinc-950">
-            <Monitor className="mx-auto mb-2 h-6 w-6 text-zinc-400" />
-            <p className="text-sm font-medium">Belum ada TV</p>
-            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-              Klik &quot;Tambah TV&quot; untuk mendaftarkan TV pertama, lalu
-              kelola isinya dan buka link/QR-nya di perangkat TV.
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {screens.map((screen) => (
-              <div
-                key={screen.id}
-                className="flex flex-col rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
-              >
-                {/* Header: avatar TV + toggle status (pola sama seperti
-                    toggle "Save/Saved" — tapi di sini untuk aktif/nonaktif) */}
-                <div className="flex items-start justify-between gap-3">
-                  <div
-                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ring-1 ${
-                      screen.is_active
-                        ? "bg-lco-teal/10 text-lco-teal ring-lco-teal/30"
-                        : "bg-zinc-100 text-zinc-400 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-800"
-                    }`}
-                  >
-                    <Monitor className="h-4 w-4" />
-                  </div>
-
-                  <button
-                    type="button"
-                    title={screen.is_active ? "Nonaktifkan TV" : "Aktifkan TV"}
-                    aria-label={
-                      screen.is_active ? "Nonaktifkan TV" : "Aktifkan TV"
-                    }
-                    disabled={isMutating}
-                    onClick={() =>
-                      void runAction(() =>
-                        setScreenActive(screen.id, !screen.is_active),
-                      )
-                    }
-                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
-                      screen.is_active
-                        ? "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
-                        : "border border-zinc-200 text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
-                    }`}
-                  >
-                    {screen.is_active ? (
-                      <Eye className="h-3.5 w-3.5" />
-                    ) : (
-                      <EyeOff className="h-3.5 w-3.5" />
-                    )}
-                    {screen.is_active ? "Aktif" : "Nonaktif"}
-                  </button>
-                </div>
-
-                {/* Judul: label kecil + waktu relatif, lalu nama TV besar
-                    (mengikuti hierarki "Amazon · 5 days ago" → judul tebal) */}
-                <div className="mt-3">
-                  <p className="flex items-center gap-1.5 text-xs text-zinc-400 dark:text-zinc-500">
-                    <span className="font-medium text-zinc-500 dark:text-zinc-400">
-                      Layar TV
-                    </span>
-                    <span aria-hidden>·</span>
-                    <span title={formatScreenDate(screen.created_at)}>
-                      {relativeScreenTime(screen.created_at)}
-                    </span>
-                  </p>
-                  <h3 className="mt-0.5 truncate text-base font-semibold text-zinc-900 dark:text-zinc-100">
-                    {screen.name}
-                  </h3>
-                </div>
-
-                {/* Tag alamat akses, gaya badge sama seperti "Part-Time" dst. */}
-                <div className="mt-2.5">
-                  <span className="inline-flex max-w-full items-center truncate rounded-lg bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
-                    /{screen.access_token}
-                  </span>
-                </div>
-
-                <div className="mt-4 border-t border-zinc-100 pt-3 dark:border-zinc-900" />
-
-                {/* Footer: aksi sekunder (ikon polos) di kiri, CTA utama di kanan */}
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-0.5">
-                    <button
-                      type="button"
-                      title="Link & kode QR"
-                      aria-label="Link & kode QR"
-                      onClick={() => setLinkModalScreen(screen)}
-                      className={CARD_GHOST_ICON_CLASS}
-                    >
-                      <QrCode className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      title="Ubah nama"
-                      aria-label="Ubah nama"
-                      disabled={isMutating}
-                      onClick={() => {
-                        setActionError("");
-                        setSuccessMessage("");
-                        setScreenFormTarget({ mode: "rename", screen });
-                      }}
-                      className={CARD_GHOST_ICON_CLASS}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      title="Hapus TV"
-                      aria-label="Hapus TV"
-                      disabled={isMutating}
-                      onClick={() => {
-                        setDeleteError("");
-                        setDeletingScreen(screen);
-                      }}
-                      className={CARD_GHOST_ICON_DANGER_CLASS}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setSelectedScreen(screen)}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
-                  >
-                    <PlayCircle className="h-4 w-4" />
-                    Kelola Media
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={() => {
+            setActionError("");
+            setSuccessMessage("");
+            setScreenFormTarget({ mode: "add" });
+          }}
+          className="inline-flex items-center gap-2 rounded-md bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
+        >
+          <Plus className="h-4 w-4" />
+          Tambah TV
+        </button>
       </div>
+
+      {successMessage && (
+        <div className="mb-3 flex items-start gap-3 rounded-xl bg-lco-teal/10 p-3.5 dark:bg-lco-teal/10">
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-lco-teal/20 text-lco-green dark:text-lco-teal">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+          </div>
+          <p className="flex-1 pt-0.5 text-sm text-lco-green dark:text-lco-teal">
+            {successMessage}
+          </p>
+          <button
+            type="button"
+            onClick={() => setSuccessMessage("")}
+            aria-label="Tutup notifikasi"
+            className="shrink-0 rounded-md p-1 text-lco-green/50 transition-colors duration-150 hover:bg-lco-teal/20 hover:text-lco-green dark:text-lco-teal/60 dark:hover:text-lco-teal"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {actionError && (
+        <div className="mb-3 flex items-start gap-3 rounded-xl bg-lco-coral/10 p-3.5">
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-lco-coral/20 text-lco-coral">
+            <AlertCircle className="h-3.5 w-3.5" />
+          </div>
+          <p className="flex-1 pt-0.5 text-sm text-lco-coral">{actionError}</p>
+          <button
+            type="button"
+            onClick={() => setActionError("")}
+            aria-label="Tutup notifikasi"
+            className="shrink-0 rounded-md p-1 text-lco-coral/50 transition-colors duration-150 hover:bg-lco-coral/20 hover:text-lco-coral"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white p-10 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Memuat daftar TV...
+        </div>
+      ) : error ? (
+        <div className="rounded-xl border border-lco-coral/30 bg-white p-6 text-center dark:bg-zinc-950">
+          <AlertCircle className="mx-auto mb-2 h-5 w-5 text-lco-coral" />
+          <p className="text-sm text-lco-coral">{error}</p>
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            className="mt-3 rounded-md border border-zinc-200 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
+          >
+            Coba lagi
+          </button>
+        </div>
+      ) : screens.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-zinc-300 bg-white p-10 text-center dark:border-zinc-700 dark:bg-zinc-950">
+          <Monitor className="mx-auto mb-2 h-6 w-6 text-zinc-400" />
+          <p className="text-sm font-medium">Belum ada TV</p>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            Klik &quot;Tambah TV&quot; untuk mendaftarkan TV pertama, lalu
+            kelola isinya dan buka link/QR-nya di perangkat TV.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {screens.map((screen) => (
+            <div
+              key={screen.id}
+              className="flex flex-col rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
+            >
+              {/* Header: avatar TV + toggle status (pola sama seperti
+                    toggle "Save/Saved" — tapi di sini untuk aktif/nonaktif) */}
+              <div className="flex items-start justify-between gap-3">
+                <div
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ring-1 ${
+                    screen.is_active
+                      ? "bg-lco-teal/10 text-lco-teal ring-lco-teal/30"
+                      : "bg-zinc-100 text-zinc-400 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-800"
+                  }`}
+                >
+                  <Monitor className="h-4 w-4" />
+                </div>
+
+                <button
+                  type="button"
+                  title={screen.is_active ? "Nonaktifkan TV" : "Aktifkan TV"}
+                  aria-label={
+                    screen.is_active ? "Nonaktifkan TV" : "Aktifkan TV"
+                  }
+                  disabled={isMutating}
+                  onClick={() =>
+                    void runAction(() =>
+                      setScreenActive(screen.id, !screen.is_active),
+                    )
+                  }
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${
+                    screen.is_active
+                      ? "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                      : "border border-zinc-200 text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
+                  }`}
+                >
+                  {screen.is_active ? (
+                    <Eye className="h-3.5 w-3.5" />
+                  ) : (
+                    <EyeOff className="h-3.5 w-3.5" />
+                  )}
+                  {screen.is_active ? "Aktif" : "Nonaktif"}
+                </button>
+              </div>
+
+              {/* Judul: label kecil + waktu relatif, lalu nama TV besar
+                    (mengikuti hierarki "Amazon · 5 days ago" → judul tebal) */}
+              <div className="mt-3">
+                <p className="flex items-center gap-1.5 text-xs text-zinc-400 dark:text-zinc-500">
+                  <span className="font-medium text-zinc-500 dark:text-zinc-400">
+                    Layar TV
+                  </span>
+                  <span aria-hidden>·</span>
+                  <span title={formatScreenDate(screen.created_at)}>
+                    {relativeScreenTime(screen.created_at)}
+                  </span>
+                </p>
+                <h3 className="mt-0.5 truncate text-base font-semibold text-zinc-900 dark:text-zinc-100">
+                  {screen.name}
+                </h3>
+              </div>
+
+              {/* Tag alamat akses, gaya badge sama seperti "Part-Time" dst. */}
+              <div className="mt-2.5">
+                <span className="inline-flex max-w-full items-center truncate rounded-lg bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+                  /{screen.access_token}
+                </span>
+              </div>
+
+              <div className="mt-4 border-t border-zinc-100 pt-3 dark:border-zinc-900" />
+
+              {/* Footer: aksi sekunder (ikon polos) di kiri, CTA utama di kanan */}
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    title="Link & kode QR"
+                    aria-label="Link & kode QR"
+                    onClick={() => setLinkModalScreen(screen)}
+                    className={CARD_GHOST_ICON_CLASS}
+                  >
+                    <QrCode className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Ubah nama"
+                    aria-label="Ubah nama"
+                    disabled={isMutating}
+                    onClick={() => {
+                      setActionError("");
+                      setSuccessMessage("");
+                      setScreenFormTarget({ mode: "rename", screen });
+                    }}
+                    className={CARD_GHOST_ICON_CLASS}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Hapus TV"
+                    aria-label="Hapus TV"
+                    disabled={isMutating}
+                    onClick={() => {
+                      setDeleteError("");
+                      setDeletingScreen(screen);
+                    }}
+                    className={CARD_GHOST_ICON_DANGER_CLASS}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedScreen(screen)}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-lco-green px-3.5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-lco-green-hover"
+                >
+                  <PlayCircle className="h-4 w-4" />
+                  Kelola Media
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {screenFormTarget && (
         <ScreenFormModal
@@ -1483,6 +1472,6 @@ export default function PromoModule() {
           </div>
         </div>
       )}
-    </section>
+    </div>
   );
 }

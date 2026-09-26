@@ -6,6 +6,14 @@
 // transaksi lama). Sekarang semua field itu wajib dikirim oleh pemanggil.
 // Tetap ikuti aturan PRD §16.5: dokumen HTML di iframe tersembunyi, TANPA
 // @media print / print:* di komponen React utama atau globals.css.
+//
+// ── TAMBAHAN (barcode nomor struk) ── printThermalReceipt() sekarang juga
+// mencetak barcode Code128 dari `data.receiptNo` di bagian paling bawah
+// struk — lihat lib/pos/barcode.ts untuk alasan & cara kerjanya. Dipisah
+// jadi modul sendiri (bukan ditulis inline di sini) supaya bisa dipakai
+// ulang kalau nanti nota A6/A5 atau struk digital WA juga perlu barcode.
+
+import { buildBarcodeSvgSafe } from "./barcode";
 
 export interface ReceiptItem {
   name: string;
@@ -146,6 +154,8 @@ export const printThermalReceipt = (data: ReceiptData) => {
           table { width: 100%; border-collapse: collapse; }
           td { vertical-align: top; padding: 2px 0; }
           .item-name { display: block; margin-bottom: 2px; }
+          .barcode-wrap { margin: 8px 0 2px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .barcode-text { font-size: 11px; letter-spacing: 1px; margin-bottom: 2px; }
           .reprint-badge {
             text-align: center;
             font-weight: bold;
@@ -222,6 +232,10 @@ export const printThermalReceipt = (data: ReceiptData) => {
 
         <div class="divider"></div>
         <div class="text-center">${escapeHtml(data.footerText || "Terima kasih atas kunjungan Anda")}</div>
+
+        <div class="divider"></div>
+        <div class="text-center barcode-wrap">${buildBarcodeSvgSafe(data.receiptNo)}</div>
+        <div class="text-center barcode-text">${escapeHtml(data.receiptNo)}</div>
       </body>
     </html>
   `;
@@ -413,6 +427,89 @@ export const printA6Nota = (data: ReceiptData, paperSize: "A6" | "A5" = "A6") =>
       console.log("[printLogic] print() selesai dipanggil tanpa exception");
     } catch (err) {
       console.error("printA6Nota: window.print() gagal:", err);
+    }
+    setTimeout(() => {
+      document.body.removeChild(iframe);
+    }, 1000);
+  }, 250);
+};
+
+// ── TAMBAHAN (Pengaturan > Printer) ── Halaman tes print untuk printer
+// bertipe koneksi "browser" (printer jaringan/USB biasa yang didaftarkan di
+// level OS, dipanggil lewat dialog cetak bawaan browser — lihat catatan
+// header lib/pos/printerConnection.ts kenapa tipe ini yang dipakai untuk
+// printer jaringan). Mekanisme IDENTIK dengan printThermalReceipt() di atas
+// (iframe tersembunyi + window.print()), cuma isinya halaman tes generik,
+// bukan struk transaksi.
+export const printBrowserTestPage = (storeName: string, printerLabel: string) => {
+  console.log("[printLogic] printBrowserTestPage() dipanggil", printerLabel);
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.top = "0";
+  iframe.style.left = "-9999px";
+  iframe.style.width = "302px";
+  iframe.style.height = "400px";
+  iframe.style.border = "0";
+  document.body.appendChild(iframe);
+
+  const iframeDoc = iframe.contentWindow?.document;
+  if (!iframeDoc) {
+    console.warn("[printLogic] iframeDoc null — tes print dibatalkan");
+    document.body.removeChild(iframe);
+    return;
+  }
+
+  const dateStr = new Date().toLocaleString("id-ID", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Tes Print</title>
+        <style>
+          body {
+            font-family: "Courier New", Courier, monospace;
+            font-size: 12px;
+            color: #000;
+            width: 58mm;
+            margin: 0;
+            padding: 0;
+          }
+          .text-center { text-align: center; }
+          .font-bold { font-weight: bold; }
+          .divider { border-bottom: 1px dashed #000; margin: 5px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="text-center font-bold" style="font-size: 16px;">${escapeHtml(storeName || "Langitan.co")}</div>
+        <div class="divider"></div>
+        <div class="text-center font-bold">*** TES PRINT ***</div>
+        <div class="divider"></div>
+        <div>Printer: ${escapeHtml(printerLabel)}</div>
+        <div>Waktu: ${dateStr}</div>
+        <div class="divider"></div>
+        <div class="text-center">Kalau halaman ini tercetak rapi,</div>
+        <div class="text-center">printer sudah terhubung dengan benar.</div>
+      </body>
+    </html>
+  `;
+
+  iframeDoc.open();
+  iframeDoc.write(htmlContent);
+  iframeDoc.close();
+
+  setTimeout(() => {
+    try {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    } catch (err) {
+      console.error("printBrowserTestPage: window.print() gagal:", err);
     }
     setTimeout(() => {
       document.body.removeChild(iframe);

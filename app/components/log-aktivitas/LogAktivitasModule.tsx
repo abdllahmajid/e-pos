@@ -185,229 +185,223 @@ export default function LogAktivitasModule() {
   }
 
   return (
-    <section className="h-full overflow-y-auto bg-zinc-100 dark:bg-zinc-950">
-      <div className="mx-auto max-w-5xl p-4 md:p-6">
-        <div className="mb-4">
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-            Administrasi
-          </p>
+    <div className="flex h-full flex-col overflow-y-auto bg-zinc-100 p-4 dark:bg-zinc-950 md:p-6">
+      <div className="mb-4">
+        <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+          Administrasi
+        </p>
 
-          <h2 className="text-2xl font-semibold tracking-tight">
-            Log Aktivitas
-          </h2>
+        <h2 className="text-2xl font-semibold tracking-tight">Log Aktivitas</h2>
 
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            Riwayat aksi sensitif — void, retur, opname/penyesuaian stok, hapus
-            & pulihkan produk atau transaksi — beserta pelaku dan waktunya.
-          </p>
-        </div>
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          Riwayat aksi sensitif — void, retur, opname/penyesuaian stok, hapus &
+          pulihkan produk atau transaksi — beserta pelaku dan waktunya.
+        </p>
+      </div>
 
-        <div className="mb-4 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
-              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                Entitas
-              </label>
-              <select
-                value={entityFilter}
-                onChange={(e) =>
-                  setEntityFilter(e.target.value as ActivityLogEntity | "all")
-                }
-                className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-              >
-                {ENTITY_FILTER_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                User Pelaku
-              </label>
-              <select
-                value={userFilter}
-                onChange={(e) => setUserFilter(e.target.value)}
-                className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-              >
-                <option value="all">Semua User</option>
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.full_name || "(tanpa nama)"}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                Dari Tanggal
-              </label>
-              <input
-                type="date"
-                value={dateStart}
-                onChange={(e) => setDateStart(e.target.value)}
-                className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                Sampai Tanggal
-              </label>
-              <input
-                type="date"
-                value={dateEnd}
-                onChange={(e) => setDateEnd(e.target.value)}
-                className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-              />
-            </div>
-          </div>
-
-          <div className="mt-3">
-            <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-              Jenis Aksi
+      <div className="mb-4 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+              Entitas
             </label>
-            <div className="flex flex-wrap gap-1.5">
-              {ACTION_FILTER_OPTIONS.map(([action, label]) => {
-                const isActive = selectedActions.includes(action);
-                return (
-                  <button
-                    key={action}
-                    type="button"
-                    onClick={() => toggleAction(action)}
-                    className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors duration-150 ${
-                      isActive
-                        ? "border-lco-teal bg-lco-teal/10 text-lco-teal"
-                        : "border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
+            <select
+              value={entityFilter}
+              onChange={(e) =>
+                setEntityFilter(e.target.value as ActivityLogEntity | "all")
+              }
+              className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            >
+              {ENTITY_FILTER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </div>
 
-          {hasActiveFilter && (
-            <div className="mt-3 flex justify-end">
-              <button
-                type="button"
-                onClick={resetFilters}
-                className="text-xs font-medium text-zinc-500 underline-offset-2 hover:text-zinc-700 hover:underline dark:text-zinc-400 dark:hover:text-zinc-200"
-              >
-                Reset filter
-              </button>
-            </div>
-          )}
+          <div>
+            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+              User Pelaku
+            </label>
+            <select
+              value={userFilter}
+              onChange={(e) => setUserFilter(e.target.value)}
+              className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            >
+              <option value="all">Semua User</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.full_name || "(tanpa nama)"}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+              Dari Tanggal
+            </label>
+            <input
+              type="date"
+              value={dateStart}
+              onChange={(e) => setDateStart(e.target.value)}
+              className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+              Sampai Tanggal
+            </label>
+            <input
+              type="date"
+              value={dateEnd}
+              onChange={(e) => setDateEnd(e.target.value)}
+              className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          </div>
         </div>
 
-        {error && (
-          <div className="mb-4 flex items-start gap-3 border border-lco-coral/30 bg-white p-4 text-sm text-lco-coral dark:bg-zinc-950">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>
-              <p className="font-medium">Gagal memuat Log Aktivitas</p>
-              <p className="mt-1 break-all text-xs opacity-80">{error}</p>
-            </div>
+        <div className="mt-3">
+          <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+            Jenis Aksi
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {ACTION_FILTER_OPTIONS.map(([action, label]) => {
+              const isActive = selectedActions.includes(action);
+              return (
+                <button
+                  key={action}
+                  type="button"
+                  onClick={() => toggleAction(action)}
+                  className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors duration-150 ${
+                    isActive
+                      ? "border-lco-teal bg-lco-teal/10 text-lco-teal"
+                      : "border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {hasActiveFilter && (
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="text-xs font-medium text-zinc-500 underline-offset-2 hover:text-zinc-700 hover:underline dark:text-zinc-400 dark:hover:text-zinc-200"
+            >
+              Reset filter
+            </button>
           </div>
         )}
-
-        <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-          {isLoading ? (
-            <div className="flex min-h-64 items-center justify-center">
-              <div className="flex items-center gap-2 text-sm text-zinc-500">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Memuat Log Aktivitas...
-              </div>
-            </div>
-          ) : filteredLogs.length === 0 ? (
-            <div className="flex min-h-64 flex-col items-center justify-center px-6 text-center">
-              <div className="mb-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-                <ClipboardList className="h-6 w-6 text-zinc-400" />
-              </div>
-              <h3 className="text-sm font-semibold">Belum ada aktivitas</h3>
-              <p className="mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-                {hasActiveFilter
-                  ? "Tidak ada log yang cocok dengan filter saat ini."
-                  : "Belum ada aksi sensitif yang tercatat."}
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-left text-sm">
-                <thead className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/40">
-                  <tr>
-                    <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                      Waktu
-                    </th>
-                    <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                      Aksi
-                    </th>
-                    <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                      Entitas
-                    </th>
-                    <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                      User
-                    </th>
-                    <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                      Keterangan
-                    </th>
-                  </tr>
-                </thead>
-
-                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">
-                  {filteredLogs.map((log) => {
-                    const tone = activityActionTone(log.action);
-                    const actionLabel =
-                      ACTIVITY_ACTION_LABEL[log.action as ActivityLogAction] ??
-                      log.action;
-                    const detail = summarizeMeta(log.meta);
-
-                    return (
-                      <tr
-                        key={log.id}
-                        className="transition-colors duration-150 hover:bg-zinc-50 dark:hover:bg-zinc-900/40"
-                      >
-                        <td className="whitespace-nowrap px-4 py-3 text-zinc-500 dark:text-zinc-400">
-                          {formatDateTime(log.created_at)}
-                        </td>
-
-                        <td className="px-4 py-3">
-                          <span
-                            className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${chipToneClass[tone]}`}
-                          >
-                            {actionLabel}
-                          </span>
-                        </td>
-
-                        <td className="px-4 py-3 capitalize text-zinc-600 dark:text-zinc-400">
-                          {log.entity === "transaction"
-                            ? "Transaksi"
-                            : "Produk"}
-                        </td>
-
-                        <td className="px-4 py-3">
-                          {log.user_name || (
-                            <span className="text-zinc-400">
-                              (user tidak diketahui)
-                            </span>
-                          )}
-                        </td>
-
-                        <td className="max-w-xs truncate px-4 py-3 text-zinc-500 dark:text-zinc-400">
-                          {detail || "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
       </div>
-    </section>
+
+      {error && (
+        <div className="mb-4 flex items-start gap-3 border border-lco-coral/30 bg-white p-4 text-sm text-lco-coral dark:bg-zinc-950">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-medium">Gagal memuat Log Aktivitas</p>
+            <p className="mt-1 break-all text-xs opacity-80">{error}</p>
+          </div>
+        </div>
+      )}
+
+      <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+        {isLoading ? (
+          <div className="flex min-h-64 items-center justify-center">
+            <div className="flex items-center gap-2 text-sm text-zinc-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Memuat Log Aktivitas...
+            </div>
+          </div>
+        ) : filteredLogs.length === 0 ? (
+          <div className="flex min-h-64 flex-col items-center justify-center px-6 text-center">
+            <div className="mb-3 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+              <ClipboardList className="h-6 w-6 text-zinc-400" />
+            </div>
+            <h3 className="text-sm font-semibold">Belum ada aktivitas</h3>
+            <p className="mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
+              {hasActiveFilter
+                ? "Tidak ada log yang cocok dengan filter saat ini."
+                : "Belum ada aksi sensitif yang tercatat."}
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left text-sm">
+              <thead className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/40">
+                <tr>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                    Waktu
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                    Aksi
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                    Entitas
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                    User
+                  </th>
+                  <th className="px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                    Keterangan
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">
+                {filteredLogs.map((log) => {
+                  const tone = activityActionTone(log.action);
+                  const actionLabel =
+                    ACTIVITY_ACTION_LABEL[log.action as ActivityLogAction] ??
+                    log.action;
+                  const detail = summarizeMeta(log.meta);
+
+                  return (
+                    <tr
+                      key={log.id}
+                      className="transition-colors duration-150 hover:bg-zinc-50 dark:hover:bg-zinc-900/40"
+                    >
+                      <td className="whitespace-nowrap px-4 py-3 text-zinc-500 dark:text-zinc-400">
+                        {formatDateTime(log.created_at)}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${chipToneClass[tone]}`}
+                        >
+                          {actionLabel}
+                        </span>
+                      </td>
+
+                      <td className="px-4 py-3 capitalize text-zinc-600 dark:text-zinc-400">
+                        {log.entity === "transaction" ? "Transaksi" : "Produk"}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {log.user_name || (
+                          <span className="text-zinc-400">
+                            (user tidak diketahui)
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="max-w-xs truncate px-4 py-3 text-zinc-500 dark:text-zinc-400">
+                        {detail || "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
