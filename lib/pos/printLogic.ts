@@ -58,12 +58,17 @@ export interface ReceiptData {
   isReprint?: boolean;
 }
 
+// ── PERUBAHAN (Fase 3: relabel metode pembayaran) ── QRIS -> "Digital",
+// BANK_TRANSFER/transfer -> "Debit/Kredit". Value ENUM di database TIDAK
+// diubah (schema.sql), cuma teks yang tampil di struk & preview. Kalau
+// diubah di sini, ubah juga PREVIEW_METHOD_LABELS di PaymentModal.tsx (lihat
+// catatan di sana) supaya preview & hasil cetak tetap sama persis.
 const METHOD_LABELS: Record<string, string> = {
   tunai: "Tunai",
   CASH: "Tunai",
-  transfer: "Transfer Bank",
-  BANK_TRANSFER: "Transfer Bank",
-  QRIS: "QRIS",
+  transfer: "Debit/Kredit",
+  BANK_TRANSFER: "Debit/Kredit",
+  QRIS: "Digital",
   TEMPO: "Tempo / Piutang",
 };
 

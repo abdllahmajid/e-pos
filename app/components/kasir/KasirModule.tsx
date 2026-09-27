@@ -18,9 +18,15 @@ import {
   PlayCircle,
   Camera,
   ArrowLeft,
+  UserRound,
+  Sparkles,
+  PackagePlus,
+  Wallet,
 } from "lucide-react";
 import BarcodeScanModal, { type ScanFeedback } from "./BarcodeScanModal";
 import PaymentModal from "./PaymentModal";
+// ── TAMBAHAN (Kasir: pelanggan + poin loyalitas) ──
+import { useCustomers, type Customer } from "@/hooks/useCustomers";
 import {
   shareReceiptViaWhatsApp,
   type ReceiptData,
@@ -73,12 +79,20 @@ import { useHoldOrders } from "@/hooks/useHoldOrders";
 // struk (mis. "Tunai + Transfer") — ReceiptData.method bertipe `string`
 // bebas (lib/pos/printLogic.ts), jadi aman diisi gabungan begini, beda dari
 // PaymentMethod tunggal yang dipakai jalur pembayaran biasa.
+// ── PERUBAHAN (Fase 3: relabel metode pembayaran) ── Disamakan dengan
+// METHODS/PREVIEW_METHOD_LABELS di PaymentModal.tsx — lihat catatan di sana.
 const SPLIT_METHOD_LABELS: Record<PaymentMethod, string> = {
   CASH: "Tunai",
-  BANK_TRANSFER: "Transfer",
-  QRIS: "QRIS",
+  BANK_TRANSFER: "Debit/Kredit",
+  QRIS: "Digital",
   TEMPO: "Tempo",
 };
+
+// ── TAMBAHAN (Kasir: pelanggan + poin loyalitas) ── Nilai tukar 1 poin
+// loyalitas ke Rupiah potongan harga. Ubah angka ini kalau pemilik toko mau
+// rate lain — tidak perlu migration baru (lihat catatan header migration
+// 033_customers_loyalty.sql).
+const LOYALTY_POINT_VALUE = 100;
 
 interface KasirModuleProps {
   /** Dipanggil saat kasir menekan tombol "Buka Shift" di layar blokir (lihat di bawah). */
@@ -91,8 +105,10 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   const { user } = useAuth();
 
   const { settings: posSettings } = useSettings();
-  const { activeShift, isLoading: isShiftLoading } = useShifts();
+  const { activeShift, isLoading: isShiftLoading, openShift } = useShifts();
   const { printReceipt } = usePrinterProfiles();
+  // ── TAMBAHAN (Kasir: pelanggan + poin loyalitas) ──
+  const { customers, redeemPoints } = useCustomers();
   const {
     heldOrders,
     isLoading: isHeldOrdersLoading,
@@ -175,6 +191,58 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
   const [scanFeedback, setScanFeedback] = useState<ScanFeedback | null>(null);
 
+  // ── TAMBAHAN (Fase 1: Buka Kasir dari layar Kasir langsung) ── Modal
+  // "Mulai Sesi Kasir" — dulu layar terkunci cuma punya tombol yang
+  // navigasi ke menu "Kas & Shift" terpisah (onNavigateToShift). Sekarang
+  // modal input modal awal ADA DI SINI, supaya alurnya: klik "Buka Kasir"
+  // -> isi modal awal -> "Mulai Sesi Kasir" -> struk awal tercetak otomatis
+  // -> langsung di layar transaksi POS yang sama, tanpa pindah menu.
+  const [isOpenSessionModalOpen, setIsOpenSessionModalOpen] = useState(false);
+  const [openingCashInput, setOpeningCashInput] = useState("");
+  const [isStartingSession, setIsStartingSession] = useState(false);
+  const [openSessionError, setOpenSessionError] = useState<string | null>(null);
+
+  // ── TAMBAHAN (Kasir: pelanggan + poin loyalitas, opsional) ──
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(
+    null,
+  );
+  const [usePoints, setUsePoints] = useState(false);
+  const [isLoyaltyNoticeDismissed, setIsLoyaltyNoticeDismissed] =
+    useState(false);
+
+  const matchingCustomers = useMemo(() => {
+    const q = customerQuery.trim().toLowerCase();
+    if (!q) return [];
+    return customers
+      .filter((c) => c.name.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [customers, customerQuery]);
+
+  const handleSelectCustomer = (c: Customer) => {
+    setSelectedCustomer(c);
+    setUsePoints(false);
+    setIsLoyaltyNoticeDismissed(false);
+    setCustomerQuery("");
+    setIsCustomerDropdownOpen(false);
+  };
+
+  // ── TAMBAHAN (Kasir: Biaya Tambahan) ── Item non-produk (kantong kresek,
+  // ongkos kirim, dst.) ditambahkan lewat produk BERTIPE JASA (`is_service`)
+  // yang sudah didukung penuh oleh RPC create_transaction (stok tak
+  // terbatas, lihat schema.sql fungsi create_transaction & adjust_stock).
+  // Tidak perlu tabel/migration baru — cukup filter produk yang sudah ada,
+  // dan admin toko menandai produk seperti "Kantong Kresek" sebagai Jasa di
+  // menu Produk. Modal ini sekadar jalan pintas supaya kasir tidak perlu
+  // mencari produk itu bercampur dengan produk dagangan biasa.
+  const [isBiayaTambahanModalOpen, setIsBiayaTambahanModalOpen] =
+    useState(false);
+  const serviceProducts = useMemo(
+    () => products.filter((p) => p.is_service),
+    [products],
+  );
+
   const filteredProducts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return products.filter((product) => {
@@ -203,11 +271,25 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   };
 
   const subtotal = useMemo(() => getCartSubtotal(cart), [cart]);
-  const discount = 0;
   const tax = useMemo(() => {
     if (!posSettings.ppnEnabled) return 0;
     return Math.round((subtotal * posSettings.ppnRate) / 100);
   }, [posSettings.ppnEnabled, posSettings.ppnRate, subtotal]);
+  // ── TAMBAHAN (Kasir: poin loyalitas) ── Sebelumnya `const discount = 0`
+  // (stub, tidak pernah dipakai apa pun). Sekarang diisi dari poin pelanggan
+  // terpilih KALAU kasir menekan "Gunakan Poin" — poin yang benar-benar
+  // dipakai (`pointsBeingUsed`) dibatasi supaya potongannya tidak pernah
+  // melebihi subtotal+pajak (total tidak pernah negatif), dan angka INI juga
+  // yang dikirim ke redeemPoints() setelah transaksi sukses (lihat kedua
+  // handleConfirmPayment*), bukan seluruh saldo poin pelanggan.
+  const pointsBeingUsed = useMemo(() => {
+    if (!usePoints || !selectedCustomer) return 0;
+    const maxAffordablePoints = Math.floor(
+      (subtotal + tax) / LOYALTY_POINT_VALUE,
+    );
+    return Math.min(selectedCustomer.loyalty_points, maxAffordablePoints);
+  }, [usePoints, selectedCustomer, subtotal, tax]);
+  const discount = pointsBeingUsed * LOYALTY_POINT_VALUE;
   const grandTotal = subtotal - discount + tax;
 
   const handleConfirmPayment = async (
@@ -225,6 +307,15 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     setIsSavingTransaction(true);
 
     try {
+      // ── TAMBAHAN (Kasir: pelanggan) ── Kalau kasir sudah memilih pelanggan
+      // dari pencarian di panel produk, pakai nama/HP-nya sebagai default —
+      // tapi kalau kasir SEMPAT mengetik nama/HP lain secara manual di
+      // PaymentModal (`extra`), yang manual itu tetap menang.
+      const effectiveCustomerName =
+        extra?.customerName || selectedCustomer?.name;
+      const effectiveCustomerPhone =
+        extra?.customerPhone || selectedCustomer?.phone || undefined;
+
       const result = await createTransaction({
         items: cart,
         subtotal,
@@ -234,10 +325,24 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         paymentMethod: method,
         paymentAmount: paidAmount,
         receivedAmount: method === "CASH" ? paidAmount : undefined,
-        customerName: extra?.customerName,
-        customerPhone: extra?.customerPhone,
+        customerName: effectiveCustomerName,
+        customerPhone: effectiveCustomerPhone,
         dueDate: extra?.dueDate,
       });
+
+      // ── TAMBAHAN (Kasir: poin loyalitas) ── Kurangi poin SETELAH transaksi
+      // tersimpan (bukan sebelum) — kalau baris di atas melempar error,
+      // blok ini tidak pernah tercapai, jadi poin tidak berkurang percuma.
+      if (pointsBeingUsed > 0 && selectedCustomer) {
+        try {
+          await redeemPoints(selectedCustomer.id, pointsBeingUsed);
+        } catch (redeemErr) {
+          // Transaksi sudah tersimpan & struk sudah mau dicetak — kegagalan
+          // memotong poin TIDAK BOLEH membatalkan itu. Cukup log, jangan
+          // dilempar ke pemanggil (beda dari error createTransaction di atas).
+          console.error("Gagal memakai poin loyalitas:", redeemErr);
+        }
+      }
 
       const receiptData: ReceiptData = {
         // ── KOREKSI (bug: data Pengaturan Toko/Struk tidak muncul di struk
@@ -254,7 +359,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         receiptNo: result.receipt_no,
         createdAt: new Date().toISOString(),
         cashierName: user?.full_name ?? user?.email ?? null,
-        customerName: extra?.customerName,
+        customerName: effectiveCustomerName,
         items: cart.map((item) => ({
           name: item.product.name,
           price: item.product.sell_price,
@@ -281,10 +386,14 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       // "Kirim WA" di layar sukses PaymentModal (dipanggil lewat onSendWhatsApp
       // di bawah) tahu struk MANA yang harus dibagikan.
       setLastReceipt(receiptData);
-      setLastCustomerPhone(extra?.customerPhone ?? null);
+      setLastCustomerPhone(effectiveCustomerPhone ?? null);
 
       setCart(clearCart());
       setMobileView("products");
+      // ── TAMBAHAN (Kasir: pelanggan + poin) ── Reset supaya transaksi
+      // berikutnya mulai bersih (tidak ikut ke pelanggan sebelumnya).
+      setSelectedCustomer(null);
+      setUsePoints(false);
       await refetch();
       return { paymentId: result.payment_id };
     } catch (err) {
@@ -325,6 +434,11 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     setIsSavingTransaction(true);
 
     try {
+      const effectiveCustomerName =
+        extra?.customerName || selectedCustomer?.name;
+      const effectiveCustomerPhone =
+        extra?.customerPhone || selectedCustomer?.phone || undefined;
+
       const result = await createTransaction({
         items: cart,
         subtotal,
@@ -332,9 +446,17 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         tax,
         total: grandTotal,
         payments: lines,
-        customerName: extra?.customerName,
-        customerPhone: extra?.customerPhone,
+        customerName: effectiveCustomerName,
+        customerPhone: effectiveCustomerPhone,
       });
+
+      if (pointsBeingUsed > 0 && selectedCustomer) {
+        try {
+          await redeemPoints(selectedCustomer.id, pointsBeingUsed);
+        } catch (redeemErr) {
+          console.error("Gagal memakai poin loyalitas:", redeemErr);
+        }
+      }
 
       const totalPaid = lines.reduce((sum, line) => sum + line.amount, 0);
       const methodLabel = lines
@@ -351,7 +473,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         receiptNo: result.receipt_no,
         createdAt: new Date().toISOString(),
         cashierName: user?.full_name ?? user?.email ?? null,
-        customerName: extra?.customerName,
+        customerName: effectiveCustomerName,
         items: cart.map((item) => ({
           name: item.product.name,
           price: item.product.sell_price,
@@ -370,10 +492,12 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       // handleConfirmPayment di atas — auto-print thermal dipicu PaymentModal
       // sendiri lewat onPrint saat layar sukses muncul.
       setLastReceipt(receiptData);
-      setLastCustomerPhone(extra?.customerPhone ?? null);
+      setLastCustomerPhone(effectiveCustomerPhone ?? null);
 
       setCart(clearCart());
       setMobileView("products");
+      setSelectedCustomer(null);
+      setUsePoints(false);
       await refetch();
       return { payments: result.payments };
     } catch (err) {
@@ -420,6 +544,70 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     // Pengaturan > Printer, dan kasir tetap punya tombol ini untuk coba
     // cetak ulang kalau kertas macet, sama seperti sebelumnya.
     void printReceipt(lastReceipt);
+  };
+
+  // ── TAMBAHAN (Fase 1: Buka Kasir) ── Buka shift + cetak "struk awal"
+  // otomatis + kasir langsung berada di layar transaksi (tidak ada langkah
+  // navigasi terpisah — begitu `openShift()` selesai, `activeShift` dari
+  // useShifts() jadi terisi, dan return JSX di bawah otomatis merender
+  // layar transaksi POS, bukan layar terkunci lagi).
+  //
+  // Struk awal dicetak lewat pipa cetak yang SUDAH ADA (printReceipt/
+  // ReceiptData, lib/pos/printLogic.ts) — bukan template baru — supaya
+  // konsisten dengan printer Bluetooth/USB/Sistem yang sudah dikonfigurasi
+  // kasir di Pengaturan > Printer. `items` diisi satu baris "Modal Awal Kas"
+  // supaya nominalnya tetap tercetak jelas walau template struk aslinya
+  // dirancang untuk struk penjualan.
+  const handleStartSession = async () => {
+    const amount = Number(openingCashInput.replace(/[^0-9]/g, "")) || 0;
+    if (amount <= 0) {
+      setOpenSessionError("Masukkan nominal modal awal yang valid.");
+      return;
+    }
+
+    setOpenSessionError(null);
+    setIsStartingSession(true);
+    try {
+      await openShift(amount);
+
+      const now = new Date();
+      const openingReceipt: ReceiptData = {
+        storeName: posSettings.namaToko,
+        storeAddress: posSettings.alamat,
+        storePhone: posSettings.telepon,
+        footerText: posSettings.footerStruk,
+        receiptNo: `BUKA-${now.getTime()}`,
+        createdAt: now.toISOString(),
+        cashierName: user?.full_name ?? user?.email ?? null,
+        items: [
+          {
+            name: "Modal Awal Kas (Buka Sesi Kasir)",
+            qty: 1,
+            price: amount,
+            subtotal: amount,
+          },
+        ],
+        subtotal: amount,
+        discount: 0,
+        tax: 0,
+        total: amount,
+        paidAmount: amount,
+        changeAmount: 0,
+        method: "Buka Kasir",
+      };
+      // Tidak perlu await — sama seperti handlePrintReceipt, kegagalan
+      // printer tidak boleh memblokir kasir mulai transaksi.
+      void printReceipt(openingReceipt);
+
+      setOpeningCashInput("");
+      setIsOpenSessionModalOpen(false);
+    } catch (err) {
+      setOpenSessionError(
+        err instanceof Error ? err.message : "Gagal membuka sesi kasir.",
+      );
+    } finally {
+      setIsStartingSession(false);
+    }
   };
 
   // ── TAMBAHAN (T-11 bagian 1) ── Handler Hold Order.
@@ -592,9 +780,14 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     );
   }
 
-  // ── TAMBAHAN (T-04) ── Blokir layar Kasir kalau kasir belum buka shift.
-  // Di titik ini `isShiftLoading` sudah pasti false (ditangani gabungan loading
-  // di atas), jadi cukup cek `activeShift` saja.
+  // ── PERUBAHAN (Fase 1: flow "Buka Kasir" baru) ── Sebelumnya layar ini
+  // cuma punya tombol yang navigasi ke menu "Kas & Shift" terpisah
+  // (onNavigateToShift) — kasir harus pindah menu, isi modal di sana, lalu
+  // pindah balik ke Kasir secara manual. Sekarang: tombol "Buka Kasir" di
+  // SINI langsung membuka modal "Mulai Sesi Kasir" (di bawah return ini),
+  // dan begitu submit sukses, `activeShift` terisi -> komponen ini re-render
+  // -> langsung jatuh ke return utama (layar transaksi POS), tanpa kasir
+  // perlu pindah menu sama sekali.
   if (!activeShift) {
     return (
       <div className="h-full flex items-center justify-center bg-zinc-100 dark:bg-zinc-950 p-6">
@@ -602,20 +795,92 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
           <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
             <Lock className="w-6 h-6 text-lco-coral" />
           </div>
-          <h3 className="text-sm font-semibold">Shift Belum Dibuka</h3>
+          <h3 className="text-sm font-semibold">Kasir Belum Dibuka</h3>
           <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Buka shift dengan modal awal terlebih dahulu di menu Kas & Shift
+            Buka kasir dengan modal awal (uang tunai di laci) terlebih dahulu
             sebelum bisa mulai transaksi.
           </p>
           <button
-            onClick={onNavigateToShift}
-            disabled={!onNavigateToShift}
-            className="flex items-center gap-2 px-4 py-2 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-xs font-semibold transition-colors duration-150 disabled:opacity-60"
+            onClick={() => {
+              setOpenSessionError(null);
+              setOpeningCashInput(String(posSettings.shiftDefaultCash || ""));
+              setIsOpenSessionModalOpen(true);
+            }}
+            className="flex items-center gap-2 px-4 py-2 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-xs font-semibold transition-colors duration-150"
           >
             <Unlock className="w-3.5 h-3.5" />
-            Buka Shift Sekarang
+            Buka Kasir
           </button>
+          {onNavigateToShift && (
+            <button
+              onClick={onNavigateToShift}
+              className="text-[11px] text-zinc-400 underline underline-offset-2 hover:text-zinc-600 dark:hover:text-zinc-200"
+            >
+              Lihat riwayat shift di menu Kas & Shift
+            </button>
+          )}
         </div>
+
+        {isOpenSessionModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-sm rounded-xl bg-white p-6 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800">
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-base font-semibold flex items-center gap-2">
+                  <Wallet className="h-4 w-4 text-lco-teal" />
+                  Mulai Sesi Kasir
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setIsOpenSessionModalOpen(false)}
+                  disabled={isStartingSession}
+                  className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors duration-150 disabled:opacity-50"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <label className="mb-1 block text-xs font-medium text-zinc-500">
+                Modal awal kas
+              </label>
+              <div className="flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950 focus-within:border-lco-teal focus-within:ring-2 focus-within:ring-lco-teal transition-colors duration-150">
+                <span className="text-sm text-zinc-400 font-mono">Rp</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoFocus
+                  value={openingCashInput}
+                  onChange={(e) => setOpeningCashInput(e.target.value)}
+                  placeholder="200.000"
+                  className="w-full bg-transparent text-sm font-mono tabular-nums outline-none"
+                />
+              </div>
+
+              {openSessionError && (
+                <div className="mt-3 flex items-start gap-2 rounded-md border border-lco-coral/30 bg-lco-coral/10 p-3 text-xs text-lco-coral">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {openSessionError}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleStartSession}
+                disabled={isStartingSession}
+                className="mt-5 flex w-full items-center justify-center gap-2 rounded-md bg-lco-green px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-lco-green-hover disabled:opacity-60"
+              >
+                {isStartingSession ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Unlock className="h-4 w-4" />
+                )}
+                Mulai Sesi Kasir
+              </button>
+              <p className="mt-2 text-center text-[11px] text-zinc-400">
+                Struk awal akan tercetak otomatis (jika printer terhubung).
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -637,6 +902,118 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         className={`${mobileView === "products" ? "flex" : "hidden"} md:flex flex-1 flex-col min-h-0 border-r border-zinc-200 dark:border-zinc-800`}
       >
         <div className="p-4 sm:p-5 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 flex flex-col gap-4 z-10">
+          {/* ── TAMBAHAN (Fase 2: Memilih Pelanggan, opsional) ── */}
+          <div className="relative">
+            {selectedCustomer ? (
+              <div className="flex items-center gap-2 rounded-md bg-zinc-900 dark:bg-zinc-800 text-white px-3 py-2">
+                <UserRound className="w-4 h-4 shrink-0" />
+                <span className="text-sm font-medium truncate">
+                  {selectedCustomer.name}
+                </span>
+                {selectedCustomer.loyalty_points > 0 && (
+                  <span className="shrink-0 rounded bg-lco-mustard/90 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                    {selectedCustomer.loyalty_points} poin
+                  </span>
+                )}
+                <button
+                  onClick={() => {
+                    setSelectedCustomer(null);
+                    setUsePoints(false);
+                  }}
+                  title="Hapus pelanggan"
+                  className="ml-auto text-zinc-400 hover:text-white transition-colors duration-150"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <>
+                <UserRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                <input
+                  type="text"
+                  placeholder="Cari nama pelanggan (opsional)..."
+                  className="w-full pl-9 pr-4 py-2 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:border-lco-teal focus:ring-2 focus:ring-lco-teal transition-colors duration-150 text-sm"
+                  value={customerQuery}
+                  onChange={(e) => {
+                    setCustomerQuery(e.target.value);
+                    setIsCustomerDropdownOpen(true);
+                  }}
+                  onFocus={() => setIsCustomerDropdownOpen(true)}
+                  onBlur={() =>
+                    setTimeout(() => setIsCustomerDropdownOpen(false), 150)
+                  }
+                />
+                {isCustomerDropdownOpen && customerQuery.trim() && (
+                  <div className="absolute z-20 mt-1 w-full rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 shadow-lg max-h-56 overflow-y-auto">
+                    {matchingCustomers.length === 0 ? (
+                      <p className="px-3 py-2.5 text-xs text-zinc-400">
+                        Pelanggan tidak ditemukan.
+                      </p>
+                    ) : (
+                      matchingCustomers.map((c) => (
+                        <button
+                          key={c.id}
+                          onMouseDown={() => handleSelectCustomer(c)}
+                          className="w-full flex items-center justify-between px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors duration-150"
+                        >
+                          <span>{c.name}</span>
+                          {c.loyalty_points > 0 && (
+                            <span className="text-[10px] font-semibold text-lco-mustard">
+                              {c.loyalty_points} poin
+                            </span>
+                          )}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* ── TAMBAHAN (Fase 2: notifikasi poin loyalitas) ── Muncul kalau
+              pelanggan terpilih punya poin, dan belum dipakai/ditutup. */}
+          {selectedCustomer &&
+            selectedCustomer.loyalty_points > 0 &&
+            !usePoints &&
+            !isLoyaltyNoticeDismissed && (
+              <div className="flex items-center gap-3 rounded-md border border-lco-mustard/30 bg-lco-mustard/10 px-3 py-2 text-xs text-zinc-700 dark:text-zinc-300">
+                <Sparkles className="w-4 h-4 shrink-0 text-lco-mustard" />
+                <span className="flex-1">
+                  <strong>{selectedCustomer.name}</strong> punya{" "}
+                  <strong>{selectedCustomer.loyalty_points} poin</strong>{" "}
+                  loyalitas — bisa dipakai sebagai potongan harga.
+                </span>
+                <button
+                  onClick={() => setUsePoints(true)}
+                  className="shrink-0 rounded-md bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 px-2.5 py-1 text-[11px] font-semibold text-white"
+                >
+                  Gunakan Poin
+                </button>
+                <button
+                  onClick={() => setIsLoyaltyNoticeDismissed(true)}
+                  className="shrink-0 text-[11px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                >
+                  Nanti saja
+                </button>
+              </div>
+            )}
+          {usePoints && selectedCustomer && (
+            <div className="flex items-center gap-3 rounded-md border border-lco-teal/30 bg-lco-teal/10 px-3 py-2 text-xs text-zinc-700 dark:text-zinc-300">
+              <Sparkles className="w-4 h-4 shrink-0 text-lco-teal" />
+              <span className="flex-1">
+                Memakai <strong>{pointsBeingUsed} poin</strong> ={" "}
+                <strong>{formatRupiah(discount)}</strong> potongan.
+              </span>
+              <button
+                onClick={() => setUsePoints(false)}
+                className="shrink-0 text-[11px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+              >
+                Batalkan
+              </button>
+            </div>
+          )}
+
           <div className="relative flex items-center gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-400" />
@@ -660,6 +1037,14 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
               className="shrink-0 flex items-center justify-center w-10 h-10 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-500 hover:border-lco-teal hover:text-lco-teal transition-colors duration-150"
             >
               <Camera className="w-4 h-4" />
+            </button>
+            {/* ── TAMBAHAN (Fase 2: Biaya Tambahan) ── */}
+            <button
+              onClick={() => setIsBiayaTambahanModalOpen(true)}
+              title="Biaya Tambahan"
+              className="shrink-0 flex items-center justify-center w-10 h-10 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-500 hover:border-lco-mustard hover:text-lco-mustard transition-colors duration-150"
+            >
+              <PackagePlus className="w-4 h-4" />
             </button>
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
@@ -1136,6 +1521,80 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
         onScan={handleBarcodeScanned}
         feedback={scanFeedback}
       />
+
+      {/* ── TAMBAHAN (Fase 2: Biaya Tambahan) ── Daftar produk bertipe Jasa
+          (is_service) — lihat catatan di deklarasi `serviceProducts` di atas
+          untuk kenapa ini tidak butuh tabel/migration baru. Klik satu item
+          langsung menambahkannya ke keranjang (qty 1, bisa diubah di panel
+          keranjang seperti produk biasa) lalu modal ini otomatis tertutup —
+          sama seperti "pilih item -> Simpan" di flow yang diminta. */}
+      {isBiayaTambahanModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-xl bg-white p-6 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800">
+            <div className="mb-1 flex items-center justify-between">
+              <h3 className="text-base font-semibold flex items-center gap-2">
+                <PackagePlus className="h-4 w-4 text-lco-mustard" />
+                Biaya Tambahan
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsBiayaTambahanModalOpen(false)}
+                className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors duration-150"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mb-4 text-xs text-zinc-500 dark:text-zinc-400">
+              Pilih item non-produk untuk ditambahkan ke tagihan.
+            </p>
+
+            {serviceProducts.length === 0 ? (
+              <p className="rounded-md border border-dashed border-zinc-300 dark:border-zinc-700 px-3 py-4 text-center text-xs text-zinc-400">
+                Belum ada item Biaya Tambahan. Tambahkan produk baru di menu
+                Produk dan tandai tipenya sebagai <strong>Jasa</strong> (mis.
+                &quot;Kantong Kresek&quot;, &quot;Ongkos Kirim&quot;).
+              </p>
+            ) : (
+              <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
+                {serviceProducts.map((product) => {
+                  const inCart = cart.find(
+                    (item) => item.product.id === product.id,
+                  );
+                  return (
+                    <button
+                      key={product.id}
+                      onClick={() => {
+                        setCart((prev) => addToCart(prev, product));
+                      }}
+                      className="flex items-center justify-between rounded-md border border-zinc-200 dark:border-zinc-800 px-3 py-2.5 text-left hover:border-lco-mustard transition-colors duration-150"
+                    >
+                      <span className="text-sm font-medium">
+                        {product.name}
+                        {inCart && (
+                          <span className="ml-2 rounded bg-lco-mustard/20 px-1.5 py-0.5 text-[10px] font-bold text-lco-mustard">
+                            {inCart.qty}x di keranjang
+                          </span>
+                        )}
+                      </span>
+                      <span className="font-mono text-sm text-zinc-500">
+                        {formatRupiah(product.sell_price)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setIsBiayaTambahanModalOpen(false)}
+              className="mt-5 w-full rounded-md bg-lco-green px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-lco-green-hover"
+            >
+              Simpan
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import {
   X,
   Wallet,
   Building2,
+  CreditCard,
   QrCode,
   CalendarClock,
   CheckCircle2,
@@ -47,12 +48,22 @@ import Toast from "@/app/components/ui/Toast";
 // punya dependency RUNTIME ke printLogic.ts — lihat catatan di atas soal
 // `import type` ReceiptData). Kalau labelnya diubah di printLogic.ts, ubah
 // juga di sini supaya preview & hasil cetak tetap sama persis.
+// ── PERUBAHAN (Fase 3: relabel metode pembayaran) ── Sebelumnya "Transfer
+// Bank" / "QRIS" terpisah. Flow yang diminta menyebut 3 metode utama: Tunai,
+// Digital (QRIS/e-wallet), Debit/Kredit. Value ENUM di database (CASH/
+// BANK_TRANSFER/QRIS/TEMPO, lihat schema.sql) SENGAJA TIDAK diubah — supaya
+// tidak perlu migration baru & tidak menyentuh RPC create_transaction/
+// laporan yang sudah bergantung pada value-value itu. Yang berubah CUMA
+// label & ikon yang tampil ke kasir. Harus tetap sama persis dengan
+// METHOD_LABELS di lib/pos/printLogic.ts (lihat catatan di file itu).
+// TEMPO (piutang) tetap apa adanya — fitur kredit toko yang beda konsep dari
+// 3 metode pembayaran langsung, jadi dipertahankan sebagai pilihan ke-4.
 const PREVIEW_METHOD_LABELS: Record<string, string> = {
   tunai: "Tunai",
   CASH: "Tunai",
-  transfer: "Transfer Bank",
-  BANK_TRANSFER: "Transfer Bank",
-  QRIS: "QRIS",
+  transfer: "Debit/Kredit",
+  BANK_TRANSFER: "Debit/Kredit",
+  QRIS: "Digital",
   TEMPO: "Tempo / Piutang",
 };
 
@@ -128,8 +139,8 @@ const METHODS: {
   icon: typeof Wallet;
 }[] = [
   { value: "CASH", label: "Tunai", icon: Wallet },
-  { value: "BANK_TRANSFER", label: "Transfer Bank", icon: Building2 },
-  { value: "QRIS", label: "QRIS", icon: QrCode },
+  { value: "QRIS", label: "Digital", icon: QrCode },
+  { value: "BANK_TRANSFER", label: "Debit/Kredit", icon: CreditCard },
   { value: "TEMPO", label: "Tempo / Piutang", icon: CalendarClock },
 ];
 
@@ -274,7 +285,8 @@ export default function PaymentModal({
     autoPrintedRef.current = true;
     onPrint();
     setPrintToastVisible(true);
-    if (printToastTimeoutRef.current) clearTimeout(printToastTimeoutRef.current);
+    if (printToastTimeoutRef.current)
+      clearTimeout(printToastTimeoutRef.current);
     printToastTimeoutRef.current = setTimeout(() => {
       setPrintToastVisible(false);
     }, PRINT_TOAST_DURATION_MS);
@@ -283,7 +295,8 @@ export default function PaymentModal({
   // Bersihkan timer toast kalau komponen unmount selagi toast masih berjalan.
   useEffect(() => {
     return () => {
-      if (printToastTimeoutRef.current) clearTimeout(printToastTimeoutRef.current);
+      if (printToastTimeoutRef.current)
+        clearTimeout(printToastTimeoutRef.current);
     };
   }, []);
 
@@ -567,43 +580,43 @@ export default function PaymentModal({
           durationMs={PRINT_TOAST_DURATION_MS}
         />
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/30 p-4">
-        {/* ── Satu kartu menyatu: konfirmasi sukses di atas, preview struk
+          {/* ── Satu kartu menyatu: konfirmasi sukses di atas, preview struk
             (selalu putih, seperti kertas struk asli — tidak ikut dark mode)
             di tengah, lalu tombol aksi di bawah. ── */}
-        <div className="bg-white dark:bg-zinc-950 rounded-xl w-full max-w-sm border border-zinc-200 dark:border-zinc-800 flex flex-col overflow-hidden max-h-[90vh]">
-          <div className="p-6 pb-4 flex flex-col items-center text-center shrink-0">
-            <CheckCircle2 className="w-14 h-14 text-lco-green mb-3" />
-            <h2 className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-100 mb-1">
-              Pembayaran Berhasil!
-            </h2>
-            <p className="text-zinc-500 text-xs">
-              {receipt
-                ? "Struk otomatis tercetak. Kirim ke pelanggan atau lanjut ke transaksi berikutnya."
-                : "Kirim struk digital ke pelanggan atau lanjut ke transaksi berikutnya."}
-            </p>
-          </div>
-
-          {proofWarning && (
-            <div className="px-6 shrink-0">
-              <p className="mb-3 text-[11px] text-lco-mustard border border-lco-mustard/40 bg-lco-mustard/10 rounded-md px-3 py-2">
-                {proofWarning}
+          <div className="bg-white dark:bg-zinc-950 rounded-xl w-full max-w-sm border border-zinc-200 dark:border-zinc-800 flex flex-col overflow-hidden max-h-[90vh]">
+            <div className="p-6 pb-4 flex flex-col items-center text-center shrink-0">
+              <CheckCircle2 className="w-14 h-14 text-lco-green mb-3" />
+              <h2 className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-100 mb-1">
+                Pembayaran Berhasil!
+              </h2>
+              <p className="text-zinc-500 text-xs">
+                {receipt
+                  ? "Struk otomatis tercetak. Kirim ke pelanggan atau lanjut ke transaksi berikutnya."
+                  : "Kirim struk digital ke pelanggan atau lanjut ke transaksi berikutnya."}
               </p>
             </div>
-          )}
 
-          {/* ── Preview struk/nota — dipaksa bg putih & teks gelap (bg-white
-              text-zinc-800, TANPA varian dark:) apa pun tema aplikasinya,
-              supaya tampak seperti kertas struk sungguhan, bukan kartu UI. ── */}
-          {receipt && (
-            <div className="mx-6 mb-4 rounded-lg border border-zinc-200 bg-white overflow-hidden shrink-0">
-              <div className="px-4 py-2 border-b border-dashed border-zinc-300 bg-zinc-50">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400 text-center">
-                  Preview Struk
+            {proofWarning && (
+              <div className="px-6 shrink-0">
+                <p className="mb-3 text-[11px] text-lco-mustard border border-lco-mustard/40 bg-lco-mustard/10 rounded-md px-3 py-2">
+                  {proofWarning}
                 </p>
               </div>
-              <div className="max-h-[38vh] overflow-y-auto px-4 py-3">
-                <div className="font-mono text-[11px] leading-relaxed text-zinc-800">
-                  {/* ── KOREKSI (bug: preview tidak sama dengan hasil cetak) ──
+            )}
+
+            {/* ── Preview struk/nota — dipaksa bg putih & teks gelap (bg-white
+              text-zinc-800, TANPA varian dark:) apa pun tema aplikasinya,
+              supaya tampak seperti kertas struk sungguhan, bukan kartu UI. ── */}
+            {receipt && (
+              <div className="mx-6 mb-4 rounded-lg border border-zinc-200 bg-white overflow-hidden shrink-0">
+                <div className="px-4 py-2 border-b border-dashed border-zinc-300 bg-zinc-50">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400 text-center">
+                    Preview Struk
+                  </p>
+                </div>
+                <div className="max-h-[38vh] overflow-y-auto px-4 py-3">
+                  <div className="font-mono text-[11px] leading-relaxed text-zinc-800">
+                    {/* ── KOREKSI (bug: preview tidak sama dengan hasil cetak) ──
                       Sebelumnya preview langsung mulai dari No. Struk, tanpa
                       pernah menampilkan nama toko/alamat/telepon (dari
                       Pengaturan > Toko) ataupun tanggal & metode pembayaran —
@@ -613,195 +626,195 @@ export default function PaymentModal({
                       persis dengan template cetak: nama toko -> alamat ->
                       telepon -> No. Struk/Waktu/Kasir/Pelanggan/Metode ->
                       item -> total -> footer. ── */}
-                  <p className="text-center font-bold text-sm mb-0.5 text-zinc-900">
-                    {receipt.storeName || "Langitan.co"}
-                  </p>
-                  {receipt.storeAddress && (
-                    <p className="text-center text-zinc-600">
-                      {receipt.storeAddress}
+                    <p className="text-center font-bold text-sm mb-0.5 text-zinc-900">
+                      {receipt.storeName || "Langitan.co"}
                     </p>
-                  )}
-                  {receipt.storePhone && (
-                    <p className="text-center text-zinc-600 mb-1">
-                      {receipt.storePhone}
-                    </p>
-                  )}
-
-                  <div className="border-t border-dashed border-zinc-300 my-2" />
-
-                  <div className="space-y-0.5">
-                    <div className="flex justify-between">
-                      <span>No. Struk</span>
-                      <span>{receipt.receiptNo}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Waktu</span>
-                      <span>
-                        {new Date(
-                          receipt.createdAt ?? Date.now(),
-                        ).toLocaleString("id-ID", {
-                          day: "2-digit",
-                          month: "2-digit",
-                          year: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Kasir</span>
-                      <span>{receipt.cashierName ?? "-"}</span>
-                    </div>
-                    {receipt.customerName && (
-                      <div className="flex justify-between">
-                        <span>Pelanggan</span>
-                        <span>{receipt.customerName}</span>
-                      </div>
+                    {receipt.storeAddress && (
+                      <p className="text-center text-zinc-600">
+                        {receipt.storeAddress}
+                      </p>
                     )}
-                    <div className="flex justify-between">
-                      <span>Metode</span>
-                      <span>{formatMethodLabel(receipt.method)}</span>
-                    </div>
-                  </div>
+                    {receipt.storePhone && (
+                      <p className="text-center text-zinc-600 mb-1">
+                        {receipt.storePhone}
+                      </p>
+                    )}
 
-                  <div className="border-t border-dashed border-zinc-300 my-2" />
+                    <div className="border-t border-dashed border-zinc-300 my-2" />
 
-                  <div className="space-y-1.5">
-                    {(receipt.items ?? []).map((item, idx) => (
-                      <div key={idx}>
-                        <p className="truncate text-zinc-800">{item.name}</p>
-                        <div className="flex justify-between text-zinc-500">
-                          <span>
-                            {item.qty} x {formatRp(item.price)}
-                          </span>
-                          <span className="tabular-nums">
-                            {formatRp(item.price * item.qty)}
-                          </span>
-                        </div>
+                    <div className="space-y-0.5">
+                      <div className="flex justify-between">
+                        <span>No. Struk</span>
+                        <span>{receipt.receiptNo}</span>
                       </div>
-                    ))}
-                  </div>
+                      <div className="flex justify-between">
+                        <span>Waktu</span>
+                        <span>
+                          {new Date(
+                            receipt.createdAt ?? Date.now(),
+                          ).toLocaleString("id-ID", {
+                            day: "2-digit",
+                            month: "2-digit",
+                            year: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Kasir</span>
+                        <span>{receipt.cashierName ?? "-"}</span>
+                      </div>
+                      {receipt.customerName && (
+                        <div className="flex justify-between">
+                          <span>Pelanggan</span>
+                          <span>{receipt.customerName}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between">
+                        <span>Metode</span>
+                        <span>{formatMethodLabel(receipt.method)}</span>
+                      </div>
+                    </div>
 
-                  <div className="border-t border-dashed border-zinc-300 my-2" />
+                    <div className="border-t border-dashed border-zinc-300 my-2" />
 
-                  {/* ── CATATAN: beberapa field ReceiptData (discount, tax, dll)
+                    <div className="space-y-1.5">
+                      {(receipt.items ?? []).map((item, idx) => (
+                        <div key={idx}>
+                          <p className="truncate text-zinc-800">{item.name}</p>
+                          <div className="flex justify-between text-zinc-500">
+                            <span>
+                              {item.qty} x {formatRp(item.price)}
+                            </span>
+                            <span className="tabular-nums">
+                              {formatRp(item.price * item.qty)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="border-t border-dashed border-zinc-300 my-2" />
+
+                    {/* ── CATATAN: beberapa field ReceiptData (discount, tax, dll)
                       opsional di tipe aslinya, jadi dipakai dengan fallback
                       `?? 0` di sini supaya aman dari undefined, baik untuk
                       TypeScript maupun tampilan (bukan cuma kosmetik). */}
-                  <div className="space-y-1">
-                    <div className="flex justify-between">
-                      <span>Subtotal</span>
-                      <span className="tabular-nums">
-                        {formatRp(receipt.subtotal ?? 0)}
-                      </span>
-                    </div>
-                    {(receipt.discount ?? 0) > 0 && (
+                    <div className="space-y-1">
                       <div className="flex justify-between">
-                        <span>Diskon</span>
+                        <span>Subtotal</span>
                         <span className="tabular-nums">
-                          -{formatRp(receipt.discount ?? 0)}
+                          {formatRp(receipt.subtotal ?? 0)}
                         </span>
                       </div>
-                    )}
-                    {(receipt.tax ?? 0) > 0 && (
-                      <div className="flex justify-between">
-                        <span>Pajak</span>
+                      {(receipt.discount ?? 0) > 0 && (
+                        <div className="flex justify-between">
+                          <span>Diskon</span>
+                          <span className="tabular-nums">
+                            -{formatRp(receipt.discount ?? 0)}
+                          </span>
+                        </div>
+                      )}
+                      {(receipt.tax ?? 0) > 0 && (
+                        <div className="flex justify-between">
+                          <span>Pajak</span>
+                          <span className="tabular-nums">
+                            {formatRp(receipt.tax ?? 0)}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex justify-between font-semibold text-sm text-zinc-900 pt-1">
+                        <span>Total</span>
                         <span className="tabular-nums">
-                          {formatRp(receipt.tax ?? 0)}
+                          {formatRp(receipt.total ?? 0)}
                         </span>
                       </div>
-                    )}
-                    <div className="flex justify-between font-semibold text-sm text-zinc-900 pt-1">
-                      <span>Total</span>
-                      <span className="tabular-nums">
-                        {formatRp(receipt.total ?? 0)}
-                      </span>
                     </div>
-                  </div>
 
-                  <div className="border-t border-dashed border-zinc-300 my-2" />
+                    <div className="border-t border-dashed border-zinc-300 my-2" />
 
-                  <div className="space-y-1">
-                    <div className="flex justify-between">
-                      <span>Bayar</span>
-                      <span className="tabular-nums">
-                        {formatRp(receipt.paidAmount ?? 0)}
-                      </span>
+                    <div className="space-y-1">
+                      <div className="flex justify-between">
+                        <span>Bayar</span>
+                        <span className="tabular-nums">
+                          {formatRp(receipt.paidAmount ?? 0)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Kembali</span>
+                        <span className="tabular-nums">
+                          {formatRp(receipt.changeAmount ?? 0)}
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex justify-between">
-                      <span>Kembali</span>
-                      <span className="tabular-nums">
-                        {formatRp(receipt.changeAmount ?? 0)}
-                      </span>
-                    </div>
-                  </div>
 
-                  {/* ── TAMBAHAN (bug: preview tidak sama dengan hasil cetak) ──
+                    {/* ── TAMBAHAN (bug: preview tidak sama dengan hasil cetak) ──
                       Footer struk (Pengaturan > Toko > footerStruk) dulu tidak
                       pernah ditampilkan di preview, padahal selalu ada di
                       bagian bawah struk fisik. ── */}
-                  <div className="border-t border-dashed border-zinc-300 my-2" />
-                  <p className="text-center text-zinc-600">
-                    {receipt.footerText || "Terima kasih atas kunjungan Anda"}
-                  </p>
+                    <div className="border-t border-dashed border-zinc-300 my-2" />
+                    <p className="text-center text-zinc-600">
+                      {receipt.footerText || "Terima kasih atas kunjungan Anda"}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            </div>
-          )}
-
-          {/* ── Aksi: Kirim WA / Selesai (cetak sudah otomatis, lihat efek
-              isSuccess di atas — tinggal 2 tombol sesuai permintaan). ── */}
-          <div className="px-6 pb-6 pt-1 flex flex-col shrink-0">
-            {onSendWhatsApp && (
-              <div className="w-full mb-3">
-                <button
-                  type="button"
-                  onClick={handleSendWhatsApp}
-                  disabled={waStatus === "sending" || waStatus === "sent"}
-                  className="w-full flex items-center justify-center gap-2 py-3 rounded-md border border-lco-green/40 text-lco-green hover:bg-lco-green/10 text-sm font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-70"
-                >
-                  {waStatus === "sending" ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" /> Menyiapkan
-                      Gambar Struk...
-                    </>
-                  ) : waStatus === "sent" ? (
-                    <>
-                      <CheckCircle2 className="w-4 h-4" />
-                      {waMethod === "web-share"
-                        ? "Terkirim ke Sheet Share"
-                        : "Gambar Terunduh, WhatsApp Terbuka"}
-                    </>
-                  ) : (
-                    <>
-                      <MessageCircle className="w-4 h-4" /> Kirim Struk via
-                      WhatsApp
-                    </>
-                  )}
-                </button>
-                {waStatus === "sent" && waMethod === "download-fallback" && (
-                  <p className="mt-2 text-[11px] text-zinc-500 text-left">
-                    Lampirkan gambar struk yang baru terunduh ke chat WhatsApp
-                    secara manual.
-                  </p>
-                )}
-                {waStatus === "error" && waError && (
-                  <p className="mt-2 text-[11px] text-lco-coral text-left">
-                    {waError}
-                  </p>
-                )}
               </div>
             )}
 
-            <button
-              type="button"
-              onClick={handleFinishTransaction}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-sm font-semibold transition-colors duration-150"
-            >
-              Selesai <ArrowRight className="w-4 h-4" />
-            </button>
+            {/* ── Aksi: Kirim WA / Selesai (cetak sudah otomatis, lihat efek
+              isSuccess di atas — tinggal 2 tombol sesuai permintaan). ── */}
+            <div className="px-6 pb-6 pt-1 flex flex-col shrink-0">
+              {onSendWhatsApp && (
+                <div className="w-full mb-3">
+                  <button
+                    type="button"
+                    onClick={handleSendWhatsApp}
+                    disabled={waStatus === "sending" || waStatus === "sent"}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-md border border-lco-green/40 text-lco-green hover:bg-lco-green/10 text-sm font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {waStatus === "sending" ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" /> Menyiapkan
+                        Gambar Struk...
+                      </>
+                    ) : waStatus === "sent" ? (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        {waMethod === "web-share"
+                          ? "Terkirim ke Sheet Share"
+                          : "Gambar Terunduh, WhatsApp Terbuka"}
+                      </>
+                    ) : (
+                      <>
+                        <MessageCircle className="w-4 h-4" /> Kirim Struk via
+                        WhatsApp
+                      </>
+                    )}
+                  </button>
+                  {waStatus === "sent" && waMethod === "download-fallback" && (
+                    <p className="mt-2 text-[11px] text-zinc-500 text-left">
+                      Lampirkan gambar struk yang baru terunduh ke chat WhatsApp
+                      secara manual.
+                    </p>
+                  )}
+                  {waStatus === "error" && waError && (
+                    <p className="mt-2 text-[11px] text-lco-coral text-left">
+                      {waError}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleFinishTransaction}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-sm font-semibold transition-colors duration-150"
+              >
+                Selesai <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
           </div>
-        </div>
         </div>
       </>
     );
