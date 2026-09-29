@@ -4,7 +4,7 @@
 // akhiran kecil (mis. ".co") memakai font Inter. Hasilnya dipakai DUA jalur
 // cetak, supaya tampilannya sama persis:
 //   1. Jalur browser (window.print, printThermalReceipt): `dataUrl` (PNG
-//      hitam-putih) dipasang sebagai <img> di HTML struk.
+//      resolusi tinggi, halus/anti-aliasing) dipasang sebagai <img> di HTML struk.
 //   2. Jalur Bluetooth/USB (ESC/POS mentah, buildReceiptBytes): `raster`
 //      (perintah GS v 0, bitmap 1-bit) ditulis langsung ke printer.
 // Kenapa digambar ke canvas, bukan teks biasa: printer ESC/POS tidak punya
@@ -35,12 +35,13 @@ export interface ReceiptBrand {
 }
 
 const PAPER_DOTS = 384; // kelipatan 8 (1 byte = 8 titik)
+const PREVIEW_SCALE = 3; // preview HTML digambar 3x (1152 px) supaya halus
 const BAND_HEIGHT = 24; // pita kecil = aman untuk buffer printer murah/BLE
 const LOGO_SRC = "/StrukIcon.png";
 const LOGO_MAX_WIDTH = 200;
-const LOGO_MAX_HEIGHT = 96;
-const MAIN_SIZE = 40; // "Langitan" — tebal
-const SUFFIX_SIZE = 22; // ".co" — kecil
+const LOGO_MAX_HEIGHT = 75;
+const MAIN_SIZE = 35; // "Langitan" — tebal
+const SUFFIX_SIZE = 35; // ".co" — kecil
 const SIDE_MARGIN = 12;
 const THRESHOLD = 170; // < ini = hitam. Agak tinggi supaya huruf tebal tidak menipis.
 const FALLBACK_NAME = "Langitan.co";
@@ -94,8 +95,11 @@ export async function loadReceiptBrand(
   if (cached) return cached;
 
   try {
-    const logo = await loadImage(LOGO_SRC);
-    if (!logo || !logo.naturalWidth || !logo.naturalHeight) return null;
+    // Ikon opsional: kalau gagal dimuat, tulisan merek tetap dicetak (tanpa ikon).
+    const loaded = await loadImage(LOGO_SRC);
+    const logo =
+      loaded && loaded.naturalWidth && loaded.naturalHeight ? loaded : null;
+    if (!logo) console.warn(`[receiptBrand] ${LOGO_SRC} tidak termuat, struk dicetak tanpa ikon`);
 
     // Pastikan Inter benar-benar termuat sebelum menggambar (canvas tidak
     // menunggu font sendiri — tanpa ini hasil pertama bisa jatuh ke font cadangan).
@@ -127,14 +131,16 @@ export async function loadReceiptBrand(
     const suffixSize = Math.round(SUFFIX_SIZE * scale);
 
     // ── Tata letak ──
-    const logoScale = Math.min(
-      LOGO_MAX_WIDTH / logo.naturalWidth,
-      LOGO_MAX_HEIGHT / logo.naturalHeight,
-    );
-    const logoW = Math.round(logo.naturalWidth * logoScale);
-    const logoH = Math.round(logo.naturalHeight * logoScale);
+    const logoScale = logo
+      ? Math.min(
+          LOGO_MAX_WIDTH / logo.naturalWidth,
+          LOGO_MAX_HEIGHT / logo.naturalHeight,
+        )
+      : 0;
+    const logoW = logo ? Math.round(logo.naturalWidth * logoScale) : 0;
+    const logoH = logo ? Math.round(logo.naturalHeight * logoScale) : 0;
     const padTop = 6;
-    const gap = 10;
+    const gap = logo ? 10 : 0;
     const ascent = Math.round(mainSize * 0.78);
     const descent = Math.round(mainSize * 0.26); // ruang untuk huruf "g", "y", dst.
     const padBottom = 6;
@@ -142,33 +148,50 @@ export async function loadReceiptBrand(
     // Tinggi dibulatkan ke kelipatan pita supaya tiap pita penuh (sisa = putih).
     const height = Math.ceil(contentHeight / BAND_HEIGHT) * BAND_HEIGHT;
 
+    // Satu fungsi gambar untuk dua kanvas (koordinat logis 384 x height):
+    // kanvas kecil -> bitmap 1-bit printer, kanvas besar -> preview halus.
+    const drawBrand = (c: CanvasRenderingContext2D) => {
+      c.fillStyle = "#fff"; // latar putih: meratakan transparansi PNG
+      c.fillRect(0, 0, PAPER_DOTS, height);
+      if (logo) {
+        c.imageSmoothingEnabled = true;
+        c.imageSmoothingQuality = "high";
+        c.drawImage(logo, Math.round((PAPER_DOTS - logoW) / 2), padTop, logoW, logoH);
+      }
+      c.fillStyle = "#000";
+      c.textBaseline = "alphabetic";
+      c.textAlign = "left";
+      c.font = `800 ${mainSize}px ${family}`;
+      const mainWidth = c.measureText(main).width;
+      c.font = `500 ${suffixSize}px ${family}`;
+      const suffixWidth = suffix ? c.measureText(suffix).width : 0;
+      const startX = Math.round((PAPER_DOTS - (mainWidth + suffixWidth)) / 2);
+      const baselineY = padTop + logoH + gap + ascent;
+      c.font = `800 ${mainSize}px ${family}`;
+      c.fillText(main, startX, baselineY);
+      if (suffix) {
+        c.font = `500 ${suffixSize}px ${family}`;
+        c.fillText(suffix, startX + mainWidth, baselineY);
+      }
+    };
+
+    // ── Preview / jalur HTML: resolusi tinggi + anti-aliasing (halus, solid) ──
+    const hiCanvas = document.createElement("canvas");
+    hiCanvas.width = PAPER_DOTS * PREVIEW_SCALE;
+    hiCanvas.height = height * PREVIEW_SCALE;
+    const hiCtx = hiCanvas.getContext("2d");
+    if (!hiCtx) return null;
+    hiCtx.scale(PREVIEW_SCALE, PREVIEW_SCALE);
+    drawBrand(hiCtx);
+    const dataUrl = hiCanvas.toDataURL("image/png");
+
+    // ── Jalur printer: 384 titik, dipaksa hitam-putih 1-bit ──
     const canvas = document.createElement("canvas");
     canvas.width = PAPER_DOTS;
     canvas.height = height;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return null;
-
-    ctx.fillStyle = "#fff"; // latar putih: meratakan transparansi PNG
-    ctx.fillRect(0, 0, PAPER_DOTS, height);
-    ctx.drawImage(logo, Math.round((PAPER_DOTS - logoW) / 2), padTop, logoW, logoH);
-
-    ctx.fillStyle = "#000";
-    ctx.textBaseline = "alphabetic";
-    ctx.textAlign = "left";
-    ctx.font = `800 ${mainSize}px ${family}`;
-    const mainWidth = ctx.measureText(main).width;
-    ctx.font = `500 ${suffixSize}px ${family}`;
-    const suffixWidth = suffix ? ctx.measureText(suffix).width : 0;
-    const startX = Math.round((PAPER_DOTS - (mainWidth + suffixWidth)) / 2);
-    const baselineY = padTop + logoH + gap + ascent;
-    ctx.font = `800 ${mainSize}px ${family}`;
-    ctx.fillText(main, startX, baselineY);
-    if (suffix) {
-      ctx.font = `500 ${suffixSize}px ${family}`;
-      ctx.fillText(suffix, startX + mainWidth, baselineY);
-    }
-
-    // ── Hitam-putih 1-bit: dipakai untuk PNG (HTML) DAN bitmap printer ──
+    drawBrand(ctx);
     const bytesPerRow = PAPER_DOTS / 8;
     const image = ctx.getImageData(0, 0, PAPER_DOTS, height);
     const px = image.data;
@@ -177,15 +200,9 @@ export async function loadReceiptBrand(
       for (let x = 0; x < PAPER_DOTS; x++) {
         const i = (y * PAPER_DOTS + x) * 4;
         const luminance = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
-        const isBlack = luminance < THRESHOLD;
-        const value = isBlack ? 0 : 255;
-        px[i] = px[i + 1] = px[i + 2] = value;
-        px[i + 3] = 255;
-        if (isBlack) packed[y * bytesPerRow + (x >> 3)] |= 0x80 >> (x & 7);
+        if (luminance < THRESHOLD) packed[y * bytesPerRow + (x >> 3)] |= 0x80 >> (x & 7);
       }
     }
-    ctx.putImageData(image, 0, 0);
-    const dataUrl = canvas.toDataURL("image/png");
 
     // GS v 0 m xL xH yL yH d... — satu perintah per pita 24 baris.
     const commands: number[] = [];
