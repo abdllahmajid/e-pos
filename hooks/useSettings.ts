@@ -42,6 +42,12 @@ export interface Settings {
   paperThermal: "58mm" | "80mm";
   /** Dipakai mulai T-10 (kontrol tampil/sembunyi harga modal, permission `harga_modal`). */
   showCostPrice: boolean;
+  /** Tampilkan QR promosi di bagian paling bawah struk penjualan (thermal). */
+  promoEnabled: boolean;
+  /** Link tujuan QR (mis. Linktree). Kosong/tidak valid -> QR tidak dicetak. */
+  promoUrl: string;
+  /** Teks ajakan di atas QR. Kosong -> "Scan untuk ikuti kami". */
+  promoText: string;
 }
 
 // Default fallback — SENGAJA persis sama dengan seed di migration 005_settings.sql.
@@ -61,6 +67,9 @@ export const DEFAULT_SETTINGS: Settings = {
   paperNota: "A6",
   paperThermal: "80mm",
   showCostPrice: false,
+  promoEnabled: false,
+  promoUrl: "",
+  promoText: "Scan untuk ikuti kami",
 };
 
 // Pemetaan key DB (snake_case, sesuai migration) -> field Settings (camelCase).
@@ -78,6 +87,9 @@ const KEY_MAP: Record<keyof Settings, string> = {
   paperNota: "paper_nota",
   paperThermal: "paper_thermal",
   showCostPrice: "show_cost_price",
+  promoEnabled: "promo_enabled",
+  promoUrl: "promo_url",
+  promoText: "promo_text",
 };
 
 function parseSettings(rows: SettingRow[]): Settings {
@@ -152,14 +164,19 @@ export function useSettings(): UseSettingsResult {
         data: { user },
       } = await supabase.auth.getUser();
 
-      const { error: updateError } = await supabase
-        .from("settings")
-        .update({
+      // upsert (bukan update): kalau key belum ada di DB (mis. migration 034
+      // belum dijalankan), baris dibuat, bukan diam-diam "berhasil" tanpa
+      // mengubah apa pun. `description` tidak ikut dikirim, jadi baris lama
+      // tidak kehilangan keterangannya. RLS tetap admin-only (insert & update).
+      const { error: updateError } = await supabase.from("settings").upsert(
+        {
+          key: dbKey,
           value,
           updated_at: new Date().toISOString(),
           updated_by: user?.id ?? null,
-        })
-        .eq("key", dbKey);
+        },
+        { onConflict: "key" },
+      );
 
       if (updateError) {
         throw new Error(

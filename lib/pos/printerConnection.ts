@@ -132,6 +132,7 @@ function getNav(): NavigatorWithPrinterApis {
 // identik dengan struk HTML (window.print), tidak ditulis ulang dua kali.
 import type { ReceiptData } from "./printLogic";
 import type { ReceiptBrand } from "./receiptBrand";
+import { DEFAULT_PROMO_TEXT, type ReceiptQr } from "./receiptQr";
 import { formatMethod, formatMoney } from "./printLogic";
 
 export function isWebBluetoothSupported(): boolean {
@@ -307,6 +308,7 @@ function buildShiftOpenBytes(
 export function buildReceiptBytes(
   data: ReceiptData,
   brand?: ReceiptBrand | null,
+  qr?: ReceiptQr | null,
 ): Uint8Array {
   // Struk Buka Kasir punya layout sendiri — lihat buildShiftOpenBytes() di atas.
   if (data.kind === "shift_open") return buildShiftOpenBytes(data, brand);
@@ -392,6 +394,18 @@ export function buildReceiptBytes(
   } catch {
     // Nomor struk mengandung karakter di luar dukungan — lewati barcode,
     // jangan sampai gagal cetak seluruh struk gara-gara ini.
+  }
+
+  // ── TAMBAHAN (QR promosi) ── Paling bawah: teks ajakan lalu QR (bitmap,
+  // sudah berisi margin putih sendiri). Ada hanya kalau QR berhasil dibuat.
+  if (qr) {
+    raw(ESC, 0x61, 0x01); // tengah
+    line();
+    const promoText = data.promoText || DEFAULT_PROMO_TEXT;
+    for (let i = 0; i < promoText.length; i += RECEIPT_WIDTH) {
+      line(promoText.slice(i, i + RECEIPT_WIDTH));
+    }
+    for (let i = 0; i < qr.raster.length; i++) bytes.push(qr.raster[i]);
   }
 
   raw(0x0a, 0x0a, 0x0a); // feed sebelum potong

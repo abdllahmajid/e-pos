@@ -1,25 +1,31 @@
 // ── TAMBAHAN (logo + tulisan merek di struk thermal) ──────────────────────
 // Membuat "kepala struk" bergambar: ikon toko (public/StrukIcon.png) di atas,
-// lalu tulisan merek di bawahnya — bagian tebal (mis. "Langitan") dan bagian
-// akhiran kecil (mis. ".co") memakai font Inter. Hasilnya dipakai DUA jalur
-// cetak, supaya tampilannya sama persis:
+// lalu tulisan merek di bawahnya. Bagian awal (mis. "Langitan.co") tebal,
+// bagian setelah spasi (mis. " Store") normal dan miring, keduanya font Inter.
+// Hasilnya dipakai DUA jalur cetak, supaya tampilannya sama persis:
 //   1. Jalur browser (window.print, printThermalReceipt): `dataUrl` (PNG
 //      resolusi tinggi, halus/anti-aliasing) dipasang sebagai <img> di HTML struk.
 //   2. Jalur Bluetooth/USB (ESC/POS mentah, buildReceiptBytes): `raster`
 //      (perintah GS v 0, bitmap 1-bit) ditulis langsung ke printer.
 // Kenapa digambar ke canvas, bukan teks biasa: printer ESC/POS tidak punya
-// font Inter dan tidak bisa mencampur huruf tebal + kecil dalam satu baris,
+// font Inter dan tidak bisa mencampur huruf tebal + miring dalam satu baris,
 // jadi satu-satunya cara agar tulisan merek persis rancangan adalah
-// mengirimnya sebagai gambar. Jalur browser ikut memakai gambar yang sama
-// supaya font Inter tidak bergantung pada iframe cetak (yang tidak
-// mewarisi font halaman).
+// mengirimnya sebagai gambar.
+//
+// Tata letak tulisan:
+// - Kalau "Langitan.co Store" muat dalam satu baris, dicetak satu baris.
+// - Kalau tidak muat, " Store" pindah ke baris kedua (ukuran huruf TIDAK
+//   dikecilkan). Huruf baru dikecilkan kalau satu baris saja sudah terlalu lebar.
+// - Kalau nama toko tidak mengandung spasi (mis. "Langitan.co"), kata
+//   DEFAULT_SUFFIX_WORD ("Store") ditambahkan otomatis di belakangnya.
 //
 // Prasyarat:
 // - `public/StrukIcon.png` harus HITAM (atau warna gelap) di latar transparan/
 //   putih. Printer thermal hanya bisa mencetak hitam — ikon putih akan hilang.
 // - Font Inter dimuat di app/layout.tsx (next/font, variabel CSS `--font-inter`).
-// - Lebar 384 titik = kertas thermal 58mm (203 dpi). Di printer 80mm gambar
-//   tetap tercetak di tengah (ESC a 1), hanya lebih sempit dari kertas.
+//   Kalau font italic Inter tidak dimuat, browser membuat miringnya sendiri
+//   (oblique buatan); hasilnya tetap miring.
+// - Lebar 384 titik = kertas thermal 58mm (203 dpi).
 //
 // Kalau ikon belum ada / gagal dimuat, loadReceiptBrand() mengembalikan null
 // dan struk kembali ke tampilan lama (nama toko sebagai teks) — cetak tidak
@@ -34,24 +40,39 @@ export interface ReceiptBrand {
   raster: Uint8Array;
 }
 
+type FontStyle = "normal" | "italic";
+
 const PAPER_DOTS = 384; // kelipatan 8 (1 byte = 8 titik)
 const PREVIEW_SCALE = 3; // preview HTML digambar 3x (1152 px) supaya halus
 const BAND_HEIGHT = 24; // pita kecil = aman untuk buffer printer murah/BLE
 const LOGO_SRC = "/StrukIcon.png";
 const LOGO_MAX_WIDTH = 200;
 const LOGO_MAX_HEIGHT = 75;
-const MAIN_SIZE = 35; // "Langitan" — tebal
-const SUFFIX_SIZE = 35; // ".co" — kecil
+const MAIN_SIZE = 35; // "Langitan.co"
+const SUFFIX_SIZE = 35; // " Store"
+const MAIN_WEIGHT = 800; // bagian awal: tebal
+const SUFFIX_WEIGHT = 500; // bagian setelah spasi: normal
+const MAIN_STYLE: FontStyle = "normal";
+const SUFFIX_STYLE: FontStyle = "italic"; // bagian setelah spasi: miring
 const SIDE_MARGIN = 12;
+const LINE_GAP = 4; // jarak antar baris kalau tulisan dipecah dua baris
 const THRESHOLD = 170; // < ini = hitam. Agak tinggi supaya huruf tebal tidak menipis.
-const FALLBACK_NAME = "Langitan.co";
+const FALLBACK_NAME = "Langitan.co Store";
+const DEFAULT_SUFFIX_WORD = "Store"; // ditambahkan kalau nama toko tanpa spasi
 
 const cache = new Map<string, ReceiptBrand>();
 
-/** "Langitan.co" -> { main: "Langitan", suffix: ".co" }. Tanpa akhiran titik -> semua tebal. */
+interface Part {
+  text: string;
+  weight: number;
+  style: FontStyle;
+  baseSize: number;
+}
+
+/** "Langitan.co Store" -> { main: "Langitan.co", suffix: " Store" }. Tanpa spasi -> semua main. */
 function splitWordmark(storeName: string): { main: string; suffix: string } {
   const name = storeName.trim() || FALLBACK_NAME;
-  const match = name.match(/^(.+?)(\.[A-Za-z]{2,4})$/);
+  const match = name.match(/^(\S+)(\s.+)$/);
   return match
     ? { main: match[1], suffix: match[2] }
     : { main: name, suffix: "" };
@@ -89,7 +110,12 @@ export async function loadReceiptBrand(
 ): Promise<ReceiptBrand | null> {
   if (typeof document === "undefined") return null;
 
-  const { main, suffix } = splitWordmark(storeName ?? "");
+  // Nama tanpa spasi (mis. "Langitan.co") -> tambahkan " Store" di belakangnya.
+  const rawName = (storeName ?? "").trim();
+  const { main, suffix } = splitWordmark(
+    rawName && !/\s/.test(rawName) ? `${rawName} ${DEFAULT_SUFFIX_WORD}` : rawName,
+  );
+
   const cacheKey = `${main}|${suffix}`;
   const cached = cache.get(cacheKey);
   if (cached) return cached;
@@ -106,29 +132,55 @@ export async function loadReceiptBrand(
     const family = interFamily();
     try {
       await Promise.all([
-        document.fonts.load(`800 ${MAIN_SIZE}px ${family}`),
-        document.fonts.load(`500 ${SUFFIX_SIZE}px ${family}`),
+        document.fonts.load(`${MAIN_STYLE} ${MAIN_WEIGHT} ${MAIN_SIZE}px ${family}`),
+        document.fonts.load(`${SUFFIX_STYLE} ${SUFFIX_WEIGHT} ${SUFFIX_SIZE}px ${family}`),
       ]);
     } catch {
       // Font gagal dimuat -> tetap gambar dengan font cadangan, jangan batalkan cetak.
     }
 
-    // ── Ukur tulisan merek (kecilkan proporsional kalau terlalu lebar) ──
+    // ── Ukur tulisan merek ──
     const measureCtx = document.createElement("canvas").getContext("2d");
     if (!measureCtx) return null;
-    const measure = (scale: number) => {
-      measureCtx.font = `800 ${MAIN_SIZE * scale}px ${family}`;
-      const mainWidth = measureCtx.measureText(main).width;
-      measureCtx.font = `500 ${SUFFIX_SIZE * scale}px ${family}`;
-      const suffixWidth = suffix ? measureCtx.measureText(suffix).width : 0;
-      return mainWidth + suffixWidth;
+    const measureLine = (parts: Part[], scale: number) =>
+      parts.reduce((sum, p) => {
+        measureCtx.font = `${p.style} ${p.weight} ${p.baseSize * scale}px ${family}`;
+        return sum + measureCtx.measureText(p.text).width;
+      }, 0);
+
+    const mainPart: Part = {
+      text: main,
+      weight: MAIN_WEIGHT,
+      style: MAIN_STYLE,
+      baseSize: MAIN_SIZE,
     };
-    let scale = 1;
+    const suffixPart = (text: string): Part => ({
+      text,
+      weight: SUFFIX_WEIGHT,
+      style: SUFFIX_STYLE,
+      baseSize: SUFFIX_SIZE,
+    });
     const maxTextWidth = PAPER_DOTS - SIDE_MARGIN * 2;
-    const fullWidth = measure(1);
-    if (fullWidth > maxTextWidth) scale = maxTextWidth / fullWidth;
-    const mainSize = Math.round(MAIN_SIZE * scale);
-    const suffixSize = Math.round(SUFFIX_SIZE * scale);
+
+    // Coba satu baris dulu. Kalau tidak muat, pecah: suffix pindah ke baris 2.
+    let lines: Part[][] = [[mainPart]];
+    if (suffix) {
+      const oneLine: Part[] = [mainPart, suffixPart(suffix)];
+      if (measureLine(oneLine, 1) <= maxTextWidth) {
+        lines = [oneLine];
+      } else {
+        lines = [[mainPart], [suffixPart(suffix.trim())]];
+      }
+    }
+
+    // Kecilkan hanya kalau ada baris yang masih terlalu lebar.
+    let scale = 1;
+    for (const line of lines) {
+      const w = measureLine(line, 1);
+      if (w > maxTextWidth) scale = Math.min(scale, maxTextWidth / w);
+    }
+    const sized = (p: Part) => Math.round(p.baseSize * scale);
+    const baseTextSize = Math.round(Math.max(MAIN_SIZE, SUFFIX_SIZE) * scale);
 
     // ── Tata letak ──
     const logoScale = logo
@@ -141,10 +193,13 @@ export async function loadReceiptBrand(
     const logoH = logo ? Math.round(logo.naturalHeight * logoScale) : 0;
     const padTop = 6;
     const gap = logo ? 10 : 0;
-    const ascent = Math.round(mainSize * 0.78);
-    const descent = Math.round(mainSize * 0.26); // ruang untuk huruf "g", "y", dst.
+    const ascent = Math.round(baseTextSize * 0.78);
+    const descent = Math.round(baseTextSize * 0.26); // ruang untuk huruf "g", "y", dst.
+    const lineHeight = ascent + descent;
     const padBottom = 6;
-    const contentHeight = padTop + logoH + gap + ascent + descent + padBottom;
+    const textBlockHeight =
+      lines.length * lineHeight + (lines.length - 1) * LINE_GAP;
+    const contentHeight = padTop + logoH + gap + textBlockHeight + padBottom;
     // Tinggi dibulatkan ke kelipatan pita supaya tiap pita penuh (sisa = putih).
     const height = Math.ceil(contentHeight / BAND_HEIGHT) * BAND_HEIGHT;
 
@@ -161,18 +216,22 @@ export async function loadReceiptBrand(
       c.fillStyle = "#000";
       c.textBaseline = "alphabetic";
       c.textAlign = "left";
-      c.font = `800 ${mainSize}px ${family}`;
-      const mainWidth = c.measureText(main).width;
-      c.font = `500 ${suffixSize}px ${family}`;
-      const suffixWidth = suffix ? c.measureText(suffix).width : 0;
-      const startX = Math.round((PAPER_DOTS - (mainWidth + suffixWidth)) / 2);
-      const baselineY = padTop + logoH + gap + ascent;
-      c.font = `800 ${mainSize}px ${family}`;
-      c.fillText(main, startX, baselineY);
-      if (suffix) {
-        c.font = `500 ${suffixSize}px ${family}`;
-        c.fillText(suffix, startX + mainWidth, baselineY);
-      }
+
+      lines.forEach((line, index) => {
+        const widths = line.map((p) => {
+          c.font = `${p.style} ${p.weight} ${sized(p)}px ${family}`;
+          return c.measureText(p.text).width;
+        });
+        const totalWidth = widths.reduce((a, b) => a + b, 0);
+        let x = Math.round((PAPER_DOTS - totalWidth) / 2);
+        const baselineY =
+          padTop + logoH + gap + ascent + index * (lineHeight + LINE_GAP);
+        line.forEach((p, i) => {
+          c.font = `${p.style} ${p.weight} ${sized(p)}px ${family}`;
+          c.fillText(p.text, x, baselineY);
+          x += widths[i];
+        });
+      });
     };
 
     // ── Preview / jalur HTML: resolusi tinggi + anti-aliasing (halus, solid) ──

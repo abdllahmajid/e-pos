@@ -25,6 +25,7 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, CheckCircle2, Loader2, Save } from "lucide-react";
 import { useSettings, type Settings } from "@/hooks/useSettings";
+import { normalizePromoUrl } from "@/lib/pos/receiptQr";
 
 const inputClass =
   "w-full rounded-md border border-zinc-300 px-3 py-2.5 text-sm outline-none transition-colors duration-150 focus:border-lco-teal focus:ring-2 focus:ring-lco-teal disabled:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:disabled:bg-zinc-800";
@@ -70,9 +71,30 @@ export default function PengaturanTokoTab() {
       // (bukan `form` sebelum submit), supaya perubahan dari sesi lain yang
       // sempat masuk lewat refetch juga ikut terhitung "berubah" kalau perlu
       // ditimpa ulang.
-      const changedFields = (Object.keys(form) as (keyof Settings)[]).filter(
-        (field) => form[field] !== settings[field],
-      );
+      // Link promosi: dirapikan dulu ("linktr.ee/x" -> "https://linktr.ee/x").
+      // Link yang diisi tapi tidak valid ditolak SEBELUM menyimpan apa pun,
+      // supaya admin tahu sekarang, bukan baru sadar saat QR tidak keluar.
+      // Kalau promosi dimatikan, isian link tidak divalidasi.
+      let finalForm = form;
+      const rawPromoUrl = form.promoUrl.trim();
+      if (form.promoEnabled && rawPromoUrl) {
+        const normalized = normalizePromoUrl(rawPromoUrl);
+        if (!normalized) {
+          setSaveError(
+            "Link promosi tidak valid. Contoh: https://linktr.ee/langitan.co",
+          );
+          setIsSaving(false);
+          return;
+        }
+        finalForm = { ...form, promoUrl: normalized };
+        setForm(finalForm);
+      } else if (rawPromoUrl !== form.promoUrl) {
+        finalForm = { ...form, promoUrl: rawPromoUrl };
+      }
+
+      const changedFields = (
+        Object.keys(finalForm) as (keyof Settings)[]
+      ).filter((field) => finalForm[field] !== settings[field]);
 
       if (changedFields.length === 0) {
         setIsSaving(false);
@@ -81,7 +103,7 @@ export default function PengaturanTokoTab() {
 
       for (const field of changedFields) {
         // eslint-disable-next-line no-await-in-loop
-        await updateSetting(field, form[field]);
+        await updateSetting(field, finalForm[field]);
       }
 
       setSaveSuccess(true);
@@ -305,6 +327,66 @@ export default function PengaturanTokoTab() {
             </select>
           </div>
         </div>
+      </div>
+
+      {/* ── Promosi di struk ── */}
+      <div>
+        <h3 className="mb-3 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+          Promosi di Struk
+        </h3>
+        <label className="flex cursor-pointer items-center gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/40">
+          <input
+            type="checkbox"
+            checked={form.promoEnabled}
+            onChange={(e) => updateField("promoEnabled", e.target.checked)}
+            disabled={isSaving}
+            className="h-4 w-4 rounded border-zinc-300 text-lco-green focus:ring-lco-teal"
+          />
+          <div>
+            <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+              Tampilkan promosi di struk
+            </p>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              Mencetak teks ajakan dan QR di bagian paling bawah struk
+              penjualan (tidak di struk Buka Kasir).
+            </p>
+          </div>
+        </label>
+
+        {form.promoEnabled && (
+          <div className="mt-3 grid gap-4 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className={labelClass}>Link Promosi (untuk QR)</label>
+              <input
+                type="text"
+                inputMode="url"
+                value={form.promoUrl}
+                onChange={(e) => updateField("promoUrl", e.target.value)}
+                disabled={isSaving}
+                placeholder="mis. linktr.ee/langitan.co"
+                className={inputClass}
+              />
+              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                Pakai link pendek (Linktree / link-in-bio) supaya QR lebih
+                besar dan mudah discan di kertas 58mm. Link boleh diganti
+                kapan saja; berlaku di struk berikutnya. Kalau kosong atau
+                tidak valid, QR tidak dicetak.
+              </p>
+            </div>
+            <div className="sm:col-span-2">
+              <label className={labelClass}>Teks Ajakan</label>
+              <input
+                type="text"
+                value={form.promoText}
+                onChange={(e) => updateField("promoText", e.target.value)}
+                disabled={isSaving}
+                maxLength={60}
+                placeholder="Scan untuk ikuti kami"
+                className={inputClass}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Harga modal ── */}

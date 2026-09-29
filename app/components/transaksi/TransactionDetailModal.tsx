@@ -37,6 +37,7 @@ import {
   shareReceiptViaWhatsApp,
   type ReceiptData,
 } from "@/lib/pos/printLogic";
+import { getReceiptPromo } from "@/lib/pos/receiptQr";
 // ── PERBAIKAN (auto-print munculkan dialog cetak sistem) ── format
 // "thermal" sekarang lewat printReceipt() (lihat catatan yang sama di
 // KasirModule.tsx) supaya cetak ulang struk thermal juga tidak memunculkan
@@ -185,6 +186,7 @@ export default function TransactionDetailModal({
       storeAddress: posSettings.alamat,
       storePhone: posSettings.telepon,
       footerText: posSettings.footerStruk,
+      ...getReceiptPromo(posSettings),
       receiptNo: txDetail.receipt_no,
       createdAt: txDetail.created_at,
       cashierName: txDetail.cashier_name,

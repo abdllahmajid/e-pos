@@ -15,6 +15,7 @@
 
 import { buildBarcodeSvgSafe } from "./barcode";
 import type { ReceiptBrand } from "./receiptBrand";
+import { DEFAULT_PROMO_TEXT, type ReceiptQr } from "./receiptQr";
 
 export interface ReceiptItem {
   name: string;
@@ -68,6 +69,13 @@ export interface ReceiptData {
   kind?: "sale" | "shift_open";
   /** Modal awal kas — dipakai kind "shift_open". Kosong -> jatuh ke `total`. */
   openingCash?: number;
+  // ── TAMBAHAN (QR promosi) ── Diisi lewat getReceiptPromo(posSettings) di
+  // lib/pos/receiptQr.ts (sudah tervalidasi; kosong kalau promosi mati/link
+  // tidak valid). Hanya dipakai struk penjualan thermal, bukan Buka Kasir.
+  /** Link tujuan QR promosi. Kosong -> QR tidak dicetak. */
+  promoUrl?: string;
+  /** Teks ajakan di atas QR. Kosong -> "Scan untuk ikuti kami". */
+  promoText?: string;
 }
 
 // ── PERUBAHAN (Fase 3: relabel metode pembayaran) ── QRIS -> "Digital",
@@ -198,6 +206,7 @@ function buildShiftOpenHtml(
 export const printThermalReceipt = (
   data: ReceiptData,
   brand?: ReceiptBrand | null,
+  qr?: ReceiptQr | null,
 ) => {
   console.log("[printLogic] printThermalReceipt() dipanggil", data.receiptNo);
   // 1. Buat elemen iframe tersembunyi.
@@ -273,6 +282,8 @@ export const printThermalReceipt = (
           .brand-img { display: block; width: 100%; height: auto; margin: 0 auto 4px; }
           .barcode-wrap { margin: 8px 0 2px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           .barcode-text { font-size: 11px; letter-spacing: 1px; margin-bottom: 2px; }
+          .promo-text { margin-top: 6px; font-size: 11px; }
+          .promo-qr { display: block; width: 100%; height: auto; margin: 2px auto 0; }
           .reprint-badge {
             text-align: center;
             font-weight: bold;
@@ -354,6 +365,7 @@ export const printThermalReceipt = (
         <div class="divider"></div>
         <div class="text-center barcode-wrap">${buildBarcodeSvgSafe(data.receiptNo)}</div>
         <div class="text-center barcode-text">${escapeHtml(data.receiptNo)}</div>
+        ${qr ? `<div class="divider"></div><div class="text-center promo-text">${escapeHtml(data.promoText || DEFAULT_PROMO_TEXT)}</div><img class="promo-qr" src="${qr.dataUrl}" alt="" />` : ""}
       </body>
     </html>
   `;

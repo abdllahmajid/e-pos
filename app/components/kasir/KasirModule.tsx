@@ -32,6 +32,7 @@ import {
   shareReceiptViaWhatsApp,
   type ReceiptData,
 } from "@/lib/pos/printLogic";
+import { getReceiptPromo } from "@/lib/pos/receiptQr";
 // ── PERBAIKAN (auto-print munculkan dialog cetak sistem) ── Sebelumnya file
 // ini memanggil printThermalReceipt() langsung dari lib/pos/printLogic.ts,
 // yang SELALU lewat window.print() (dialog cetak OS/browser SELALU muncul,
@@ -593,6 +594,7 @@ export default function KasirModule({
         storeAddress: posSettings.alamat,
         storePhone: posSettings.telepon,
         footerText: posSettings.footerStruk,
+        ...getReceiptPromo(posSettings),
         receiptNo: result.receipt_no,
         createdAt: new Date().toISOString(),
         cashierName: user?.full_name ?? user?.email ?? null,
@@ -708,6 +710,7 @@ export default function KasirModule({
         storeAddress: posSettings.alamat,
         storePhone: posSettings.telepon,
         footerText: posSettings.footerStruk,
+        ...getReceiptPromo(posSettings),
         receiptNo: result.receipt_no,
         createdAt: new Date().toISOString(),
         cashierName: user?.full_name ?? user?.email ?? null,

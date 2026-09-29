@@ -52,6 +52,7 @@ import {
   type ReceiptData,
 } from "@/lib/pos/printLogic";
 import { loadReceiptBrand } from "@/lib/pos/receiptBrand";
+import { loadReceiptQr } from "@/lib/pos/receiptQr";
 
 export type PrinterConnectionType = "bluetooth" | "usb" | "browser";
 export type PrinterStatus = "connected" | "disconnected" | "unknown";
@@ -504,6 +505,15 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
       // hanya cetak pertama yang menunggu.
       const brand = await loadReceiptBrand(data.storeName);
 
+      // ── TAMBAHAN (QR promosi) ── Dibuat dari link di Pengaturan setiap kali
+      // cetak, jadi ganti link langsung berlaku di struk berikutnya. Hanya
+      // struk penjualan; Buka Kasir tidak pakai. null (link kosong/tidak
+      // valid/terlalu panjang) -> struk tercetak tanpa QR, tidak pernah gagal.
+      const qr =
+        data.kind !== "shift_open" && data.promoUrl
+          ? await loadReceiptQr(data.promoUrl)
+          : null;
+
       if (profile.connectionType === "browser") {
         // Satu-satunya jalur yang TIDAK BISA menghindari dialog cetak —
         // window.print() selalu memunculkannya, ini batasan browser, bukan
@@ -511,13 +521,13 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
         // mau lihat dialog sama sekali, solusinya menyambungkan printer
         // fisik lewat Bluetooth/USB di Pengaturan > Printer, bukan
         // memaksa jalur "Printer Sistem (Browser)" ini diam-diam.
-        printThermalReceipt(data, brand);
+        printThermalReceipt(data, brand, qr);
         return { ok: true };
       }
 
       setBusyId(profile.id);
       try {
-        const bytes = buildReceiptBytes(data, brand);
+        const bytes = buildReceiptBytes(data, brand, qr);
 
         if (profile.connectionType === "bluetooth") {
           let entry = deviceRegistryRef.current.get(profile.id);
