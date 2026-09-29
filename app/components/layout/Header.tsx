@@ -45,6 +45,8 @@ export default function Header({ activeMenu, onOpenKasir }: HeaderProps) {
   const Icon = meta?.item.icon;
 
   return (
+    // ── CATATAN ── Tinggi `h-17` di sini SENGAJA sama dengan blok judul "LCO POS"
+    // di Sidebar.tsx supaya garis bawah keduanya lurus — ubah keduanya bersamaan.
     <header className="sticky top-0 z-10 flex h-17 shrink-0 items-center justify-between gap-3 border-b border-zinc-200 bg-white pl-16 pr-4 dark:border-zinc-800 dark:bg-zinc-950 md:pl-6">
       <div className="flex min-w-0 items-center gap-3">
         {Icon && (

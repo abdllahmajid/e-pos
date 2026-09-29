@@ -51,6 +51,7 @@ import {
   printThermalReceipt,
   type ReceiptData,
 } from "@/lib/pos/printLogic";
+import { loadReceiptBrand } from "@/lib/pos/receiptBrand";
 
 export type PrinterConnectionType = "bluetooth" | "usb" | "browser";
 export type PrinterStatus = "connected" | "disconnected" | "unknown";
@@ -497,6 +498,12 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
         : profilesRef.current.find((p) => p.isDefault);
       if (!profile) return { ok: false, error: "Printer tidak ditemukan." };
 
+      // ── TAMBAHAN (logo + tulisan merek di struk) ── Siapkan kepala struk
+      // bergambar (ikon + "Langitan.co" Inter). null (ikon belum ada / gagal)
+      // -> struk tetap tercetak dengan tampilan lama. Hasilnya di-cache, jadi
+      // hanya cetak pertama yang menunggu.
+      const brand = await loadReceiptBrand(data.storeName);
+
       if (profile.connectionType === "browser") {
         // Satu-satunya jalur yang TIDAK BISA menghindari dialog cetak —
         // window.print() selalu memunculkannya, ini batasan browser, bukan
@@ -504,13 +511,13 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
         // mau lihat dialog sama sekali, solusinya menyambungkan printer
         // fisik lewat Bluetooth/USB di Pengaturan > Printer, bukan
         // memaksa jalur "Printer Sistem (Browser)" ini diam-diam.
-        printThermalReceipt(data);
+        printThermalReceipt(data, brand);
         return { ok: true };
       }
 
       setBusyId(profile.id);
       try {
-        const bytes = buildReceiptBytes(data);
+        const bytes = buildReceiptBytes(data, brand);
 
         if (profile.connectionType === "bluetooth") {
           let entry = deviceRegistryRef.current.get(profile.id);

@@ -100,9 +100,10 @@ export default function LCOPOS() {
   // jadi aman untuk semua role (admin/supervisor/kasir/qc).
   const [activeMenu, setActiveMenu] = useState("dashboard");
 
-  // ── TAMBAHAN (T-04) ── dipakai KasirModule untuk pindah ke menu Kas & Shift
-  // saat kasir belum buka shift (lihat layar blokir di KasirModule.tsx).
-  const goToShiftMenu = () => setActiveMenu("kas");
+  // ── PERUBAHAN ── `goToShiftMenu` (pindah ke menu Kas & Shift) dihapus:
+  // buka/tutup shift sekarang sepenuhnya di layar Kasir. Gantinya: keluar dari
+  // Kasir balik ke Dashboard (batal buka kasir / selesai tutup sesi).
+  const exitKasir = () => setActiveMenu("dashboard");
 
   // ── TAMBAHAN (Kasir full-screen) ── Satu-satunya jalan masuk ke Kasir
   // sekarang (Header.tsx & DashboardModule.tsx, "kasir" sudah dihapus dari
@@ -168,7 +169,7 @@ export default function LCOPOS() {
           )}
           {activeMenu === "kasir" && (
             <KasirModule
-              onNavigateToShift={goToShiftMenu}
+              onExitKasir={exitKasir}
               onOpenMenu={() => setIsKasirSidebarOpen(true)}
             />
           )}

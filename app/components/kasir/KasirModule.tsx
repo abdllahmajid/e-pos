@@ -11,7 +11,6 @@ import {
   Clock,
   Loader2,
   AlertTriangle,
-  Lock,
   Unlock,
   History,
   X,
@@ -71,7 +70,13 @@ import { useSettings } from "@/hooks/useSettings";
 // Pengecekan SEBENARNYA (yang tidak bisa dilewati) tetap ada di RPC create_transaction
 // (migration 007) — blokir di sini murni supaya UX-nya jelas (kasir tidak perlu isi
 // keranjang dulu baru ketahuan ditolak saat bayar).
-import { useShifts } from "@/hooks/useShifts";
+import { useShifts, type CloseShiftResult } from "@/hooks/useShifts";
+// ── TAMBAHAN (Tutup Sesi Kas langsung dari Kasir) ── Modal isi jumlah uang +
+// ringkasan selisih. Dulu tombol tutup sesi cuma pindah ke menu "Kas & Shift".
+import {
+  CloseShiftModal,
+  CloseShiftSummaryModal,
+} from "@/app/components/kasir/CloseShiftModal";
 // ── TAMBAHAN (T-11 bagian 1) ── Hold order / "Tunda" — lihat komentar header
 // hooks/useHoldOrders.ts untuk pembagian tanggung jawab lengkap.
 import { useHoldOrders } from "@/hooks/useHoldOrders";
@@ -97,8 +102,11 @@ const SPLIT_METHOD_LABELS: Record<PaymentMethod, string> = {
 const LOYALTY_POINT_VALUE = 100;
 
 interface KasirModuleProps {
-  /** Dipanggil saat kasir menekan tombol "Buka Shift" di layar blokir (lihat di bawah). */
-  onNavigateToShift?: () => void;
+  // ── PERUBAHAN (buka/tutup shift sepenuhnya di layar Kasir) ── Prop lama
+  // `onNavigateToShift` (pindah ke menu Kas & Shift) dihapus. Gantinya
+  // `onExitKasir`: keluar dari layar Kasir balik ke Dashboard — dipakai saat
+  // kasir membatalkan modal Buka Kasir, dan setelah ringkasan Tutup Sesi Kas.
+  onExitKasir?: () => void;
   // ── PERUBAHAN (tombol "Menu" membuka Sidebar sebagai drawer) ── Dulu prop
   // ini ("onBackToMenu") NAVIGASI keluar dari Kasir balik ke Dashboard.
   // Sekarang Kasir TIDAK ditinggalkan sama sekali — tombol "Menu" di
@@ -118,7 +126,7 @@ const LAYOUT_MODE_STORAGE_KEY = "lco-pos:kasir-layout-mode";
 type KasirLayoutMode = "tablet" | "pc";
 
 export default function KasirModule({
-  onNavigateToShift,
+  onExitKasir,
   onOpenMenu,
 }: KasirModuleProps) {
   const { products, isLoading, error, refetch } = useProducts();
@@ -151,7 +159,12 @@ export default function KasirModule({
     Number(manualDiscountInput.replace(/[^0-9]/g, "")) || 0;
 
   const { settings: posSettings } = useSettings();
-  const { activeShift, isLoading: isShiftLoading, openShift } = useShifts();
+  const {
+    activeShift,
+    isLoading: isShiftLoading,
+    openShift,
+    closeShift,
+  } = useShifts();
   const { printReceipt } = usePrinterProfiles();
   // ── TAMBAHAN (Kasir: pelanggan + poin loyalitas) ──
   const { customers, redeemPoints } = useCustomers();
@@ -243,10 +256,38 @@ export default function KasirModule({
   // modal input modal awal ADA DI SINI, supaya alurnya: klik "Buka Kasir"
   // -> isi modal awal -> "Mulai Sesi Kasir" -> struk awal tercetak otomatis
   // -> langsung di layar transaksi POS yang sama, tanpa pindah menu.
-  const [isOpenSessionModalOpen, setIsOpenSessionModalOpen] = useState(false);
-  const [openingCashInput, setOpeningCashInput] = useState("");
+  // ── PERUBAHAN ── Modal ini TIDAK lagi punya state buka/tutup sendiri: selama
+  // `activeShift` kosong (dan status shift sudah selesai dimuat), modal langsung
+  // tampil — tanpa layar peringatan "Kasir Belum Dibuka" di belakangnya.
+  const [openingCashInput, setOpeningCashInput] = useState<string | null>(null);
   const [isStartingSession, setIsStartingSession] = useState(false);
   const [openSessionError, setOpenSessionError] = useState<string | null>(null);
+
+  // Nilai yang tampil di input modal awal: `null` = kasir belum mengetik apa
+  // pun, jadi tampilkan default Pengaturan (shift_default_cash) — diturunkan
+  // saat render (bukan lewat useEffect) supaya nilai Pengaturan yang datang
+  // belakangan tetap terpakai dan ketikan kasir tidak pernah tertimpa. Kembali
+  // ke `null` setelah sesi dibuka, jadi sesi berikutnya mulai dari default lagi.
+  const openingCashValue =
+    openingCashInput ?? String(posSettings.shiftDefaultCash || "");
+
+  // ── TAMBAHAN (Tutup Sesi Kas) ── `closeResult` disimpan di sini (bukan di
+  // dalam modal) karena begitu shift tertutup, komponen ini pindah cabang
+  // render ke layar tanpa-shift — ringkasan selisih harus tetap tampil.
+  const [isCloseModalOpen, setIsCloseModalOpen] = useState(false);
+  const [closeResult, setCloseResult] = useState<CloseShiftResult | null>(null);
+
+  const handleCloseSession = async (actualCash: number) => {
+    const result = await closeShift(actualCash);
+    setIsStartingSession(false);
+    setCloseResult(result);
+    setIsCloseModalOpen(false);
+  };
+
+  const handleFinishCloseSession = () => {
+    setCloseResult(null);
+    onExitKasir?.();
+  };
 
   // ── TAMBAHAN (Kasir: pelanggan + poin loyalitas, opsional) ──
   const [customerQuery, setCustomerQuery] = useState("");
@@ -751,13 +792,12 @@ export default function KasirModule({
   // layar transaksi POS, bukan layar terkunci lagi).
   //
   // Struk awal dicetak lewat pipa cetak yang SUDAH ADA (printReceipt/
-  // ReceiptData, lib/pos/printLogic.ts) — bukan template baru — supaya
+  // ReceiptData, lib/pos/printLogic.ts) — supaya
   // konsisten dengan printer Bluetooth/USB/Sistem yang sudah dikonfigurasi
-  // kasir di Pengaturan > Printer. `items` diisi satu baris "Modal Awal Kas"
-  // supaya nominalnya tetap tercetak jelas walau template struk aslinya
-  // dirancang untuk struk penjualan.
+  // kasir di Pengaturan > Printer. Layout-nya BUKAN struk penjualan: dipilih
+  // lewat `kind: "shift_open"` (lihat ReceiptData di lib/pos/printLogic.ts).
   const handleStartSession = async () => {
-    const amount = Number(openingCashInput.replace(/[^0-9]/g, "")) || 0;
+    const amount = Number(openingCashValue.replace(/[^0-9]/g, "")) || 0;
     if (amount <= 0) {
       setOpenSessionError("Masukkan nominal modal awal yang valid.");
       return;
@@ -777,14 +817,14 @@ export default function KasirModule({
         receiptNo: `BUKA-${now.getTime()}`,
         createdAt: now.toISOString(),
         cashierName: user?.full_name ?? user?.email ?? null,
-        items: [
-          {
-            name: "Modal Awal Kas (Buka Sesi Kasir)",
-            qty: 1,
-            price: amount,
-            subtotal: amount,
-          },
-        ],
+        // ── PERUBAHAN (struk Buka Kasir dibedakan dari struk penjualan) ──
+        // `kind: "shift_open"` memilih layout khusus (judul "BUKA KASIR",
+        // nominal modal awal besar, kolom paraf) — bukan lagi struk penjualan
+        // dengan satu baris item palsu. `items` sengaja kosong; field wajib
+        // lain di ReceiptData cuma pengisi tipe, tidak tercetak di layout ini.
+        kind: "shift_open",
+        openingCash: amount,
+        items: [],
         subtotal: amount,
         discount: 0,
         tax: 0,
@@ -797,13 +837,16 @@ export default function KasirModule({
       // printer tidak boleh memblokir kasir mulai transaksi.
       void printReceipt(openingReceipt);
 
-      setOpeningCashInput("");
-      setIsOpenSessionModalOpen(false);
+      setOpeningCashInput(null);
+      // Modal hilang sendiri begitu `activeShift` terisi (refetch di
+      // openShift). `isStartingSession` sengaja TIDAK di-reset di sini:
+      // openShift() tidak menunggu refetch, jadi ada jeda sampai shift
+      // terlihat, dan tombol harus tetap terkunci (cegah klik ganda). Reset
+      // dilakukan di handleCloseSession saat sesi ini nanti ditutup.
     } catch (err) {
       setOpenSessionError(
         err instanceof Error ? err.message : "Gagal membuka sesi kasir.",
       );
-    } finally {
       setIsStartingSession(false);
     }
   };
@@ -978,123 +1021,91 @@ export default function KasirModule({
     );
   }
 
-  // ── PERUBAHAN (Fase 1: flow "Buka Kasir" baru) ── Sebelumnya layar ini
-  // cuma punya tombol yang navigasi ke menu "Kas & Shift" terpisah
-  // (onNavigateToShift) — kasir harus pindah menu, isi modal di sana, lalu
-  // pindah balik ke Kasir secara manual. Sekarang: tombol "Buka Kasir" di
-  // SINI langsung membuka modal "Mulai Sesi Kasir" (di bawah return ini),
-  // dan begitu submit sukses, `activeShift` terisi -> komponen ini re-render
-  // -> langsung jatuh ke return utama (layar transaksi POS), tanpa kasir
-  // perlu pindah menu sama sekali.
+  // ── PERUBAHAN (modal Buka Kasir langsung muncul) ── Dulu layar ini menampilkan
+  // peringatan "Kasir Belum Dibuka" + tombol "Buka Kasir" + link ke menu Kas &
+  // Shift. Sekarang cukup latar polos + modal "Mulai Sesi Kasir" yang langsung
+  // terbuka. Begitu submit sukses, `activeShift` terisi -> komponen ini render
+  // ulang ke layar transaksi POS. Kalau kasir membatalkan modal, ia kembali ke
+  // Dashboard (`onExitKasir`) — tidak ada layar Kasir "setengah terkunci".
+  //
+  // Setelah Tutup Sesi Kas, cabang ini juga yang tampil — dengan ringkasan
+  // selisih kas menggantikan modal buka.
   if (!activeShift) {
     return (
-      <div className="h-full flex flex-col bg-zinc-100 dark:bg-zinc-950">
-        {/* ── TAMBAHAN (Kasir full-screen) ── Sidebar/Header lama sudah
-            disembunyikan total oleh page.tsx saat activeMenu === "kasir" —
-            jadi walau kasir belum buka shift, tetap butuh jalan balik. */}
-        {onOpenMenu && (
-          <div className="flex h-14 shrink-0 items-center border-b border-zinc-200 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-950">
-            <button
-              onClick={onOpenMenu}
-              className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition-colors duration-150 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              Menu
-            </button>
-          </div>
-        )}
-        <div className="flex flex-1 min-h-0 items-center justify-center p-6">
-          <div className="flex flex-col items-center gap-3 text-center max-w-sm">
-            <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
-              <Lock className="w-6 h-6 text-lco-coral" />
-            </div>
-            <h3 className="text-sm font-semibold">Kasir Belum Dibuka</h3>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              Buka kasir dengan modal awal (uang tunai di laci) terlebih dahulu
-              sebelum bisa mulai transaksi.
-            </p>
-            <button
-              onClick={() => {
-                setOpenSessionError(null);
-                setOpeningCashInput(String(posSettings.shiftDefaultCash || ""));
-                setIsOpenSessionModalOpen(true);
-              }}
-              className="flex items-center gap-2 px-4 py-2 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-xs font-semibold transition-colors duration-150"
-            >
-              <Unlock className="w-3.5 h-3.5" />
-              Buka Kasir
-            </button>
-            {onNavigateToShift && (
-              <button
-                onClick={onNavigateToShift}
-                className="text-[11px] text-zinc-400 underline underline-offset-2 hover:text-zinc-600 dark:hover:text-zinc-200"
-              >
-                Lihat riwayat shift di menu Kas & Shift
-              </button>
-            )}
-          </div>
-
-          {isOpenSessionModalOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-              <div className="w-full max-w-sm rounded-xl bg-white p-6 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800">
-                <div className="mb-4 flex items-center justify-between">
-                  <h3 className="text-base font-semibold flex items-center gap-2">
-                    <Wallet className="h-4 w-4 text-lco-teal" />
-                    Mulai Sesi Kasir
-                  </h3>
+      <div className="h-full bg-zinc-100 dark:bg-zinc-950">
+        {closeResult ? (
+          <CloseShiftSummaryModal
+            result={closeResult}
+            onDone={handleFinishCloseSession}
+          />
+        ) : (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-sm rounded-xl bg-white p-6 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800">
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-base font-semibold flex items-center gap-2">
+                  <Wallet className="h-4 w-4 text-lco-teal" />
+                  Mulai Sesi Kasir
+                </h3>
+                {onExitKasir && (
                   <button
                     type="button"
-                    onClick={() => setIsOpenSessionModalOpen(false)}
+                    onClick={onExitKasir}
                     disabled={isStartingSession}
+                    title="Batal & kembali ke Dashboard"
                     className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors duration-150 disabled:opacity-50"
                   >
                     <X className="h-4 w-4" />
                   </button>
-                </div>
-
-                <label className="mb-1 block text-xs font-medium text-zinc-500">
-                  Modal awal kas
-                </label>
-                <div className="flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950 focus-within:border-lco-teal focus-within:ring-2 focus-within:ring-lco-teal transition-colors duration-150">
-                  <span className="text-sm text-zinc-400 font-mono">Rp</span>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    autoFocus
-                    value={openingCashInput}
-                    onChange={(e) => setOpeningCashInput(e.target.value)}
-                    placeholder="200.000"
-                    className="w-full bg-transparent text-sm font-mono tabular-nums outline-none"
-                  />
-                </div>
-
-                {openSessionError && (
-                  <div className="mt-3 flex items-start gap-2 rounded-md border border-lco-coral/30 bg-lco-coral/10 p-3 text-xs text-lco-coral">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    {openSessionError}
-                  </div>
                 )}
-
-                <button
-                  type="button"
-                  onClick={handleStartSession}
-                  disabled={isStartingSession}
-                  className="mt-5 flex w-full items-center justify-center gap-2 rounded-md bg-lco-green px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-lco-green-hover disabled:opacity-60"
-                >
-                  {isStartingSession ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Unlock className="h-4 w-4" />
-                  )}
-                  Mulai Sesi Kasir
-                </button>
-                <p className="mt-2 text-center text-[11px] text-zinc-400">
-                  Struk awal akan tercetak otomatis (jika printer terhubung).
-                </p>
               </div>
+
+              <label className="mb-1 block text-xs font-medium text-zinc-500">
+                Modal awal kas
+              </label>
+              <div className="flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950 focus-within:border-lco-teal focus-within:ring-2 focus-within:ring-lco-teal transition-colors duration-150">
+                <span className="text-sm text-zinc-400 font-mono">Rp</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoFocus
+                  value={openingCashValue}
+                  onChange={(e) => setOpeningCashInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !isStartingSession) {
+                      void handleStartSession();
+                    }
+                  }}
+                  placeholder="200.000"
+                  className="w-full bg-transparent text-sm font-mono tabular-nums outline-none"
+                />
+              </div>
+
+              {openSessionError && (
+                <div className="mt-3 flex items-start gap-2 rounded-md border border-lco-coral/30 bg-lco-coral/10 p-3 text-xs text-lco-coral">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {openSessionError}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleStartSession}
+                disabled={isStartingSession}
+                className="mt-5 flex w-full items-center justify-center gap-2 rounded-md bg-lco-green px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-lco-green-hover disabled:opacity-60"
+              >
+                {isStartingSession ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Unlock className="h-4 w-4" />
+                )}
+                Mulai Sesi Kasir
+              </button>
+              <p className="mt-2 text-center text-[11px] text-zinc-400">
+                Struk awal akan tercetak otomatis (jika printer terhubung).
+              </p>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1117,7 +1128,7 @@ export default function KasirModule({
         onOpenMenu={onOpenMenu}
         heldOrdersCount={heldOrders.length}
         onOpenHeldList={openHeldList}
-        onCloseShift={onNavigateToShift}
+        onCloseShift={() => setIsCloseModalOpen(true)}
         layoutMode={layoutMode}
         onToggleLayout={toggleLayoutMode}
         variant={layoutMode === "pc" ? "card" : "strip"}
@@ -1129,6 +1140,19 @@ export default function KasirModule({
           )
         }
       />
+
+      {isCloseModalOpen && (
+        <CloseShiftModal
+          onClose={() => setIsCloseModalOpen(false)}
+          onSubmit={handleCloseSession}
+        />
+      )}
+      {closeResult && (
+        <CloseShiftSummaryModal
+          result={closeResult}
+          onDone={handleFinishCloseSession}
+        />
+      )}
 
       {layoutMode === "pc" ? (
         <KasirModulePC

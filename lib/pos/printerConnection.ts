@@ -131,6 +131,7 @@ function getNav(): NavigatorWithPrinterApis {
 // supaya format Rupiah/label metode pembayaran di struk ESC/POS SELALU
 // identik dengan struk HTML (window.print), tidak ditulis ulang dua kali.
 import type { ReceiptData } from "./printLogic";
+import type { ReceiptBrand } from "./receiptBrand";
 import { formatMethod, formatMoney } from "./printLogic";
 
 export function isWebBluetoothSupported(): boolean {
@@ -211,8 +212,105 @@ function padLine(left: string, right: string, width = RECEIPT_WIDTH): string {
   return left + " ".repeat(space) + right;
 }
 
+/**
+ * ── TAMBAHAN (struk Buka Kasir dibedakan dari struk penjualan) ── Byte ESC/POS
+ * struk Buka Kasir: judul besar berbingkai "BUKA KASIR", nominal modal awal
+ * besar, kolom paraf, penutup "BUKAN BUKTI PENJUALAN". Tanpa item/subtotal/
+ * bayar/kembali dan tanpa barcode — sengaja tidak mirip struk penjualan.
+ * Dipanggil dari buildReceiptBytes() kalau `data.kind === "shift_open"`.
+ */
+function buildShiftOpenBytes(
+  data: ReceiptData,
+  brand?: ReceiptBrand | null,
+): Uint8Array {
+  const encoder = new TextEncoder();
+  const bytes: number[] = [];
+  const raw = (...values: number[]) => bytes.push(...values);
+  const text = (value: string) => bytes.push(...Array.from(encoder.encode(value)));
+  const line = (value: string = "") => {
+    text(value);
+    raw(0x0a); // LF
+  };
+  const divider = () => line("-".repeat(RECEIPT_WIDTH));
+  const solidDivider = () => line("=".repeat(RECEIPT_WIDTH));
+
+  const dateStr = new Date(data.createdAt ?? Date.now()).toLocaleString(
+    "id-ID",
+    { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" },
+  );
+  const openingCash = data.openingCash ?? data.total;
+  const cashierName = data.cashierName ?? "-";
+
+  raw(ESC, 0x40); // reset printer
+
+  // Logo + tulisan merek (bitmap) di paling atas, kalau tersedia.
+  raw(ESC, 0x61, 0x01); // tengah
+  if (brand) for (let i = 0; i < brand.raster.length; i++) bytes.push(brand.raster[i]);
+
+  // Judul besar berbingkai — font 2x lebar & tinggi (ESC ! 0x30) + bold.
+  raw(ESC, 0x61, 0x01); // tengah
+  solidDivider();
+  raw(ESC, 0x21, 0x30);
+  raw(ESC, 0x45, 0x01);
+  line("BUKA KASIR");
+  raw(ESC, 0x45, 0x00);
+  raw(ESC, 0x21, 0x00);
+  solidDivider();
+
+  if (!brand) {
+    raw(ESC, 0x45, 0x01);
+    line(data.storeName || "Langitan.co");
+    raw(ESC, 0x45, 0x00);
+  }
+  if (data.storeAddress) line(data.storeAddress);
+  if (data.storePhone) line(data.storePhone);
+
+  raw(ESC, 0x61, 0x00); // rata kiri
+  divider();
+  line(`Kasir     : ${cashierName}`);
+  line(`Waktu     : ${dateStr}`);
+  line("Status    : SESI DIBUKA");
+  divider();
+
+  // Nominal modal awal — bagian paling menonjol di struk ini.
+  raw(ESC, 0x61, 0x01);
+  line("MODAL AWAL KAS");
+  raw(ESC, 0x21, 0x30);
+  raw(ESC, 0x45, 0x01);
+  line(`Rp ${formatMoney(openingCash)}`);
+  raw(ESC, 0x45, 0x00);
+  raw(ESC, 0x21, 0x00);
+  line("Hitung uang di laci, pastikan");
+  line("sesuai nominal di atas.");
+  divider();
+
+  // Kolom paraf kasir.
+  line("Paraf Kasir");
+  line();
+  line();
+  line();
+  line(`(${cashierName})`.slice(0, RECEIPT_WIDTH));
+  solidDivider();
+  raw(ESC, 0x45, 0x01);
+  line("* BUKAN BUKTI PENJUALAN *");
+  raw(ESC, 0x45, 0x00);
+
+  raw(0x0a, 0x0a, 0x0a); // feed sebelum potong
+  raw(GS, 0x56, 0x42, 0x00); // potong kertas parsial
+  return new Uint8Array(bytes);
+}
+
 /** Bangun byte mentah ESC/POS untuk SATU struk transaksi (dipakai bluetooth/usb). */
-export function buildReceiptBytes(data: ReceiptData): Uint8Array {
+// ── PERUBAHAN (logo + tulisan merek) ── `brand` opsional (lihat
+// lib/pos/receiptBrand.ts): ada -> kepala struk dicetak sebagai bitmap
+// (ikon + "Langitan.co" Inter) menggantikan teks nama toko; null -> teks lama.
+export function buildReceiptBytes(
+  data: ReceiptData,
+  brand?: ReceiptBrand | null,
+): Uint8Array {
+  // Struk Buka Kasir punya layout sendiri — lihat buildShiftOpenBytes() di atas.
+  if (data.kind === "shift_open") return buildShiftOpenBytes(data, brand);
+
   const encoder = new TextEncoder();
   const bytes: number[] = [];
   const raw = (...values: number[]) => bytes.push(...values);
@@ -232,15 +330,21 @@ export function buildReceiptBytes(data: ReceiptData): Uint8Array {
 
   raw(ESC, 0x40); // reset printer
 
+  // Logo + tulisan merek (bitmap) di paling atas, kalau tersedia.
+  raw(ESC, 0x61, 0x01); // tengah
+  if (brand) for (let i = 0; i < brand.raster.length; i++) bytes.push(brand.raster[i]);
+
   if (data.isReprint) {
     raw(ESC, 0x61, 0x01); // tengah
     line("*** CETAK ULANG ***");
   }
 
   raw(ESC, 0x61, 0x01); // tengah
-  raw(ESC, 0x21, 0x30); // font besar untuk nama toko
-  line(data.storeName || "Langitan.co");
-  raw(ESC, 0x21, 0x00); // font normal
+  if (!brand) {
+    raw(ESC, 0x21, 0x30); // font besar untuk nama toko
+    line(data.storeName || "Langitan.co");
+    raw(ESC, 0x21, 0x00); // font normal
+  }
   if (data.storeAddress) line(data.storeAddress);
   if (data.storePhone) line(data.storePhone);
 

@@ -14,6 +14,7 @@
 // ulang kalau nanti nota A6/A5 atau struk digital WA juga perlu barcode.
 
 import { buildBarcodeSvgSafe } from "./barcode";
+import type { ReceiptBrand } from "./receiptBrand";
 
 export interface ReceiptItem {
   name: string;
@@ -56,6 +57,17 @@ export interface ReceiptData {
   changeAmount: number;
   /** Tampilkan label "STRUK CETAK ULANG" di header (dipakai dari Riwayat Transaksi). */
   isReprint?: boolean;
+  // ── TAMBAHAN (struk Buka Kasir dibedakan dari struk penjualan) ── Jenis
+  // struk. Kosong/"sale" = struk penjualan biasa (perilaku lama, TIDAK berubah).
+  // "shift_open" = struk Buka Kasir (modal awal): layout sendiri — judul besar
+  // "BUKA KASIR", nominal modal awal, kolom paraf — TANPA daftar item,
+  // subtotal/bayar/kembali, dan barcode. Dirender oleh buildShiftOpenHtml()
+  // di bawah (jalur browser) dan buildShiftOpenBytes() di
+  // lib/pos/printerConnection.ts (jalur Bluetooth/USB). Field lain yang wajib
+  // di tipe ini (items, subtotal, total, dst.) tidak dipakai layout ini.
+  kind?: "sale" | "shift_open";
+  /** Modal awal kas — dipakai kind "shift_open". Kosong -> jatuh ke `total`. */
+  openingCash?: number;
 }
 
 // ── PERUBAHAN (Fase 3: relabel metode pembayaran) ── QRIS -> "Digital",
@@ -93,7 +105,100 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
-export const printThermalReceipt = (data: ReceiptData) => {
+// ── TAMBAHAN (struk Buka Kasir) ── HTML struk Buka Kasir untuk jalur cetak
+// browser (window.print). Sengaja BEDA TOTAL dari struk penjualan supaya
+// tidak tertukar di laci: judul berbingkai tebal, nominal modal awal besar,
+// ada kolom paraf, dan ditutup "BUKAN BUKTI PENJUALAN". Tidak ada barcode
+// (nomor `BUKA-...` bukan nomor transaksi, tidak ada gunanya dipindai).
+function buildShiftOpenHtml(
+  data: ReceiptData,
+  dateStr: string,
+  brand?: ReceiptBrand | null,
+): string {
+  const openingCash = data.openingCash ?? data.total;
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Buka Kasir</title>
+        <style>
+          body {
+            font-family: "Courier New", Courier, monospace;
+            font-size: 12px;
+            color: #000;
+            width: 58mm;
+            margin: 0;
+            padding: 0;
+          }
+          .text-center { text-align: center; }
+          .text-right { text-align: right; }
+          .font-bold { font-weight: bold; }
+          .divider { border-bottom: 1px dashed #000; margin: 5px 0; }
+          .divider-solid { border-bottom: 2px solid #000; margin: 6px 0; }
+          table { width: 100%; border-collapse: collapse; }
+          td { vertical-align: top; padding: 2px 0; }
+          .title-box {
+            text-align: center;
+            font-weight: bold;
+            font-size: 18px;
+            letter-spacing: 2px;
+            border: 3px double #000;
+            padding: 6px 0;
+            margin-bottom: 8px;
+          }
+          .amount-label { text-align: center; letter-spacing: 1px; margin-top: 4px; }
+          .amount-box {
+            text-align: center;
+            font-weight: bold;
+            font-size: 22px;
+            border: 2px solid #000;
+            padding: 6px 0;
+            margin: 4px 0 6px;
+          }
+          .sign-line { border-bottom: 1px solid #000; height: 38px; margin: 0 8px 2px; }
+          .note { text-align: center; font-size: 11px; margin-top: 4px; }
+          .brand-img { display: block; width: 100%; height: auto; margin: 0 auto 4px; }
+        </style>
+      </head>
+      <body>
+        ${brand ? `<img class="brand-img" src="${brand.dataUrl}" alt="" />` : ""}
+        <div class="title-box">BUKA KASIR</div>
+        ${brand ? "" : `<div class="text-center font-bold">${escapeHtml(data.storeName || "Langitan.co")}</div>`}
+        ${data.storeAddress ? `<div class="text-center">${escapeHtml(data.storeAddress)}</div>` : ""}
+        ${data.storePhone ? `<div class="text-center">${escapeHtml(data.storePhone)}</div>` : ""}
+        <div class="divider"></div>
+
+        <table>
+          <tr><td>Kasir</td><td class="text-right">${escapeHtml(data.cashierName ?? "-")}</td></tr>
+          <tr><td>Waktu</td><td class="text-right">${dateStr}</td></tr>
+          <tr><td>Status</td><td class="text-right font-bold">SESI DIBUKA</td></tr>
+        </table>
+
+        <div class="divider-solid"></div>
+        <div class="amount-label">MODAL AWAL KAS</div>
+        <div class="amount-box">Rp ${formatMoney(openingCash)}</div>
+        <div class="note">Hitung uang di laci, pastikan sesuai nominal di atas.</div>
+
+        <div class="divider"></div>
+        <div class="text-center">Paraf Kasir</div>
+        <div class="sign-line"></div>
+        <div class="text-center">(${escapeHtml(data.cashierName ?? "-")})</div>
+
+        <div class="divider-solid"></div>
+        <div class="text-center font-bold">*** BUKAN BUKTI PENJUALAN ***</div>
+      </body>
+    </html>
+  `;
+}
+
+// ── PERUBAHAN (logo + tulisan merek) ── `brand` (dari loadReceiptBrand() di
+// lib/pos/receiptBrand.ts) opsional: kalau ada, kepala struk = gambar ikon +
+// "Langitan.co" (Inter) menggantikan teks nama toko; kalau null/kosong,
+// tampilan lama (nama toko sebagai teks) dipakai — jadi pemanggil lama aman.
+export const printThermalReceipt = (
+  data: ReceiptData,
+  brand?: ReceiptBrand | null,
+) => {
   console.log("[printLogic] printThermalReceipt() dipanggil", data.receiptNo);
   // 1. Buat elemen iframe tersembunyi.
   // ── KOREKSI #2 (bug cetak: dialog print tetap tidak muncul) ── Percobaan
@@ -142,7 +247,9 @@ export const printThermalReceipt = (data: ReceiptData) => {
 
   // 3. Template HTML murni (tanpa Tailwind) khusus untuk printer thermal 58mm
   // Menggunakan font monospace bawaan sistem agar rapi
-  const htmlContent = `
+  // ── PERUBAHAN (struk Buka Kasir) ── Struk Buka Kasir punya template sendiri
+  // (buildShiftOpenHtml); selain itu template penjualan di bawah, TIDAK berubah.
+  const htmlContent = data.kind === "shift_open" ? buildShiftOpenHtml(data, dateStr, brand) : `
     <!DOCTYPE html>
     <html>
       <head>
@@ -163,6 +270,7 @@ export const printThermalReceipt = (data: ReceiptData) => {
           table { width: 100%; border-collapse: collapse; }
           td { vertical-align: top; padding: 2px 0; }
           .item-name { display: block; margin-bottom: 2px; }
+          .brand-img { display: block; width: 100%; height: auto; margin: 0 auto 4px; }
           .barcode-wrap { margin: 8px 0 2px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           .barcode-text { font-size: 11px; letter-spacing: 1px; margin-bottom: 2px; }
           .reprint-badge {
@@ -175,8 +283,9 @@ export const printThermalReceipt = (data: ReceiptData) => {
         </style>
       </head>
       <body>
+        ${brand ? `<img class="brand-img" src="${brand.dataUrl}" alt="" />` : ""}
         ${data.isReprint ? `<div class="reprint-badge">*** CETAK ULANG ***</div>` : ""}
-        <div class="text-center font-bold" style="font-size: 16px;">${escapeHtml(data.storeName || "Langitan.co")}</div>
+        ${brand ? "" : `<div class="text-center font-bold" style="font-size: 16px;">${escapeHtml(data.storeName || "Langitan.co")}</div>`}
         ${data.storeAddress ? `<div class="text-center">${escapeHtml(data.storeAddress)}</div>` : ""}
         ${data.storePhone ? `<div class="text-center">${escapeHtml(data.storePhone)}</div>` : ""}
         <div class="divider"></div>
@@ -254,8 +363,24 @@ export const printThermalReceipt = (data: ReceiptData) => {
   iframeDoc.write(htmlContent);
   iframeDoc.close();
 
+  // ── TAMBAHAN (logo struk) ── Tunggu gambar kepala struk selesai dimuat
+  // sebelum mencetak (maks. 1,5 detik) supaya logo tidak terlewat di hasil cetak.
+  const imagesReady = Promise.race([
+    Promise.all(
+      Array.from(iframeDoc.images).map(
+        (img) =>
+          new Promise<void>((resolve) => {
+            if (img.complete) return resolve();
+            img.onload = () => resolve();
+            img.onerror = () => resolve();
+          }),
+      ),
+    ),
+    new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+  ]);
+
   // Tunggu sebentar agar browser selesai merender HTML, lalu cetak
-  setTimeout(() => {
+  void imagesReady.then(() => setTimeout(() => {
     // ── TAMBAHAN (bug cetak) ── try/catch supaya kalau print() gagal (mis.
     // WebView Android yang tidak mengimplementasikan window.print() sama
     // sekali), errornya kelihatan di console — sebelumnya gagal diam-diam,
@@ -272,7 +397,7 @@ export const printThermalReceipt = (data: ReceiptData) => {
     setTimeout(() => {
       document.body.removeChild(iframe);
     }, 1000);
-  }, 250);
+  }, 250));
 };
 
 // ── TAMBAHAN (T-03) ── Fungsi cetak nota A6/A5 untuk dokumen yang lebih awet.

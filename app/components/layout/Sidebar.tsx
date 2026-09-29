@@ -490,10 +490,59 @@ export default function Sidebar({
           menu bisa scroll sendiri kalau kepanjangan, TANPA ikut menggeser
           footer notifikasi di bawah keluar layar. */}
         <div className="flex-1 overflow-y-auto">
-          <div className="flex items-center justify-between border-b border-zinc-200 p-5 dark:border-zinc-800">
-            <h1 className="rounded-xl text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-              LCO POS
-            </h1>
+          {/* ── PERBAIKAN (garis bawah sejajar dengan Header) ── Dulu tinggi blok
+              ini "ikut isi" (padding p-5 + tinggi teks judul + 1px border =
+              69px), sedangkan Header.tsx memakai `h-17` (68px, border sudah
+              termasuk) — akibatnya garis bawah sidebar & garis bawah header
+              beda 1px dan tampak tidak lurus. Sekarang tinggi dikunci sama
+              persis dengan Header (`h-17`), padding vertikal diganti
+              `items-center`. WAJIB dijaga sama: kalau tinggi Header.tsx
+              diubah, ubah juga angka `h-17` di sini. */}
+          <div className="flex h-17 items-center justify-between border-b border-zinc-200 px-5 dark:border-zinc-800">
+            {/* ── PERUBAHAN (logo menyesuaikan tema) ── Sebelumnya satu logo putih
+                ditaruh di kotak hijau. Sekarang ada 2 file di `public/`:
+                `BlackIcon.png` (untuk tema terang) & `WhiteIcon.png` (untuk
+                tema gelap), tanpa kotak latar. Yang tampil dipilih murni lewat
+                CSS — `dark:hidden` / `hidden dark:block` mengikuti class `dark`
+                di <html> (diatur hooks/useThemePreference.ts) — jadi ikut
+                berganti seketika saat tema diubah, tanpa state/JS tambahan.
+                Nama file CASE-SENSITIVE di server Linux/Vercel: harus persis
+                `BlackIcon.png` & `WhiteIcon.png`. `object-contain` supaya logo
+                persegi maupun lebar tidak terpotong/gepeng. Kalau file belum
+                ada, gambar disembunyikan (onError) — tidak ada ikon rusak. */}
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center">
+                {/* eslint-disable-next-line @next/next/no-img-element -- logo statis kecil dari /public, tidak perlu dioptimasi next/image */}
+                <img
+                  src="/BlackIcon.png"
+                  alt="Logo LCO POS"
+                  className="h-full w-full object-contain dark:hidden"
+                  onError={(e) => {
+                    e.currentTarget.style.display = "none";
+                  }}
+                />
+                {/* eslint-disable-next-line @next/next/no-img-element -- lihat catatan di atas */}
+                <img
+                  src="/WhiteIcon.png"
+                  alt="Logo LCO POS"
+                  className="hidden h-full w-full object-contain dark:block"
+                  onError={(e) => {
+                    e.currentTarget.style.display = "none";
+                  }}
+                />
+              </span>
+              {/* ── TAMBAHAN (teks kecil di bawah judul) ── Supaya blok logo tidak
+                  terlihat polos. Gaya label kecil disamakan dengan label grup
+                  menu & label di Header.tsx (10px, uppercase, tracking lebar). */}
+              <div className="min-w-0">
+                <h1 className="truncate text-xl font-bold leading-tight tracking-tight text-zinc-900 dark:text-zinc-100">
+                  LCO POS
+                </h1>
+                <p className="mt-0.5 truncate text-[10px] font-semibold uppercase leading-none tracking-[0.12em] text-zinc-400">
+                  Kasir Langitan.co
+                </p>
+              </div>
+            </div>
             {/* ── TAMBAHAN (responsif) ── Tombol tutup drawer. Biasanya cuma
                 tampil di mobile/tablet portrait (`md:hidden`) karena di
                 desktop sidebar memang selalu terbuka & statis — TAPI saat

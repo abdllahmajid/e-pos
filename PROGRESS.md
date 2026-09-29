@@ -15,6 +15,45 @@
 > per langkah**, diserahkan sebagai file yang bisa diunduh — bukan banyak
 > kode sekaligus di dalam chat.
 
+## Perubahan: Buka/Tutup Shift sepenuhnya di layar Kasir (sesi #22, 2026-09-29)
+
+Permintaan pemilik project: tombol Buka & Tutup Shift **hanya** ada di layar
+Kasir; menu "Kas & Shift" tinggal menampilkan shift berjalan + riwayat.
+
+- **Buka:** masuk Kasir tanpa shift aktif -> modal "Mulai Sesi Kasir" LANGSUNG
+  muncul (layar peringatan "Kasir Belum Dibuka" & link ke menu Kas dihapus).
+  Modal awal terisi default `shift_default_cash`. Tombol X = batal, kembali ke
+  Dashboard (`onExitKasir`). Struk awal tetap tercetak otomatis seperti sebelumnya.
+- **Tutup:** tombol "Tutup Sesi Kas" di `KasirTopBar` sekarang membuka modal
+  hitung pecahan uang langsung di Kasir (bukan pindah menu). Sesudah sukses:
+  ringkasan selisih -> "Selesai" -> kembali ke Dashboard.
+- **File:** `app/components/kasir/CloseShiftModal.tsx` (BARU, modal hitung
+  pecahan + ringkasan, dipindah dari `KasModule.tsx`), `KasirModule.tsx`
+  (prop `onNavigateToShift` diganti `onExitKasir`), `kas/KasModule.tsx`
+  (read-only), `app/page.tsx` (`goToShiftMenu` diganti `exitKasir`).
+- **Catatan teknis:** hasil `close_shift` disimpan di `KasirModule` (bukan di
+  dalam modal) karena begitu shift tertutup komponen pindah cabang render dan
+  modal ter-unmount. Tidak ada perubahan database/migration.
+- **Struk Buka Kasir dibedakan dari struk penjualan (susulan sesi #22):**
+  `ReceiptData` dapat field `kind?: "sale" | "shift_open"` + `openingCash?`.
+  `kind: "shift_open"` = layout sendiri (judul besar berbingkai "BUKA KASIR",
+  nominal modal awal besar, kolom paraf, "BUKAN BUKTI PENJUALAN"; tanpa item,
+  bayar/kembali, barcode). Dua jalur: `buildShiftOpenHtml()` di `printLogic.ts`
+  (browser) & `buildShiftOpenBytes()` di `printerConnection.ts` (Bluetooth/USB).
+  Struk penjualan tidak berubah. Belum dites di printer fisik.
+- **Logo + tulisan merek di struk thermal (susulan sesi #22):** kepala struk =
+  `public/StrukIcon.png` (HARUS hitam/gelap, printer thermal tak bisa cetak
+  putih) di atas, lalu "Langitan" tebal + ".co" kecil pakai font Inter.
+  `lib/pos/receiptBrand.ts` (BARU) menggambarnya ke canvas 384 titik -> PNG 1-bit
+  (jalur browser/window.print) + bitmap GS v 0 per pita 24 baris (jalur
+  Bluetooth/USB). Dipakai struk penjualan & struk Buka Kasir; menggantikan teks
+  nama toko. Teks diambil dari `namaToko` Pengaturan (akhiran ".xx" otomatis
+  dikecilkan). Font Inter ditambahkan di `app/layout.tsx` (`--font-inter`, hanya
+  untuk struk). Ikon belum ada/gagal dimuat -> struk kembali ke tampilan lama.
+  `usePrinterProfiles.printReceipt` yang menyiapkan brand (di-cache).
+- **Status:** lolos `tsc` (2 error lama di `app/layout.tsx` & `printerConnection.ts`
+  tidak terkait) dan lint tidak nambah masalah baru. **Belum dites di browser.**
+
 ## Fitur baru: Layar Promosi TV — MULTI-TV (sesi #21, 2026-09-24) — BACA INI DULU
 
 **⚠️ Menggantikan arah sesi #20 di bawah** (arsip tabel lama dipindah ke

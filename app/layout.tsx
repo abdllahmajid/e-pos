@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -9,6 +9,16 @@ const geistSans = Geist({
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+// ── TAMBAHAN (tulisan merek di struk) ── Inter dipakai KHUSUS untuk
+// menggambar tulisan "Langitan.co" di kepala struk (lib/pos/receiptBrand.ts
+// membaca variabel CSS `--font-inter` ini). Tidak dipakai untuk teks UI —
+// UI tetap Geist. Font dihosting sendiri oleh Next (tanpa request ke Google
+// saat runtime).
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
@@ -52,7 +62,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       // dengan `lang: "id-ID"` di manifest.json, konsisten dengan seluruh
       // teks UI aplikasi ini yang memang Bahasa Indonesia.
       lang="id"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} h-full antialiased`}
       // ── TAMBAHAN (dark mode toggle, sidebar) ── Script inline di bawah
       // menempelkan class "dark" ke elemen INI secara langsung ke DOM,
       // SEBELUM React sempat hydrate — HTML yang dirender server tidak
