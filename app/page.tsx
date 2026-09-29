@@ -104,11 +104,48 @@ export default function LCOPOS() {
   // saat kasir belum buka shift (lihat layar blokir di KasirModule.tsx).
   const goToShiftMenu = () => setActiveMenu("kas");
 
+  // ── TAMBAHAN (Kasir full-screen) ── Satu-satunya jalan masuk ke Kasir
+  // sekarang (Header.tsx & DashboardModule.tsx, "kasir" sudah dihapus dari
+  // Sidebar — lihat catatan MENU_GROUPS di Sidebar.tsx).
+  const openKasir = () => setActiveMenu("kasir");
+
+  // ── PERUBAHAN (tombol "Menu" di Kasir membuka Sidebar, bukan navigasi) ──
+  // Sebelumnya tombol ini pindah activeMenu ke "dashboard" (keluar dari
+  // Kasir). Sekarang: Sidebar TETAP dirender selagi di Kasir (lihat
+  // `<Sidebar forceOpen .../>` di bawah — cuma disembunyikan off-canvas by
+  // default), dan tombol "Menu" cuma membuka/menutup drawer itu di ATAS
+  // layar Kasir — persis seperti drawer di mode HP, sesuai diminta. Kasir
+  // sendiri TIDAK ditinggalkan; pindah menu beneran baru terjadi kalau
+  // kasir memilih salah satu item di drawer itu (mis. "Dashboard"), yang
+  // otomatis menutup drawer juga (lihat handleMenuSelect di Sidebar.tsx).
+  const [isKasirSidebarOpen, setIsKasirSidebarOpen] = useState(false);
+
+  // Begitu di menu Kasir, Header lama (topbar dashboard) disembunyikan TOTAL
+  // — Kasir full-screen persis kasir Indomaret/Alfamart, bukan "modul di
+  // dalam dashboard" lagi. KasirModule.tsx punya top bar sendiri (tombol
+  // "Menu" buat buka Sidebar sebagai drawer, lihat di atas).
+  const isKasirFullscreen = activeMenu === "kasir";
+
   return (
     <div className="flex h-screen bg-zinc-100 font-sans text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
       {/* ── KOREKSI ── Sidebar dipisah ke app/components/layout/Sidebar.tsx, page.tsx
-          sekarang cuma shell: simpan state menu aktif + render modul yang dipilih. */}
-      <Sidebar activeMenu={activeMenu} onMenuChange={setActiveMenu} />
+          sekarang cuma shell: simpan state menu aktif + render modul yang dipilih.
+          ── PERUBAHAN (Kasir: Sidebar jadi drawer, bukan disembunyikan) ── Dulu
+          Sidebar TIDAK dirender sama sekali selagi `isKasirFullscreen` (blok
+          `{!isKasirFullscreen && (...)}`). Sekarang SELALU dirender — posisinya
+          `fixed` (lihat Sidebar.tsx), jadi tidak makan tempat di layout flex ini
+          sama sekali kalau sedang off-canvas, aman dirender terus. `forceOpen`/
+          `onForceOpenChange` HANYA diisi selagi di Kasir (di luar itu, keduanya
+          `undefined` → Sidebar balik ke drawer-mobile-only + hamburger sendiri
+          seperti semula, TIDAK ADA perubahan perilaku di menu lain). */}
+      <Sidebar
+        activeMenu={activeMenu}
+        onMenuChange={setActiveMenu}
+        forceOpen={isKasirFullscreen ? isKasirSidebarOpen : undefined}
+        onForceOpenChange={
+          isKasirFullscreen ? setIsKasirSidebarOpen : undefined
+        }
+      />
 
       {/* ── PERUBAHAN (header/topbar) ── `main` sekarang `flex-col`: Header di
           atas (tinggi tetap, `shrink-0` lewat className-nya sendiri), lalu
@@ -118,14 +155,22 @@ export default function LCOPOS() {
           jadi otomatis pas mengisi div pembungkus ini — tidak perlu ubah
           satu pun file modul. */}
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <Header activeMenu={activeMenu} />
+        {!isKasirFullscreen && (
+          <Header activeMenu={activeMenu} onOpenKasir={openKasir} />
+        )}
 
         <div className="min-h-0 flex-1">
           {activeMenu === "dashboard" && (
-            <DashboardModule onNavigate={setActiveMenu} />
+            <DashboardModule
+              onNavigate={setActiveMenu}
+              onOpenKasir={openKasir}
+            />
           )}
           {activeMenu === "kasir" && (
-            <KasirModule onNavigateToShift={goToShiftMenu} />
+            <KasirModule
+              onNavigateToShift={goToShiftMenu}
+              onOpenMenu={() => setIsKasirSidebarOpen(true)}
+            />
           )}
           {activeMenu === "produk" && <ProdukModule />}
           {activeMenu === "riwayat" && <TransactionHistoryModule />}

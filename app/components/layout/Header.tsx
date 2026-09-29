@@ -12,12 +12,16 @@
 // di-export Sidebar.tsx (satu sumber kebenaran) — supaya kalau nanti ada
 // menu baru ditambah di sana, Header ini otomatis ikut tanpa perlu disentuh.
 
-import { Store } from "lucide-react";
+import { Store, ShoppingCart } from "lucide-react";
 import { MENU_GROUPS } from "./Sidebar";
 import { useSettings } from "@/hooks/useSettings";
 
 interface HeaderProps {
   activeMenu: string;
+  // ── TAMBAHAN (Kasir full-screen, tombol "Buka Kasir" di header) ── Kasir
+  // tidak lagi ada di Sidebar (lihat catatan MENU_GROUPS di Sidebar.tsx) —
+  // ini salah satu dari 2 jalan masuk satu-satunya (yang lain: DashboardModule).
+  onOpenKasir: () => void;
 }
 
 /** Cari label + ikon menu aktif beserta label grupnya (mis. "Alat Kasir"). */
@@ -32,7 +36,7 @@ function findMenuMeta(key: string) {
   return null;
 }
 
-export default function Header({ activeMenu }: HeaderProps) {
+export default function Header({ activeMenu, onOpenKasir }: HeaderProps) {
   // Nama toko dari Pengaturan > Toko (hooks/useSettings.ts) — pakai fallback
   // DEFAULT_SETTINGS bawaan hook selagi loading, jadi tidak pernah tampil
   // kosong/kedip di kanan header.
@@ -63,9 +67,21 @@ export default function Header({ activeMenu }: HeaderProps) {
       {/* ── Badge nama toko ── disembunyikan di layar paling sempit (identitas
           toko kasir sudah cukup jelas dari konteks tablet yang dipakai; di
           layar sempit ruang lebih berharga untuk judul menu di kiri). */}
-      <div className="hidden shrink-0 items-center gap-1.5 rounded-full bg-lco-green/10 px-3 py-1.5 text-xs font-medium text-lco-green dark:bg-lco-teal/15 dark:text-lco-teal sm:flex">
-        <Store className="h-3.5 w-3.5 shrink-0" />
-        <span className="max-w-[180px] truncate">{settings.namaToko}</span>
+      <div className="flex shrink-0 items-center gap-2">
+        <div className="hidden shrink-0 items-center gap-1.5 rounded-full bg-lco-green/10 px-3 py-1.5 text-xs font-medium text-lco-green dark:bg-lco-teal/15 dark:text-lco-teal sm:flex">
+          <Store className="h-3.5 w-3.5 shrink-0" />
+          <span className="max-w-[180px] truncate">{settings.namaToko}</span>
+        </div>
+        {/* ── TAMBAHAN (Kasir full-screen) ── Jalan masuk ke Kasir dari mana
+            saja — begitu diklik, page.tsx pindah activeMenu="kasir" dan
+            me-render KasirModule TANPA Sidebar/Header ini (full-screen). */}
+        <button
+          onClick={onOpenKasir}
+          className="flex shrink-0 items-center gap-1.5 rounded-full bg-lco-green px-3.5 py-1.5 text-xs font-semibold text-white transition-colors duration-150 hover:bg-lco-green-hover"
+        >
+          <ShoppingCart className="h-3.5 w-3.5 shrink-0" />
+          Buka Kasir
+        </button>
       </div>
     </header>
   );

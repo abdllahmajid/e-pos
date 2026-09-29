@@ -13,7 +13,10 @@
 import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
-  ShoppingCart,
+  // ── PERUBAHAN (Kasir full-screen) ── ShoppingCart tidak lagi dipakai di
+  // sini (menu "kasir" dihapus dari MENU_GROUPS, lihat catatan di atas) —
+  // tapi ikon yang sama masih dipakai Header.tsx & DashboardModule.tsx untuk
+  // tombol "Buka Kasir" yang baru.
   ReceiptText,
   Package,
   Wallet,
@@ -82,12 +85,19 @@ export interface SidebarMenuGroup {
 // ke file ini) supaya Header.tsx bisa mengambil judul + ikon menu aktif dari
 // SATU sumber yang sama persis dengan Sidebar — tidak ada daftar judul kedua
 // yang harus diupdate manual tiap kali menu baru ditambah di sini.
+// ── PERUBAHAN (Kasir full-screen, tidak lagi di sidebar) ── "Kasir (POS)"
+// SENGAJA dihapus dari MENU_GROUPS. Satu-satunya jalan masuk sekarang tombol
+// "Buka Kasir" di Header.tsx & DashboardModule.tsx (keduanya panggil
+// onNavigate/onOpenKasir("kasir") langsung, tidak lewat Sidebar sama sekali)
+// — begitu activeMenu === "kasir", page.tsx me-render KasirModule TANPA
+// Sidebar/Header ini (full-screen takeover, lihat page.tsx). Kalau menu ini
+// masih ada di sini, drawer sidebar/mobile jadi punya jalan masuk kedua yang
+// tidak konsisten dengan flow itu.
 export const MENU_GROUPS: SidebarMenuGroup[] = [
   {
     label: "Utama",
     items: [
       { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-      { key: "kasir", label: "Kasir (POS)", icon: ShoppingCart },
       { key: "produk", label: "Produk", icon: Package },
       { key: "riwayat", label: "Riwayat Transaksi", icon: ReceiptText },
     ],
@@ -332,9 +342,33 @@ function ThemeToggle() {
 interface SidebarProps {
   activeMenu: string;
   onMenuChange: (menu: string) => void;
+  // ── TAMBAHAN (Kasir: "Menu" membuka sidebar sebagai drawer) ── Dulu tombol
+  // "Menu" di KasirTopBar cuma NAVIGASI balik ke Dashboard (Sidebar sendiri
+  // tidak pernah dirender sama sekali selagi Kasir full-screen, lihat
+  // page.tsx). Sekarang: Sidebar TETAP dirender (tersembunyi off-canvas) saat
+  // Kasir full-screen, dan "Menu" di Kasir MEMBUKA-nya sebagai drawer di atas
+  // layar Kasir — persis seperti drawer mobile yang sudah ada di sini
+  // (`mobileOpen`/hamburger di bawah), cuma sumber "buka/tutup"-nya sekarang
+  // BISA datang dari luar (Kasir), bukan cuma hamburger internal.
+  //
+  // Kedua prop ini opsional & SEPASANG — kalau diberikan, drawer jadi
+  // "controlled" (state betul-betul dipegang page.tsx, bukan Sidebar), DAN
+  // hamburger bawaan Sidebar disembunyikan (karena kasir sudah punya tombol
+  // "Menu" sendiri di KasirTopBar — dua pemicu buka/tutup akan membingungkan)
+  // DAN pembatasan "drawer cuma di bawah breakpoint md" dilepas, supaya
+  // tetap jadi overlay drawer walau dibuka dari mode PC (desktop). Kalau
+  // TIDAK diberikan (dipakai dari page.tsx di luar Kasir, seperti biasa),
+  // semua perilaku lama (hamburger sendiri, drawer mobile-only) apa adanya.
+  forceOpen?: boolean;
+  onForceOpenChange?: (open: boolean) => void;
 }
 
-export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
+export default function Sidebar({
+  activeMenu,
+  onMenuChange,
+  forceOpen,
+  onForceOpenChange,
+}: SidebarProps) {
   // ── TAMBAHAN (T-10) ── Sidebar sengaja tetap "dumb" untuk activeMenu/
   // onMenuChange (dikontrol dari page.tsx seperti sebelumnya), tapi butuh
   // tahu role sendiri untuk menyaring menu — dipanggil langsung di sini
@@ -354,7 +388,15 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
   // semula (lihat className `<aside>` — `md:translate-x-0 md:static`
   // menimpa state ini, jadi `mobileOpen` tidak berpengaruh sama sekali di
   // desktop/tablet landscape besar).
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileOpenState, setMobileOpenState] = useState(false);
+  // "controlled" kalau page.tsx mengirim forceOpen (kasus Kasir); kalau
+  // tidak, jatuh balik ke state internal seperti sebelumnya.
+  const isControlled = forceOpen !== undefined;
+  const mobileOpen = isControlled ? forceOpen : mobileOpenState;
+  const setMobileOpen = (open: boolean) => {
+    if (isControlled) onForceOpenChange?.(open);
+    else setMobileOpenState(open);
+  };
 
   // Kunci scroll body selagi drawer terbuka di mobile, supaya konten di
   // belakang overlay tidak ikut ter-scroll (pola standar untuk off-canvas
@@ -405,7 +447,13 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
           `md` (mobile/tablet portrait) dan hanya saat drawer TERTUTUP —
           begitu drawer terbuka, tombol tutup (X) di header drawer mengambil
           alih perannya supaya tidak ada dua tombol toggle tumpang tindih. */}
-      {!mobileOpen && (
+      {/* ── TAMBAHAN (responsif) ── Tombol hamburger bawaan Sidebar — hanya
+          tampil di bawah `md` (mobile/tablet portrait) DAN cuma kalau drawer
+          ini TIDAK "controlled" dari luar. Saat dipakai dari Kasir
+          (`forceOpen` diberikan), Kasir punya tombol "Menu" sendiri di
+          KasirTopBar yang mengambil alih peran ini — dua tombol buka akan
+          membingungkan. */}
+      {!mobileOpen && !isControlled && (
         <button
           type="button"
           onClick={() => setMobileOpen(true)}
@@ -419,19 +467,24 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
       {/* ── TAMBAHAN (responsif) ── Overlay gelap di belakang drawer, hanya
           dirender (dan hanya menutup akses klik ke konten di baliknya)
           selagi drawer terbuka. `md:hidden` memastikan ini tidak pernah
-          muncul di desktop/tablet besar, walau `mobileOpen` somehow true. */}
+          muncul di desktop/tablet besar SAAT TIDAK controlled — begitu
+          `isControlled` true (dibuka dari Kasir mode PC), overlay ini SENGAJA
+          tetap tampil di layar besar juga, karena itu justru yang diminta:
+          sidebar sebagai drawer di atas layar Kasir, bukan sidebar statis. */}
       {mobileOpen && (
         <div
           onClick={() => setMobileOpen(false)}
           aria-hidden="true"
-          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          className={`fixed inset-0 z-30 bg-black/50 ${isControlled ? "" : "md:hidden"}`}
         />
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-zinc-200 bg-white transition-transform duration-200 ease-in-out dark:border-zinc-800 dark:bg-zinc-950 md:static md:z-auto md:w-64 md:translate-x-0 md:transition-none ${
-          mobileOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
+        className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-zinc-200 bg-white transition-transform duration-200 ease-in-out dark:border-zinc-800 dark:bg-zinc-950 ${
+          isControlled
+            ? ""
+            : "md:static md:z-auto md:w-64 md:translate-x-0 md:transition-none"
+        } ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
       >
         {/* ── TAMBAHAN (T-12) ── Dibungkus flex-1 overflow-y-auto supaya daftar
           menu bisa scroll sendiri kalau kepanjangan, TANPA ikut menggeser
@@ -441,14 +494,17 @@ export default function Sidebar({ activeMenu, onMenuChange }: SidebarProps) {
             <h1 className="rounded-xl text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
               LCO POS
             </h1>
-            {/* ── TAMBAHAN (responsif) ── Tombol tutup drawer, cuma tampil di
-                mobile/tablet portrait (`md:hidden`) — di desktop sidebar
-                memang selalu terbuka, tidak butuh tombol tutup. */}
+            {/* ── TAMBAHAN (responsif) ── Tombol tutup drawer. Biasanya cuma
+                tampil di mobile/tablet portrait (`md:hidden`) karena di
+                desktop sidebar memang selalu terbuka & statis — TAPI saat
+                `isControlled` (dibuka dari Kasir), sidebar SELALU dalam mode
+                drawer walau di layar besar, jadi tombol tutup ini juga harus
+                selalu tampil di situ. */}
             <button
               type="button"
               onClick={() => setMobileOpen(false)}
               aria-label="Tutup menu"
-              className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100 md:hidden"
+              className={`rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100 ${isControlled ? "" : "md:hidden"}`}
             >
               <X className="h-5 w-5" />
             </button>

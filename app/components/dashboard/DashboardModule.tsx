@@ -84,6 +84,7 @@ import {
   Receipt,
   RefreshCw,
   ShoppingBag,
+  ShoppingCart,
   TrendingUp,
   Wallet,
 } from "lucide-react";
@@ -143,6 +144,11 @@ interface DashboardModuleProps {
    * diberikan, kartunya tetap tampil tapi tidak bisa diklik.
    */
   onNavigate?: (menu: DashboardTargetMenu) => void;
+  // ── TAMBAHAN (Kasir full-screen) ── Prop TERPISAH dari onNavigate, sengaja
+  // tidak numpang di union DashboardTargetMenu ("stok"|"riwayat"|"kas" saja,
+  // lihat ActionGroup di hooks/useDashboard.ts) — supaya tidak perlu ubah
+  // tipe itu (dan hook-hook lain yang menurunkannya) cuma demi satu tombol.
+  onOpenKasir?: () => void;
 }
 
 // ── Util tampilan ────────────────────────────────────────────────────────────
@@ -396,7 +402,10 @@ function ActionCard({
 
 // ── Modul ────────────────────────────────────────────────────────────────────
 
-export default function DashboardModule({ onNavigate }: DashboardModuleProps) {
+export default function DashboardModule({
+  onNavigate,
+  onOpenKasir,
+}: DashboardModuleProps) {
   const {
     today,
     month,
@@ -553,6 +562,19 @@ export default function DashboardModule({ onNavigate }: DashboardModuleProps) {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* ── TAMBAHAN (Kasir full-screen) ── Satu dari 2 jalan masuk
+                satu-satunya ke Kasir sekarang (yang lain: tombol di Header).
+                Ditaruh paling menonjol di Hero karena ini aksi paling sering
+                dipakai kasir begitu login. */}
+            {onOpenKasir && (
+              <button
+                onClick={onOpenKasir}
+                className="flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-lco-green shadow-sm transition-colors duration-150 hover:bg-white/90"
+              >
+                <ShoppingCart className="h-4 w-4" />
+                Buka Kasir
+              </button>
+            )}
             {lastUpdatedAt && (
               <p className="hidden text-[11px] text-white/60 sm:block">
                 Diperbarui{" "}

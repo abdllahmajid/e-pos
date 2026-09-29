@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import BarcodeScanModal, { type ScanFeedback } from "./BarcodeScanModal";
 import PaymentModal from "./PaymentModal";
+import KasirTopBar from "./KasirTopBar";
+import KasirModulePC from "./KasirModulePC";
 // ── TAMBAHAN (Kasir: pelanggan + poin loyalitas) ──
 import { useCustomers, type Customer } from "@/hooks/useCustomers";
 import {
@@ -97,12 +99,56 @@ const LOYALTY_POINT_VALUE = 100;
 interface KasirModuleProps {
   /** Dipanggil saat kasir menekan tombol "Buka Shift" di layar blokir (lihat di bawah). */
   onNavigateToShift?: () => void;
+  // ── PERUBAHAN (tombol "Menu" membuka Sidebar sebagai drawer) ── Dulu prop
+  // ini ("onBackToMenu") NAVIGASI keluar dari Kasir balik ke Dashboard.
+  // Sekarang Kasir TIDAK ditinggalkan sama sekali — tombol "Menu" di
+  // KasirTopBar (dua-duanya mode, PC & tablet) cuma MEMBUKA Sidebar sebagai
+  // drawer DI ATAS layar Kasir (persis seperti drawer di mode HP), lewat
+  // callback ini yang diberikan page.tsx (`setIsKasirSidebarOpen(true)`).
+  // Kasir baru benar-benar ditinggalkan kalau kasir memilih menu lain di
+  // drawer itu (mis. "Dashboard") — itu terjadi lewat Sidebar/onMenuChange,
+  // BUKAN lewat prop ini.
+  onOpenMenu?: () => void;
 }
 
-export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
+// ── TAMBAHAN (mode PC/Tablet) ── localStorage key untuk mengingat pilihan
+// layout kasir per-DEVICE (bukan per-akun — kasir yang sama bisa pindah dari
+// komputer kasir ber-mouse+keyboard ke tablet kapan saja, dan sebaliknya).
+const LAYOUT_MODE_STORAGE_KEY = "lco-pos:kasir-layout-mode";
+type KasirLayoutMode = "tablet" | "pc";
+
+export default function KasirModule({
+  onNavigateToShift,
+  onOpenMenu,
+}: KasirModuleProps) {
   const { products, isLoading, error, refetch } = useProducts();
   const { categories } = useCategories();
   const { user } = useAuth();
+
+  // ── TAMBAHAN (mode PC/Tablet) ── Default "tablet" (UI grid yang sudah ada)
+  // supaya perilaku existing tidak berubah untuk siapa pun yang belum pernah
+  // klik "Layout" — localStorage cuma dibaca SETELAH mount (bukan langsung di
+  // initializer useState) supaya server/client render pertama identik (hindari
+  // hydration mismatch Next.js kalau nanti ini di-SSR).
+  const [layoutMode, setLayoutMode] = useState<KasirLayoutMode>("tablet");
+  useEffect(() => {
+    const saved = window.localStorage.getItem(LAYOUT_MODE_STORAGE_KEY);
+    if (saved === "pc" || saved === "tablet") setLayoutMode(saved);
+  }, []);
+  const toggleLayoutMode = () => {
+    setLayoutMode((prev) => {
+      const next: KasirLayoutMode = prev === "pc" ? "tablet" : "pc";
+      window.localStorage.setItem(LAYOUT_MODE_STORAGE_KEY, next);
+      return next;
+    });
+  };
+
+  // ── TAMBAHAN (mode PC: "Diskon Faktur") ── Diskon manual yang diketik
+  // langsung kasir (beda dari potongan poin loyalitas — dua-duanya ADDITIF,
+  // lihat `discount` gabungan di bawah).
+  const [manualDiscountInput, setManualDiscountInput] = useState("");
+  const manualDiscount =
+    Number(manualDiscountInput.replace(/[^0-9]/g, "")) || 0;
 
   const { settings: posSettings } = useSettings();
   const { activeShift, isLoading: isShiftLoading, openShift } = useShifts();
@@ -212,12 +258,22 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   const [isLoyaltyNoticeDismissed, setIsLoyaltyNoticeDismissed] =
     useState(false);
 
+  // ── PERBAIKAN (pencarian pelanggan) ── Dulu cuma cocok kalau seluruh
+  // teks ada persis di nama. Sekarang dipecah per-kata (mis. "muhammad
+  // ahmad" cocok dengan "Ahmad Muhammad Rizki") dan juga mencari di no. HP.
   const matchingCustomers = useMemo(() => {
-    const q = customerQuery.trim().toLowerCase();
-    if (!q) return [];
+    const tokens = customerQuery
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (tokens.length === 0) return [];
     return customers
-      .filter((c) => c.name.toLowerCase().includes(q))
-      .slice(0, 8);
+      .filter((c) => {
+        const hay = `${c.name} ${c.phone ?? ""}`.toLowerCase();
+        return tokens.every((t) => hay.includes(t));
+      })
+      .slice(0, 12);
   }, [customers, customerQuery]);
 
   const handleSelectCustomer = (c: Customer) => {
@@ -242,6 +298,135 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     () => products.filter((p) => p.is_service),
     [products],
   );
+
+  // ── TAMBAHAN (mode PC: input Kode + navigasi baris) ── `pcSelectedProductId`
+  // = product.id dari baris keranjang yang sedang "disorot" di mode PC — BUKAN
+  // staging area terpisah (dikoreksi user: di screenshot rujukan, produk yang
+  // baru di-scan LANGSUNG masuk ke tabel keranjang penuh-lebar; panel "Nama
+  // Barang Terpilih"/"Parameter Barang Aktif" di atasnya cuma MENCERMINKAN &
+  // membiarkan edit cepat baris yang sedang disorot itu, dinavigasi pakai ↑↓).
+  const [pcSelectedProductId, setPcSelectedProductId] = useState<string | null>(
+    null,
+  );
+  const [pcCodeError, setPcCodeError] = useState<string | null>(null);
+  // Token yang di-increment tiap kali shortcut F1/F2/F6 ditekan — KasirModulePC
+  // punya useEffect yang men-focus input terkait tiap token ini berubah. Pola
+  // "token" dipakai (bukan ref langsung) supaya KasirModule.tsx tidak perlu
+  // tahu detail DOM input yang ada di file KasirModulePC.tsx.
+  const [pcFocusCodeToken, setPcFocusCodeToken] = useState(0);
+  const [pcFocusCustomerToken, setPcFocusCustomerToken] = useState(0);
+  const [pcFocusDiscountToken, setPcFocusDiscountToken] = useState(0);
+
+  // Dipakai tombol "Bayar"/F8 DUA-DUANYA (mode Tablet & mode PC) — supaya
+  // guard-nya (keranjang tidak kosong, tidak lagi menyimpan transaksi lain)
+  // konsisten di kedua mode & shortcut keyboard, bukan disalin 3x.
+  const handleOpenPayment = () => {
+    if (cart.length === 0 || isSavingTransaction) return;
+    setTransactionError(null);
+    setIsPaymentModalOpen(true);
+  };
+
+  // Kode di kolom "Jumlah Beli * Kode" boleh diketik polos (SKU/barcode) atau
+  // format pintas "qty*kode" (mis. "3*p1" = 3 botol Aqua Mineral 600ml) —
+  // dicari dulu di SKU, baru barcode, case-insensitive persis (bukan "includes"
+  // seperti kolom pencarian biasa, supaya scan barcode cepat & tidak ambigu
+  // kalau ada 2 produk dengan kode mirip).
+  // Dipakai dua jalur: Enter di kolom kode (kode persis cocok) DAN memilih
+  // salah satu produk dari daftar saran yang muncul saat kasir mengetik
+  // nama/kode sebagian (lihat KasirModulePC.tsx).
+  const handlePcAddProduct = (product: ProductWithCategory, qty: number) => {
+    setPcCodeError(null);
+    setTransactionError(null);
+    setCart((prev) => {
+      let next = addToCart(prev, product);
+      if (qty > 1) next = updateQty(next, product.id, qty - 1);
+      return next;
+    });
+    setPcSelectedProductId(product.id);
+  };
+
+  const handlePcCodeSubmit = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+
+    let qty = 1;
+    let code = trimmed;
+    const starIdx = trimmed.indexOf("*");
+    if (starIdx > -1) {
+      const qtyPart = trimmed.slice(0, starIdx).trim();
+      const codePart = trimmed.slice(starIdx + 1).trim();
+      const parsedQty = Number(qtyPart);
+      if (qtyPart && Number.isFinite(parsedQty) && parsedQty > 0) {
+        qty = Math.floor(parsedQty);
+        code = codePart;
+      }
+    }
+
+    if (!code) {
+      setPcCodeError("Kode tidak boleh kosong.");
+      return;
+    }
+
+    const lower = code.toLowerCase();
+    const product = products.find(
+      (p) =>
+        p.sku.toLowerCase() === lower ||
+        (p.barcode ?? "").toLowerCase() === lower,
+    );
+
+    if (!product) {
+      setPcCodeError(`Produk dengan kode "${code}" tidak ditemukan.`);
+      return;
+    }
+
+    handlePcAddProduct(product, qty);
+  };
+
+  // ── TAMBAHAN (mode PC: shortcut keyboard) ── HANYA aktif kalau kasir
+  // sedang di mode PC & shift sudah dibuka (di mode Tablet/layar terkunci,
+  // tombol F1-F8 dibiarkan berperilaku normal browser). Semua pakai tombol
+  // F (bukan Ctrl/Cmd+huruf) sebagai jalur utama karena F-key TIDAK PERNAH
+  // dipakai browser untuk mengetik teks — aman dipakai dari mana saja tanpa
+  // perlu cek elemen apa yang sedang fokus, KECUALI F5 (refresh browser) yang
+  // sengaja tetap di-preventDefault karena "Bersihkan" versi kasir bukan
+  // reload halaman. Ctrl/Cmd+K, Cmd+U, Cmd+D, Cmd+Enter disediakan sebagai
+  // ALIAS familiar (sesuai label tombol di screenshot rujukan).
+  useEffect(() => {
+    if (layoutMode !== "pc" || !activeShift) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+
+      if (e.key === "F1" || (mod && e.key.toLowerCase() === "k")) {
+        e.preventDefault();
+        setPcFocusCodeToken((t) => t + 1);
+      } else if (e.key === "F2" || (mod && e.key.toLowerCase() === "u")) {
+        e.preventDefault();
+        setPcFocusCustomerToken((t) => t + 1);
+      } else if (e.key === "F3") {
+        e.preventDefault();
+        openHoldModal();
+      } else if (e.key === "F5") {
+        e.preventDefault();
+        if (cart.length > 0 && window.confirm("Bersihkan keranjang?")) {
+          setCart(clearCart());
+          setPcSelectedProductId(null);
+        }
+      } else if (e.key === "F6" || (mod && e.key.toLowerCase() === "d")) {
+        e.preventDefault();
+        setPcFocusDiscountToken((t) => t + 1);
+      } else if (e.key === "F7" || (e.altKey && e.key === "7")) {
+        e.preventDefault();
+        setIsBiayaTambahanModalOpen(true);
+      } else if (e.key === "F8" || (mod && e.key === "Enter")) {
+        e.preventDefault();
+        handleOpenPayment();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [layoutMode, activeShift, cart, isSavingTransaction]);
 
   const filteredProducts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -289,7 +474,18 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
     );
     return Math.min(selectedCustomer.loyalty_points, maxAffordablePoints);
   }, [usePoints, selectedCustomer, subtotal, tax]);
-  const discount = pointsBeingUsed * LOYALTY_POINT_VALUE;
+  // ── PERUBAHAN (mode PC: "Diskon Faktur") ── discount sekarang GABUNGAN dari
+  // 2 sumber ADDITIF — poin loyalitas (pointsBeingUsed, sudah ada) + nominal
+  // yang diketik manual kasir di kolom "Diskon Faktur" (manualDiscount, baru).
+  // Dibatasi supaya totalnya tidak pernah melebihi subtotal+pajak (grandTotal
+  // tidak pernah negatif) — kalau sudah kepotong poin duluan, sisa kuota buat
+  // diskon manual otomatis lebih kecil (loyalitas dianggap "lebih prioritas"
+  // karena sudah dipilih kasir lebih dulu di alur normal).
+  const discount = useMemo(() => {
+    const loyaltyPart = pointsBeingUsed * LOYALTY_POINT_VALUE;
+    const remainingCap = Math.max(subtotal + tax - loyaltyPart, 0);
+    return loyaltyPart + Math.min(manualDiscount, remainingCap);
+  }, [pointsBeingUsed, manualDiscount, subtotal, tax]);
   const grandTotal = subtotal - discount + tax;
 
   const handleConfirmPayment = async (
@@ -394,6 +590,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       // berikutnya mulai bersih (tidak ikut ke pelanggan sebelumnya).
       setSelectedCustomer(null);
       setUsePoints(false);
+      setManualDiscountInput("");
       await refetch();
       return { paymentId: result.payment_id };
     } catch (err) {
@@ -498,6 +695,7 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
       setMobileView("products");
       setSelectedCustomer(null);
       setUsePoints(false);
+      setManualDiscountInput("");
       await refetch();
       return { payments: result.payments };
     } catch (err) {
@@ -790,104 +988,200 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
   // perlu pindah menu sama sekali.
   if (!activeShift) {
     return (
-      <div className="h-full flex items-center justify-center bg-zinc-100 dark:bg-zinc-950 p-6">
-        <div className="flex flex-col items-center gap-3 text-center max-w-sm">
-          <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
-            <Lock className="w-6 h-6 text-lco-coral" />
-          </div>
-          <h3 className="text-sm font-semibold">Kasir Belum Dibuka</h3>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Buka kasir dengan modal awal (uang tunai di laci) terlebih dahulu
-            sebelum bisa mulai transaksi.
-          </p>
-          <button
-            onClick={() => {
-              setOpenSessionError(null);
-              setOpeningCashInput(String(posSettings.shiftDefaultCash || ""));
-              setIsOpenSessionModalOpen(true);
-            }}
-            className="flex items-center gap-2 px-4 py-2 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-xs font-semibold transition-colors duration-150"
-          >
-            <Unlock className="w-3.5 h-3.5" />
-            Buka Kasir
-          </button>
-          {onNavigateToShift && (
+      <div className="h-full flex flex-col bg-zinc-100 dark:bg-zinc-950">
+        {/* ── TAMBAHAN (Kasir full-screen) ── Sidebar/Header lama sudah
+            disembunyikan total oleh page.tsx saat activeMenu === "kasir" —
+            jadi walau kasir belum buka shift, tetap butuh jalan balik. */}
+        {onOpenMenu && (
+          <div className="flex h-14 shrink-0 items-center border-b border-zinc-200 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-950">
             <button
-              onClick={onNavigateToShift}
-              className="text-[11px] text-zinc-400 underline underline-offset-2 hover:text-zinc-600 dark:hover:text-zinc-200"
+              onClick={onOpenMenu}
+              className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition-colors duration-150 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
             >
-              Lihat riwayat shift di menu Kas & Shift
+              <ArrowLeft className="w-3.5 h-3.5" />
+              Menu
             </button>
-          )}
-        </div>
-
-        {isOpenSessionModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-            <div className="w-full max-w-sm rounded-xl bg-white p-6 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800">
-              <div className="mb-4 flex items-center justify-between">
-                <h3 className="text-base font-semibold flex items-center gap-2">
-                  <Wallet className="h-4 w-4 text-lco-teal" />
-                  Mulai Sesi Kasir
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => setIsOpenSessionModalOpen(false)}
-                  disabled={isStartingSession}
-                  className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors duration-150 disabled:opacity-50"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              <label className="mb-1 block text-xs font-medium text-zinc-500">
-                Modal awal kas
-              </label>
-              <div className="flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950 focus-within:border-lco-teal focus-within:ring-2 focus-within:ring-lco-teal transition-colors duration-150">
-                <span className="text-sm text-zinc-400 font-mono">Rp</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  autoFocus
-                  value={openingCashInput}
-                  onChange={(e) => setOpeningCashInput(e.target.value)}
-                  placeholder="200.000"
-                  className="w-full bg-transparent text-sm font-mono tabular-nums outline-none"
-                />
-              </div>
-
-              {openSessionError && (
-                <div className="mt-3 flex items-start gap-2 rounded-md border border-lco-coral/30 bg-lco-coral/10 p-3 text-xs text-lco-coral">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  {openSessionError}
-                </div>
-              )}
-
-              <button
-                type="button"
-                onClick={handleStartSession}
-                disabled={isStartingSession}
-                className="mt-5 flex w-full items-center justify-center gap-2 rounded-md bg-lco-green px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-lco-green-hover disabled:opacity-60"
-              >
-                {isStartingSession ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Unlock className="h-4 w-4" />
-                )}
-                Mulai Sesi Kasir
-              </button>
-              <p className="mt-2 text-center text-[11px] text-zinc-400">
-                Struk awal akan tercetak otomatis (jika printer terhubung).
-              </p>
-            </div>
           </div>
         )}
+        <div className="flex flex-1 min-h-0 items-center justify-center p-6">
+          <div className="flex flex-col items-center gap-3 text-center max-w-sm">
+            <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
+              <Lock className="w-6 h-6 text-lco-coral" />
+            </div>
+            <h3 className="text-sm font-semibold">Kasir Belum Dibuka</h3>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              Buka kasir dengan modal awal (uang tunai di laci) terlebih dahulu
+              sebelum bisa mulai transaksi.
+            </p>
+            <button
+              onClick={() => {
+                setOpenSessionError(null);
+                setOpeningCashInput(String(posSettings.shiftDefaultCash || ""));
+                setIsOpenSessionModalOpen(true);
+              }}
+              className="flex items-center gap-2 px-4 py-2 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-xs font-semibold transition-colors duration-150"
+            >
+              <Unlock className="w-3.5 h-3.5" />
+              Buka Kasir
+            </button>
+            {onNavigateToShift && (
+              <button
+                onClick={onNavigateToShift}
+                className="text-[11px] text-zinc-400 underline underline-offset-2 hover:text-zinc-600 dark:hover:text-zinc-200"
+              >
+                Lihat riwayat shift di menu Kas & Shift
+              </button>
+            )}
+          </div>
+
+          {isOpenSessionModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+              <div className="w-full max-w-sm rounded-xl bg-white p-6 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800">
+                <div className="mb-4 flex items-center justify-between">
+                  <h3 className="text-base font-semibold flex items-center gap-2">
+                    <Wallet className="h-4 w-4 text-lco-teal" />
+                    Mulai Sesi Kasir
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setIsOpenSessionModalOpen(false)}
+                    disabled={isStartingSession}
+                    className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors duration-150 disabled:opacity-50"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <label className="mb-1 block text-xs font-medium text-zinc-500">
+                  Modal awal kas
+                </label>
+                <div className="flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950 focus-within:border-lco-teal focus-within:ring-2 focus-within:ring-lco-teal transition-colors duration-150">
+                  <span className="text-sm text-zinc-400 font-mono">Rp</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoFocus
+                    value={openingCashInput}
+                    onChange={(e) => setOpeningCashInput(e.target.value)}
+                    placeholder="200.000"
+                    className="w-full bg-transparent text-sm font-mono tabular-nums outline-none"
+                  />
+                </div>
+
+                {openSessionError && (
+                  <div className="mt-3 flex items-start gap-2 rounded-md border border-lco-coral/30 bg-lco-coral/10 p-3 text-xs text-lco-coral">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    {openSessionError}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleStartSession}
+                  disabled={isStartingSession}
+                  className="mt-5 flex w-full items-center justify-center gap-2 rounded-md bg-lco-green px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-lco-green-hover disabled:opacity-60"
+                >
+                  {isStartingSession ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Unlock className="h-4 w-4" />
+                  )}
+                  Mulai Sesi Kasir
+                </button>
+                <p className="mt-2 text-center text-[11px] text-zinc-400">
+                  Struk awal akan tercetak otomatis (jika printer terhubung).
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col md:flex-row bg-zinc-100 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden">
-      {/* ── PERBAIKAN (responsif HP/tablet) ── Sebelumnya panel ini punya
+    <div
+      className={`h-full flex flex-col bg-zinc-100 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden ${
+        // Mode PC: tiap bagian berupa KARTU sendiri dengan jarak antar kartu
+        // (lihat KasirModulePC.tsx) — jadi container luar perlu padding+gap.
+        layoutMode === "pc" ? "gap-2 p-2" : ""
+      }`}
+    >
+      {/* ── TAMBAHAN (Kasir full-screen, mode Tablet) ── Dulu bar ini tidak
+          perlu ada karena Sidebar/Header dashboard yang menyediakan navigasi.
+          Sekarang Kasir full-screen (lihat page.tsx), jadi bar ini SATU-
+          SATUNYA cara kasir balik ke Dashboard / lihat Pending / ganti ke
+          mode PC / tutup sesi / buka layar Display. */}
+      <KasirTopBar
+        storeName={posSettings.namaToko}
+        onOpenMenu={onOpenMenu}
+        heldOrdersCount={heldOrders.length}
+        onOpenHeldList={openHeldList}
+        onCloseShift={onNavigateToShift}
+        layoutMode={layoutMode}
+        onToggleLayout={toggleLayoutMode}
+        variant={layoutMode === "pc" ? "card" : "strip"}
+        onOpenDisplay={() =>
+          window.open(
+            `/kasir-display?shift=${activeShift.id}`,
+            "kasir-display",
+            "width=1024,height=768",
+          )
+        }
+      />
+
+      {layoutMode === "pc" ? (
+        <KasirModulePC
+          cashierName={user?.full_name ?? user?.email ?? "-"}
+          cart={cart}
+          products={products}
+          onAddProduct={handlePcAddProduct}
+          subtotal={subtotal}
+          tax={tax}
+          discount={discount}
+          grandTotal={grandTotal}
+          onUpdateQty={handleUpdateQty}
+          onRemoveFromCart={handleRemoveFromCart}
+          onClearCart={() => {
+            setCart(clearCart());
+            setPcSelectedProductId(null);
+          }}
+          selectedProductId={pcSelectedProductId}
+          onSelectProductId={setPcSelectedProductId}
+          onSubmitCode={handlePcCodeSubmit}
+          codeError={pcCodeError}
+          onClearCodeError={() => setPcCodeError(null)}
+          focusCodeToken={pcFocusCodeToken}
+          focusCustomerToken={pcFocusCustomerToken}
+          focusDiscountToken={pcFocusDiscountToken}
+          customerQuery={customerQuery}
+          onCustomerQueryChange={(v) => {
+            setCustomerQuery(v);
+            setIsCustomerDropdownOpen(true);
+          }}
+          isCustomerDropdownOpen={isCustomerDropdownOpen}
+          onCustomerDropdownOpenChange={setIsCustomerDropdownOpen}
+          matchingCustomers={matchingCustomers}
+          onSelectCustomer={handleSelectCustomer}
+          selectedCustomer={selectedCustomer}
+          onClearCustomer={() => {
+            setSelectedCustomer(null);
+            setUsePoints(false);
+          }}
+          usePoints={usePoints}
+          onToggleUsePoints={setUsePoints}
+          pointsBeingUsed={pointsBeingUsed}
+          loyaltyPointValue={LOYALTY_POINT_VALUE}
+          manualDiscountInput={manualDiscountInput}
+          onManualDiscountInputChange={setManualDiscountInput}
+          onOpenBiayaTambahan={() => setIsBiayaTambahanModalOpen(true)}
+          onHold={openHoldModal}
+          onPay={handleOpenPayment}
+          isSavingTransaction={isSavingTransaction}
+        />
+      ) : (
+        <div className="flex flex-col md:flex-row flex-1 min-h-0 overflow-hidden">
+          {/* ── PERBAIKAN (responsif HP/tablet) ── Sebelumnya panel ini punya
           `h-full` DI DALAM parent yang juga `flex-col` di layar sempit —
           artinya panel ini (dan panel Keranjang di bawah) sama-sama memaksa
           tinggi 100% layar, lalu ditumpuk vertikal, jadi total tingginya ~2x
@@ -898,472 +1192,486 @@ export default function KasirModule({ onNavigateToShift }: KasirModuleProps) {
           bawah `md` hanya SATU panel yang tampil sekaligus (tab "Produk" vs
           "Keranjang" lewat `mobileView`), sementara `md` ke atas kedua panel
           selalu tampil berdampingan seperti semula. */}
-      <div
-        className={`${mobileView === "products" ? "flex" : "hidden"} md:flex flex-1 flex-col min-h-0 border-r border-zinc-200 dark:border-zinc-800`}
-      >
-        <div className="p-4 sm:p-5 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 flex flex-col gap-4 z-10">
-          {/* ── TAMBAHAN (Fase 2: Memilih Pelanggan, opsional) ── */}
-          <div className="relative">
-            {selectedCustomer ? (
-              <div className="flex items-center gap-2 rounded-md bg-zinc-900 dark:bg-zinc-800 text-white px-3 py-2">
-                <UserRound className="w-4 h-4 shrink-0" />
-                <span className="text-sm font-medium truncate">
-                  {selectedCustomer.name}
-                </span>
-                {selectedCustomer.loyalty_points > 0 && (
-                  <span className="shrink-0 rounded bg-lco-mustard/90 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                    {selectedCustomer.loyalty_points} poin
-                  </span>
+          <div
+            className={`${mobileView === "products" ? "flex" : "hidden"} md:flex flex-1 flex-col min-h-0 border-r border-zinc-200 dark:border-zinc-800`}
+          >
+            <div className="p-4 sm:p-5 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 flex flex-col gap-4 z-10">
+              {/* ── TAMBAHAN (Fase 2: Memilih Pelanggan, opsional) ── */}
+              <div className="relative">
+                {selectedCustomer ? (
+                  <div className="flex items-center gap-2 rounded-md bg-zinc-900 dark:bg-zinc-800 text-white px-3 py-2">
+                    <UserRound className="w-4 h-4 shrink-0" />
+                    <span className="text-sm font-medium truncate">
+                      {selectedCustomer.name}
+                    </span>
+                    {selectedCustomer.loyalty_points > 0 && (
+                      <span className="shrink-0 rounded bg-lco-mustard/90 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                        {selectedCustomer.loyalty_points} poin
+                      </span>
+                    )}
+                    <button
+                      onClick={() => {
+                        setSelectedCustomer(null);
+                        setUsePoints(false);
+                      }}
+                      title="Hapus pelanggan"
+                      className="ml-auto text-zinc-400 hover:text-white transition-colors duration-150"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <UserRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                    <input
+                      type="text"
+                      placeholder="Cari nama pelanggan (opsional)..."
+                      className="w-full pl-9 pr-4 py-2 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:border-lco-teal focus:ring-2 focus:ring-lco-teal transition-colors duration-150 text-sm"
+                      value={customerQuery}
+                      onChange={(e) => {
+                        setCustomerQuery(e.target.value);
+                        setIsCustomerDropdownOpen(true);
+                      }}
+                      onFocus={() => setIsCustomerDropdownOpen(true)}
+                      onBlur={() =>
+                        setTimeout(() => setIsCustomerDropdownOpen(false), 150)
+                      }
+                    />
+                    {isCustomerDropdownOpen && customerQuery.trim() && (
+                      <div className="absolute z-20 mt-1 w-full rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 shadow-lg max-h-56 overflow-y-auto">
+                        {matchingCustomers.length === 0 ? (
+                          <p className="px-3 py-2.5 text-xs text-zinc-400">
+                            Pelanggan tidak ditemukan.
+                          </p>
+                        ) : (
+                          matchingCustomers.map((c) => (
+                            <button
+                              key={c.id}
+                              onMouseDown={() => handleSelectCustomer(c)}
+                              className="w-full flex items-center justify-between px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors duration-150"
+                            >
+                              <span>{c.name}</span>
+                              {c.loyalty_points > 0 && (
+                                <span className="text-[10px] font-semibold text-lco-mustard">
+                                  {c.loyalty_points} poin
+                                </span>
+                              )}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </>
                 )}
+              </div>
+
+              {/* ── TAMBAHAN (Fase 2: notifikasi poin loyalitas) ── Muncul kalau
+              pelanggan terpilih punya poin, dan belum dipakai/ditutup. */}
+              {selectedCustomer &&
+                selectedCustomer.loyalty_points > 0 &&
+                !usePoints &&
+                !isLoyaltyNoticeDismissed && (
+                  <div className="flex items-center gap-3 rounded-md border border-lco-mustard/30 bg-lco-mustard/10 px-3 py-2 text-xs text-zinc-700 dark:text-zinc-300">
+                    <Sparkles className="w-4 h-4 shrink-0 text-lco-mustard" />
+                    <span className="flex-1">
+                      <strong>{selectedCustomer.name}</strong> punya{" "}
+                      <strong>{selectedCustomer.loyalty_points} poin</strong>{" "}
+                      loyalitas — bisa dipakai sebagai potongan harga.
+                    </span>
+                    <button
+                      onClick={() => setUsePoints(true)}
+                      className="shrink-0 rounded-md bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 px-2.5 py-1 text-[11px] font-semibold text-white"
+                    >
+                      Gunakan Poin
+                    </button>
+                    <button
+                      onClick={() => setIsLoyaltyNoticeDismissed(true)}
+                      className="shrink-0 text-[11px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                    >
+                      Nanti saja
+                    </button>
+                  </div>
+                )}
+              {usePoints && selectedCustomer && (
+                <div className="flex items-center gap-3 rounded-md border border-lco-teal/30 bg-lco-teal/10 px-3 py-2 text-xs text-zinc-700 dark:text-zinc-300">
+                  <Sparkles className="w-4 h-4 shrink-0 text-lco-teal" />
+                  <span className="flex-1">
+                    Memakai <strong>{pointsBeingUsed} poin</strong> ={" "}
+                    <strong>{formatRupiah(discount)}</strong> potongan.
+                  </span>
+                  <button
+                    onClick={() => setUsePoints(false)}
+                    className="shrink-0 text-[11px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                  >
+                    Batalkan
+                  </button>
+                </div>
+              )}
+
+              <div className="relative flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-400" />
+                  <input
+                    type="text"
+                    placeholder="Cari nama, SKU, atau scan barcode..."
+                    className="w-full pl-10 pr-4 py-2 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:border-lco-teal focus:ring-2 focus:ring-lco-teal transition-colors duration-150 text-sm"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+                {/* ── TAMBAHAN (T-11 bagian 3) ── Scan pakai kamera, pelengkap alat
+                scanner fisik (yang sudah bisa lewat kolom pencarian di atas —
+                scanner fisik mengetik seperti keyboard). */}
                 <button
                   onClick={() => {
-                    setSelectedCustomer(null);
-                    setUsePoints(false);
+                    setScanFeedback(null);
+                    setIsScanModalOpen(true);
                   }}
-                  title="Hapus pelanggan"
-                  className="ml-auto text-zinc-400 hover:text-white transition-colors duration-150"
+                  title="Scan Barcode (Kamera)"
+                  className="shrink-0 flex items-center justify-center w-10 h-10 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-500 hover:border-lco-teal hover:text-lco-teal transition-colors duration-150"
+                >
+                  <Camera className="w-4 h-4" />
+                </button>
+                {/* ── TAMBAHAN (Fase 2: Biaya Tambahan) ── */}
+                <button
+                  onClick={() => setIsBiayaTambahanModalOpen(true)}
+                  title="Biaya Tambahan"
+                  className="shrink-0 flex items-center justify-center w-10 h-10 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-500 hover:border-lco-mustard hover:text-lco-mustard transition-colors duration-150"
+                >
+                  <PackagePlus className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                <button
+                  onClick={() => setSelectedCategoryId(null)}
+                  className={`px-3 py-1.5 rounded-full text-[10px] font-semibold uppercase tracking-[0.12em] whitespace-nowrap transition-colors duration-150 ${
+                    selectedCategoryId === null
+                      ? "bg-zinc-900 text-white dark:bg-zinc-200 dark:text-zinc-900"
+                      : "bg-zinc-100 dark:bg-zinc-900 text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  Semua
+                </button>
+                {categories.map((cat) => (
+                  <button
+                    key={cat.id}
+                    onClick={() => setSelectedCategoryId(cat.id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-semibold uppercase tracking-[0.12em] whitespace-nowrap transition-colors duration-150 ${
+                      selectedCategoryId === cat.id
+                        ? "bg-zinc-900 text-white dark:bg-zinc-200 dark:text-zinc-900"
+                        : "bg-zinc-100 dark:bg-zinc-900 text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800"
+                    }`}
+                  >
+                    {cat.color && (
+                      <span
+                        className="w-1.5 h-1.5 rounded-full"
+                        style={{ backgroundColor: cat.color }}
+                      />
+                    )}
+                    {cat.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5">
+              {filteredProducts.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center text-zinc-400 text-xs">
+                  Tidak ada produk yang cocok.
+                </div>
+              ) : (
+                // ── PERBAIKAN (responsif HP/tablet) ── Kolom disesuaikan per lebar
+                // layar: 2 kolom di HP kecil, 3 di HP besar/tablet potret, turun
+                // ke 2 lagi persis di breakpoint `md` (saat panel Keranjang mulai
+                // tampil di sebelah, jatah lebar panel ini otomatis menyempit),
+                // lalu naik lagi ke 3-4 kolom seiring layar makin lebar.
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
+                  {filteredProducts.map((product) => {
+                    const inCartQty =
+                      cart.find((item) => item.product.id === product.id)
+                        ?.qty || 0;
+                    const outOfStock = isOutOfStock(product);
+                    const isMaxReached =
+                      inCartQty >= getAvailableStock(product);
+
+                    return (
+                      <button
+                        key={product.id}
+                        onClick={() => handleAddToCart(product)}
+                        disabled={outOfStock || isMaxReached}
+                        className={`flex flex-col text-left bg-white dark:bg-zinc-950 p-4 rounded-xl border transition-colors duration-150 relative overflow-hidden group ${
+                          outOfStock
+                            ? "border-zinc-200 dark:border-zinc-800 opacity-50 cursor-not-allowed grayscale"
+                            : isMaxReached
+                              ? "border-lco-coral/50 cursor-not-allowed"
+                              : "border-zinc-200 dark:border-zinc-800 hover:border-lco-teal"
+                        }`}
+                      >
+                        {inCartQty > 0 && (
+                          <div className="absolute top-2 right-2 bg-lco-teal text-white text-[10px] font-bold px-2 py-0.5 rounded-full z-10 tabular-nums">
+                            {inCartQty} di keranjang
+                          </div>
+                        )}
+                        <div className="w-full aspect-square bg-zinc-50 dark:bg-zinc-900 rounded-md mb-3 flex items-center justify-center border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+                          {product.photo_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={product.photo_url}
+                              alt={product.name}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <span className="text-[10px] text-zinc-400 font-mono">
+                              {product.sku}
+                            </span>
+                          )}
+                        </div>
+                        <h3 className="text-sm font-semibold tracking-tight leading-tight mb-1">
+                          {product.name}
+                        </h3>
+                        <div className="mt-auto pt-2 flex items-end justify-between w-full">
+                          <span className="font-mono font-semibold text-lco-teal text-sm tabular-nums">
+                            {formatRupiah(product.sell_price)}
+                          </span>
+                          <span
+                            className={`text-[10px] uppercase tracking-[0.12em] font-semibold font-mono tabular-nums ${outOfStock ? "text-lco-coral" : "text-zinc-500"}`}
+                          >
+                            {product.is_service
+                              ? "Jasa"
+                              : `Stok: ${product.stock}`}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* ── TAMBAHAN (responsif HP) ── Hanya tampil di bawah breakpoint
+            `md` (di `md` ke atas keranjang sudah kelihatan di sebelah, jadi
+            tombol ini tidak perlu). Ini pengganti scroll panjang ke bawah —
+            kasir cukup tap untuk pindah ke layar Keranjang. */}
+            {cart.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setMobileView("cart")}
+                className="md:hidden shrink-0 flex items-center justify-between gap-3 mx-4 mb-4 px-4 py-3 rounded-xl bg-lco-teal hover:opacity-90 text-white shadow-lg transition-opacity duration-150"
+              >
+                <span className="flex items-center gap-2 text-sm font-semibold">
+                  <ShoppingCart className="w-4 h-4" />
+                  {getCartItemCount(cart)} item
+                </span>
+                <span className="flex items-center gap-1.5 text-sm font-semibold">
+                  <span className="font-mono tabular-nums">
+                    {formatRupiah(grandTotal)}
+                  </span>
+                  <span className="text-xs font-medium underline underline-offset-2">
+                    Lihat Keranjang
+                  </span>
+                </span>
+              </button>
+            )}
+          </div>
+
+          <div
+            className={`${mobileView === "cart" ? "flex" : "hidden"} md:flex w-full md:w-[320px] lg:w-[380px] xl:w-[420px] flex-col min-h-0 bg-white dark:bg-zinc-950`}
+          >
+            <div className="p-4 sm:p-5 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                {/* ── TAMBAHAN (responsif HP) ── Tombol kembali ke layar Produk;
+                disembunyikan di `md` ke atas karena di sana panel Produk
+                sudah selalu terlihat di sebelah. */}
+                <button
+                  type="button"
+                  onClick={() => setMobileView("products")}
+                  title="Kembali ke Produk"
+                  className="md:hidden shrink-0 p-1.5 -ml-1 rounded-md text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors duration-150"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+                <h2 className="font-semibold text-base tracking-tight flex items-center gap-2 text-zinc-900 dark:text-zinc-100 truncate">
+                  <ShoppingCart className="w-5 h-5 text-lco-teal shrink-0" />
+                  Keranjang
+                </h2>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {/* ── TAMBAHAN (T-11 bagian 1) ── Lihat & lanjutkan pesanan yang ditunda. */}
+                <button
+                  onClick={openHeldList}
+                  className="relative flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-900 text-zinc-500 hover:text-lco-mustard text-[11px] px-2.5 py-1 rounded-full font-mono border border-zinc-200 dark:border-zinc-800 transition-colors duration-150"
+                  title="Pesanan Tertunda"
+                >
+                  <History className="w-3.5 h-3.5" />
+                  {heldOrders.length > 0 && (
+                    <span className="tabular-nums">{heldOrders.length}</span>
+                  )}
+                </button>
+                <span className="bg-zinc-50 dark:bg-zinc-900 text-zinc-500 text-[11px] px-2.5 py-1 rounded-full font-mono tabular-nums border border-zinc-200 dark:border-zinc-800">
+                  {getCartItemCount(cart)} Item
+                </span>
+              </div>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto p-3 bg-zinc-50/50 dark:bg-zinc-900/30">
+              {cart.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center p-6">
+                  <div className="w-16 h-16 bg-zinc-50 dark:bg-zinc-900 rounded-full flex items-center justify-center mb-4 border border-zinc-200 dark:border-zinc-800">
+                    <ShoppingCart className="w-8 h-8 text-zinc-300 dark:text-zinc-700" />
+                  </div>
+                  <p className="text-zinc-500 text-xs">
+                    Belum ada produk di keranjang.
+                  </p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {cart.map((item) => (
+                    <div
+                      key={item.product.id}
+                      className="bg-white dark:bg-zinc-950 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 flex gap-3"
+                    >
+                      <div className="flex-1">
+                        <h4 className="text-sm font-medium line-clamp-1 text-zinc-900 dark:text-zinc-100">
+                          {item.product.name}
+                        </h4>
+                        <p className="font-mono tabular-nums text-xs text-zinc-500 mt-0.5">
+                          {formatRupiah(item.product.sell_price)}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="flex items-center bg-zinc-50 dark:bg-zinc-900 rounded-md p-0.5 border border-zinc-200 dark:border-zinc-800">
+                            <button
+                              onClick={() =>
+                                handleUpdateQty(item.product.id, -1)
+                              }
+                              className="p-1 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-md transition-colors duration-150 text-zinc-500"
+                            >
+                              <Minus className="w-3 h-3" />
+                            </button>
+                            <span className="w-6 text-center font-mono text-xs tabular-nums font-semibold text-zinc-900 dark:text-zinc-100">
+                              {item.qty}
+                            </span>
+                            <button
+                              onClick={() =>
+                                handleUpdateQty(item.product.id, 1)
+                              }
+                              disabled={
+                                item.qty >= getAvailableStock(item.product)
+                              }
+                              className="p-1 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-md transition-colors duration-150 text-zinc-500 disabled:opacity-30 disabled:cursor-not-allowed"
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <button
+                            onClick={() =>
+                              handleRemoveFromCart(item.product.id)
+                            }
+                            className="p-1.5 text-zinc-400 hover:text-lco-coral hover:bg-lco-coral/10 rounded-md transition-colors duration-150"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <p className="font-mono text-sm font-semibold text-lco-teal mt-2 tabular-nums">
+                          {formatRupiah(item.product.sell_price * item.qty)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {transactionError && (
+              <div className="mx-5 mb-3 p-3 rounded-md border border-lco-coral/30 bg-lco-coral/5 text-lco-coral text-xs">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold mb-1">Transaksi gagal</p>
+                    <p>{transactionError}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── TAMBAHAN (T-11 bagian 1) ── Info non-fatal setelah resume held order
+            (mis. item disesuaikan karena stok berubah) — warna kuning/mustard,
+            beda dari transactionError merah, supaya kasir tidak salah kira ada
+            transaksi yang gagal. */}
+            {resumeNotice && (
+              <div className="mx-5 mb-3 p-3 rounded-md border border-lco-mustard/30 bg-lco-mustard/5 text-lco-mustard text-xs flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <p className="flex-1">{resumeNotice}</p>
+                <button
+                  onClick={() => setResumeNotice(null)}
+                  className="shrink-0 hover:opacity-70"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
-            ) : (
-              <>
-                <UserRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-                <input
-                  type="text"
-                  placeholder="Cari nama pelanggan (opsional)..."
-                  className="w-full pl-9 pr-4 py-2 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:border-lco-teal focus:ring-2 focus:ring-lco-teal transition-colors duration-150 text-sm"
-                  value={customerQuery}
-                  onChange={(e) => {
-                    setCustomerQuery(e.target.value);
-                    setIsCustomerDropdownOpen(true);
-                  }}
-                  onFocus={() => setIsCustomerDropdownOpen(true)}
-                  onBlur={() =>
-                    setTimeout(() => setIsCustomerDropdownOpen(false), 150)
-                  }
-                />
-                {isCustomerDropdownOpen && customerQuery.trim() && (
-                  <div className="absolute z-20 mt-1 w-full rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 shadow-lg max-h-56 overflow-y-auto">
-                    {matchingCustomers.length === 0 ? (
-                      <p className="px-3 py-2.5 text-xs text-zinc-400">
-                        Pelanggan tidak ditemukan.
-                      </p>
-                    ) : (
-                      matchingCustomers.map((c) => (
-                        <button
-                          key={c.id}
-                          onMouseDown={() => handleSelectCustomer(c)}
-                          className="w-full flex items-center justify-between px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors duration-150"
-                        >
-                          <span>{c.name}</span>
-                          {c.loyalty_points > 0 && (
-                            <span className="text-[10px] font-semibold text-lco-mustard">
-                              {c.loyalty_points} poin
-                            </span>
-                          )}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </>
             )}
-          </div>
 
-          {/* ── TAMBAHAN (Fase 2: notifikasi poin loyalitas) ── Muncul kalau
-              pelanggan terpilih punya poin, dan belum dipakai/ditutup. */}
-          {selectedCustomer &&
-            selectedCustomer.loyalty_points > 0 &&
-            !usePoints &&
-            !isLoyaltyNoticeDismissed && (
-              <div className="flex items-center gap-3 rounded-md border border-lco-mustard/30 bg-lco-mustard/10 px-3 py-2 text-xs text-zinc-700 dark:text-zinc-300">
-                <Sparkles className="w-4 h-4 shrink-0 text-lco-mustard" />
-                <span className="flex-1">
-                  <strong>{selectedCustomer.name}</strong> punya{" "}
-                  <strong>{selectedCustomer.loyalty_points} poin</strong>{" "}
-                  loyalitas — bisa dipakai sebagai potongan harga.
-                </span>
-                <button
-                  onClick={() => setUsePoints(true)}
-                  className="shrink-0 rounded-md bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 px-2.5 py-1 text-[11px] font-semibold text-white"
-                >
-                  Gunakan Poin
-                </button>
-                <button
-                  onClick={() => setIsLoyaltyNoticeDismissed(true)}
-                  className="shrink-0 text-[11px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-                >
-                  Nanti saja
-                </button>
-              </div>
-            )}
-          {usePoints && selectedCustomer && (
-            <div className="flex items-center gap-3 rounded-md border border-lco-teal/30 bg-lco-teal/10 px-3 py-2 text-xs text-zinc-700 dark:text-zinc-300">
-              <Sparkles className="w-4 h-4 shrink-0 text-lco-teal" />
-              <span className="flex-1">
-                Memakai <strong>{pointsBeingUsed} poin</strong> ={" "}
-                <strong>{formatRupiah(discount)}</strong> potongan.
-              </span>
-              <button
-                onClick={() => setUsePoints(false)}
-                className="shrink-0 text-[11px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-              >
-                Batalkan
-              </button>
-            </div>
-          )}
-
-          <div className="relative flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-400" />
-              <input
-                type="text"
-                placeholder="Cari nama, SKU, atau scan barcode..."
-                className="w-full pl-10 pr-4 py-2 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:border-lco-teal focus:ring-2 focus:ring-lco-teal transition-colors duration-150 text-sm"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-            {/* ── TAMBAHAN (T-11 bagian 3) ── Scan pakai kamera, pelengkap alat
-                scanner fisik (yang sudah bisa lewat kolom pencarian di atas —
-                scanner fisik mengetik seperti keyboard). */}
-            <button
-              onClick={() => {
-                setScanFeedback(null);
-                setIsScanModalOpen(true);
-              }}
-              title="Scan Barcode (Kamera)"
-              className="shrink-0 flex items-center justify-center w-10 h-10 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-500 hover:border-lco-teal hover:text-lco-teal transition-colors duration-150"
-            >
-              <Camera className="w-4 h-4" />
-            </button>
-            {/* ── TAMBAHAN (Fase 2: Biaya Tambahan) ── */}
-            <button
-              onClick={() => setIsBiayaTambahanModalOpen(true)}
-              title="Biaya Tambahan"
-              className="shrink-0 flex items-center justify-center w-10 h-10 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-500 hover:border-lco-mustard hover:text-lco-mustard transition-colors duration-150"
-            >
-              <PackagePlus className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-            <button
-              onClick={() => setSelectedCategoryId(null)}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-semibold uppercase tracking-[0.12em] whitespace-nowrap transition-colors duration-150 ${
-                selectedCategoryId === null
-                  ? "bg-zinc-900 text-white dark:bg-zinc-200 dark:text-zinc-900"
-                  : "bg-zinc-100 dark:bg-zinc-900 text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800"
-              }`}
-            >
-              Semua
-            </button>
-            {categories.map((cat) => (
-              <button
-                key={cat.id}
-                onClick={() => setSelectedCategoryId(cat.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-semibold uppercase tracking-[0.12em] whitespace-nowrap transition-colors duration-150 ${
-                  selectedCategoryId === cat.id
-                    ? "bg-zinc-900 text-white dark:bg-zinc-200 dark:text-zinc-900"
-                    : "bg-zinc-100 dark:bg-zinc-900 text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-800"
-                }`}
-              >
-                {cat.color && (
-                  <span
-                    className="w-1.5 h-1.5 rounded-full"
-                    style={{ backgroundColor: cat.color }}
-                  />
-                )}
-                {cat.name}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5">
-          {filteredProducts.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center text-zinc-400 text-xs">
-              Tidak ada produk yang cocok.
-            </div>
-          ) : (
-            // ── PERBAIKAN (responsif HP/tablet) ── Kolom disesuaikan per lebar
-            // layar: 2 kolom di HP kecil, 3 di HP besar/tablet potret, turun
-            // ke 2 lagi persis di breakpoint `md` (saat panel Keranjang mulai
-            // tampil di sebelah, jatah lebar panel ini otomatis menyempit),
-            // lalu naik lagi ke 3-4 kolom seiring layar makin lebar.
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
-              {filteredProducts.map((product) => {
-                const inCartQty =
-                  cart.find((item) => item.product.id === product.id)?.qty || 0;
-                const outOfStock = isOutOfStock(product);
-                const isMaxReached = inCartQty >= getAvailableStock(product);
-
-                return (
-                  <button
-                    key={product.id}
-                    onClick={() => handleAddToCart(product)}
-                    disabled={outOfStock || isMaxReached}
-                    className={`flex flex-col text-left bg-white dark:bg-zinc-950 p-4 rounded-xl border transition-colors duration-150 relative overflow-hidden group ${
-                      outOfStock
-                        ? "border-zinc-200 dark:border-zinc-800 opacity-50 cursor-not-allowed grayscale"
-                        : isMaxReached
-                          ? "border-lco-coral/50 cursor-not-allowed"
-                          : "border-zinc-200 dark:border-zinc-800 hover:border-lco-teal"
-                    }`}
-                  >
-                    {inCartQty > 0 && (
-                      <div className="absolute top-2 right-2 bg-lco-teal text-white text-[10px] font-bold px-2 py-0.5 rounded-full z-10 tabular-nums">
-                        {inCartQty} di keranjang
-                      </div>
-                    )}
-                    <div className="w-full aspect-square bg-zinc-50 dark:bg-zinc-900 rounded-md mb-3 flex items-center justify-center border border-zinc-200 dark:border-zinc-800 overflow-hidden">
-                      {product.photo_url ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={product.photo_url}
-                          alt={product.name}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <span className="text-[10px] text-zinc-400 font-mono">
-                          {product.sku}
-                        </span>
-                      )}
-                    </div>
-                    <h3 className="text-sm font-semibold tracking-tight leading-tight mb-1">
-                      {product.name}
-                    </h3>
-                    <div className="mt-auto pt-2 flex items-end justify-between w-full">
-                      <span className="font-mono font-semibold text-lco-teal text-sm tabular-nums">
-                        {formatRupiah(product.sell_price)}
-                      </span>
-                      <span
-                        className={`text-[10px] uppercase tracking-[0.12em] font-semibold font-mono tabular-nums ${outOfStock ? "text-lco-coral" : "text-zinc-500"}`}
-                      >
-                        {product.is_service ? "Jasa" : `Stok: ${product.stock}`}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* ── TAMBAHAN (responsif HP) ── Hanya tampil di bawah breakpoint
-            `md` (di `md` ke atas keranjang sudah kelihatan di sebelah, jadi
-            tombol ini tidak perlu). Ini pengganti scroll panjang ke bawah —
-            kasir cukup tap untuk pindah ke layar Keranjang. */}
-        {cart.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setMobileView("cart")}
-            className="md:hidden shrink-0 flex items-center justify-between gap-3 mx-4 mb-4 px-4 py-3 rounded-xl bg-lco-teal hover:opacity-90 text-white shadow-lg transition-opacity duration-150"
-          >
-            <span className="flex items-center gap-2 text-sm font-semibold">
-              <ShoppingCart className="w-4 h-4" />
-              {getCartItemCount(cart)} item
-            </span>
-            <span className="flex items-center gap-1.5 text-sm font-semibold">
-              <span className="font-mono tabular-nums">
-                {formatRupiah(grandTotal)}
-              </span>
-              <span className="text-xs font-medium underline underline-offset-2">
-                Lihat Keranjang
-              </span>
-            </span>
-          </button>
-        )}
-      </div>
-
-      <div
-        className={`${mobileView === "cart" ? "flex" : "hidden"} md:flex w-full md:w-[320px] lg:w-[380px] xl:w-[420px] flex-col min-h-0 bg-white dark:bg-zinc-950`}
-      >
-        <div className="p-4 sm:p-5 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 min-w-0">
-            {/* ── TAMBAHAN (responsif HP) ── Tombol kembali ke layar Produk;
-                disembunyikan di `md` ke atas karena di sana panel Produk
-                sudah selalu terlihat di sebelah. */}
-            <button
-              type="button"
-              onClick={() => setMobileView("products")}
-              title="Kembali ke Produk"
-              className="md:hidden shrink-0 p-1.5 -ml-1 rounded-md text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors duration-150"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-            <h2 className="font-semibold text-base tracking-tight flex items-center gap-2 text-zinc-900 dark:text-zinc-100 truncate">
-              <ShoppingCart className="w-5 h-5 text-lco-teal shrink-0" />
-              Keranjang
-            </h2>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {/* ── TAMBAHAN (T-11 bagian 1) ── Lihat & lanjutkan pesanan yang ditunda. */}
-            <button
-              onClick={openHeldList}
-              className="relative flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-900 text-zinc-500 hover:text-lco-mustard text-[11px] px-2.5 py-1 rounded-full font-mono border border-zinc-200 dark:border-zinc-800 transition-colors duration-150"
-              title="Pesanan Tertunda"
-            >
-              <History className="w-3.5 h-3.5" />
-              {heldOrders.length > 0 && (
-                <span className="tabular-nums">{heldOrders.length}</span>
-              )}
-            </button>
-            <span className="bg-zinc-50 dark:bg-zinc-900 text-zinc-500 text-[11px] px-2.5 py-1 rounded-full font-mono tabular-nums border border-zinc-200 dark:border-zinc-800">
-              {getCartItemCount(cart)} Item
-            </span>
-          </div>
-        </div>
-
-        <div className="flex-1 min-h-0 overflow-y-auto p-3 bg-zinc-50/50 dark:bg-zinc-900/30">
-          {cart.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center p-6">
-              <div className="w-16 h-16 bg-zinc-50 dark:bg-zinc-900 rounded-full flex items-center justify-center mb-4 border border-zinc-200 dark:border-zinc-800">
-                <ShoppingCart className="w-8 h-8 text-zinc-300 dark:text-zinc-700" />
-              </div>
-              <p className="text-zinc-500 text-xs">
-                Belum ada produk di keranjang.
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {cart.map((item) => (
-                <div
-                  key={item.product.id}
-                  className="bg-white dark:bg-zinc-950 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 flex gap-3"
-                >
-                  <div className="flex-1">
-                    <h4 className="text-sm font-medium line-clamp-1 text-zinc-900 dark:text-zinc-100">
-                      {item.product.name}
-                    </h4>
-                    <p className="font-mono tabular-nums text-xs text-zinc-500 mt-0.5">
-                      {formatRupiah(item.product.sell_price)}
-                    </p>
-                  </div>
-                  <div className="flex flex-col items-end justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center bg-zinc-50 dark:bg-zinc-900 rounded-md p-0.5 border border-zinc-200 dark:border-zinc-800">
-                        <button
-                          onClick={() => handleUpdateQty(item.product.id, -1)}
-                          className="p-1 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-md transition-colors duration-150 text-zinc-500"
-                        >
-                          <Minus className="w-3 h-3" />
-                        </button>
-                        <span className="w-6 text-center font-mono text-xs tabular-nums font-semibold text-zinc-900 dark:text-zinc-100">
-                          {item.qty}
-                        </span>
-                        <button
-                          onClick={() => handleUpdateQty(item.product.id, 1)}
-                          disabled={item.qty >= getAvailableStock(item.product)}
-                          className="p-1 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-md transition-colors duration-150 text-zinc-500 disabled:opacity-30 disabled:cursor-not-allowed"
-                        >
-                          <Plus className="w-3 h-3" />
-                        </button>
-                      </div>
-                      <button
-                        onClick={() => handleRemoveFromCart(item.product.id)}
-                        className="p-1.5 text-zinc-400 hover:text-lco-coral hover:bg-lco-coral/10 rounded-md transition-colors duration-150"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                    <p className="font-mono text-sm font-semibold text-lco-teal mt-2 tabular-nums">
-                      {formatRupiah(item.product.sell_price * item.qty)}
-                    </p>
-                  </div>
+            <div className="p-4 sm:p-5 bg-white dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-800 z-10">
+              <div className="space-y-1.5 mb-5 text-sm">
+                <div className="flex justify-between text-zinc-500">
+                  <span className="text-xs">Subtotal</span>
+                  <span className="font-mono tabular-nums">
+                    {formatRupiah(subtotal)}
+                  </span>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
+                {tax > 0 && (
+                  <div className="flex justify-between text-zinc-500">
+                    <span className="text-xs">
+                      Pajak (PPN {posSettings.ppnRate}%)
+                    </span>
+                    <span className="font-mono tabular-nums">
+                      {formatRupiah(tax)}
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between font-semibold text-lg pt-3 border-t border-zinc-200 dark:border-zinc-800 mt-3 text-zinc-900 dark:text-zinc-100">
+                  <span>Total</span>
+                  <span className="font-mono tabular-nums text-lco-teal">
+                    {formatRupiah(grandTotal)}
+                  </span>
+                </div>
+              </div>
 
-        {transactionError && (
-          <div className="mx-5 mb-3 p-3 rounded-md border border-lco-coral/30 bg-lco-coral/5 text-lco-coral text-xs">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-semibold mb-1">Transaksi gagal</p>
-                <p>{transactionError}</p>
+              <div className="grid grid-cols-3 gap-3">
+                <button
+                  disabled={cart.length === 0 || isSavingTransaction}
+                  onClick={openHoldModal}
+                  className="col-span-1 flex items-center justify-center gap-2 py-3 rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 hover:bg-lco-mustard/20 hover:text-lco-mustard transition-colors duration-150 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Clock className="w-4 h-4" />
+                  <span className="text-xs">Tunda</span>
+                </button>
+                <button
+                  disabled={cart.length === 0 || isSavingTransaction}
+                  onClick={() => {
+                    setTransactionError(null);
+                    setIsPaymentModalOpen(true);
+                  }}
+                  className="col-span-2 flex items-center justify-center gap-2 py-3 rounded-md bg-lco-green hover:bg-lco-green-hover text-white transition-colors duration-150 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isSavingTransaction ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      <span className="text-sm">Menyimpan...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CreditCard className="w-5 h-5" />
+                      <span className="text-sm">Bayar Sekarang</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           </div>
-        )}
-
-        {/* ── TAMBAHAN (T-11 bagian 1) ── Info non-fatal setelah resume held order
-            (mis. item disesuaikan karena stok berubah) — warna kuning/mustard,
-            beda dari transactionError merah, supaya kasir tidak salah kira ada
-            transaksi yang gagal. */}
-        {resumeNotice && (
-          <div className="mx-5 mb-3 p-3 rounded-md border border-lco-mustard/30 bg-lco-mustard/5 text-lco-mustard text-xs flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-            <p className="flex-1">{resumeNotice}</p>
-            <button
-              onClick={() => setResumeNotice(null)}
-              className="shrink-0 hover:opacity-70"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
-        <div className="p-4 sm:p-5 bg-white dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-800 z-10">
-          <div className="space-y-1.5 mb-5 text-sm">
-            <div className="flex justify-between text-zinc-500">
-              <span className="text-xs">Subtotal</span>
-              <span className="font-mono tabular-nums">
-                {formatRupiah(subtotal)}
-              </span>
-            </div>
-            {tax > 0 && (
-              <div className="flex justify-between text-zinc-500">
-                <span className="text-xs">
-                  Pajak (PPN {posSettings.ppnRate}%)
-                </span>
-                <span className="font-mono tabular-nums">
-                  {formatRupiah(tax)}
-                </span>
-              </div>
-            )}
-            <div className="flex justify-between font-semibold text-lg pt-3 border-t border-zinc-200 dark:border-zinc-800 mt-3 text-zinc-900 dark:text-zinc-100">
-              <span>Total</span>
-              <span className="font-mono tabular-nums text-lco-teal">
-                {formatRupiah(grandTotal)}
-              </span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            <button
-              disabled={cart.length === 0 || isSavingTransaction}
-              onClick={openHoldModal}
-              className="col-span-1 flex items-center justify-center gap-2 py-3 rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 hover:bg-lco-mustard/20 hover:text-lco-mustard transition-colors duration-150 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Clock className="w-4 h-4" />
-              <span className="text-xs">Tunda</span>
-            </button>
-            <button
-              disabled={cart.length === 0 || isSavingTransaction}
-              onClick={() => {
-                setTransactionError(null);
-                setIsPaymentModalOpen(true);
-              }}
-              className="col-span-2 flex items-center justify-center gap-2 py-3 rounded-md bg-lco-green hover:bg-lco-green-hover text-white transition-colors duration-150 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isSavingTransaction ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  <span className="text-sm">Menyimpan...</span>
-                </>
-              ) : (
-                <>
-                  <CreditCard className="w-5 h-5" />
-                  <span className="text-sm">Bayar Sekarang</span>
-                </>
-              )}
-            </button>
-          </div>
         </div>
-      </div>
+      )}
 
       <PaymentModal
         isOpen={isPaymentModalOpen}
