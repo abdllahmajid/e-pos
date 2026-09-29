@@ -78,18 +78,19 @@ export interface ReceiptData {
   promoText?: string;
 }
 
-// ── PERUBAHAN (Fase 3: relabel metode pembayaran) ── QRIS -> "Digital",
-// BANK_TRANSFER/transfer -> "Debit/Kredit". Value ENUM di database TIDAK
-// diubah (schema.sql), cuma teks yang tampil di struk & preview. Kalau
-// diubah di sini, ubah juga PREVIEW_METHOD_LABELS di PaymentModal.tsx (lihat
-// catatan di sana) supaya preview & hasil cetak tetap sama persis.
+// ── PERUBAHAN (migration 034) ── Metode bayar disederhanakan jadi 3: Tunai
+// (CASH), Digital (DIGITAL), Piutang (TEMPO). Key lama (tunai/transfer/
+// BANK_TRANSFER/QRIS) dipertahankan sebagai fallback label untuk data lama.
+// Kalau diubah di sini, ubah juga PREVIEW_METHOD_LABELS di PaymentModal.tsx
+// (lihat catatan di sana) supaya preview & hasil cetak tetap sama persis.
 const METHOD_LABELS: Record<string, string> = {
-  tunai: "Tunai",
   CASH: "Tunai",
-  transfer: "Debit/Kredit",
-  BANK_TRANSFER: "Debit/Kredit",
+  DIGITAL: "Digital",
+  TEMPO: "Piutang",
+  tunai: "Tunai",
+  transfer: "Digital",
+  BANK_TRANSFER: "Digital",
   QRIS: "Digital",
-  TEMPO: "Tempo / Piutang",
 };
 
 // ── PERBAIKAN (auto-print tanpa dialog) ── Di-export supaya bisa dipakai

@@ -59,9 +59,11 @@ function formatDate(isoString: string): string {
 function methodLabel(method: string | null): string {
   const labels: Record<string, string> = {
     CASH: "Tunai",
-    BANK_TRANSFER: "Transfer Bank",
-    QRIS: "QRIS",
-    TEMPO: "Tempo / Piutang",
+    DIGITAL: "Digital",
+    TEMPO: "Piutang",
+    // Fallback untuk baris lama yang belum termigrasi (migration 034).
+    BANK_TRANSFER: "Digital",
+    QRIS: "Digital",
   };
   if (!method) return "-";
   return labels[method] ?? method;

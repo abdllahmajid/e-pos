@@ -49,12 +49,9 @@
 // - **Shift yang masih OPEN ikut ditampilkan** di rentang tanggal (bukan cuma
 //   CLOSED) — supervisor perlu tahu ada shift yang belum ditutup dalam rentang
 //   yang dia lihat, bukan cuma shift yang sudah selesai.
-// - **`settleReceivable()` di sini HANYA memanggil RPC + refetch** — upload
-//   bukti pelunasan (tabel `payment_proofs`, kolom `proof_type = 'settlement'`
-//   dari migration 012) sengaja belum ditaruh di hook ini, karena upload file
-//   ke Storage butuh komponen (input file) — akan ditambahkan saat
-//   LaporanModule.tsx dibuat, hook ini cukup expose `payment_id` yang
-//   dibutuhkan untuk insert baris `payment_proofs` dari komponen.
+// - **`settleReceivable()` di sini HANYA memanggil RPC + refetch.** Upload bukti
+//   (tabel `payment_proofs`) sudah dihapus di migration 034 — pelunasan piutang
+//   cukup ditandai lunas lewat RPC.
 
 "use client";
 

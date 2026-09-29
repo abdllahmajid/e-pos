@@ -67,9 +67,11 @@ function formatDate(isoString: string): string {
 function methodLabel(method: string): string {
   const labels: Record<string, string> = {
     CASH: "Tunai",
-    BANK_TRANSFER: "Transfer Bank",
-    QRIS: "QRIS",
-    TEMPO: "Tempo / Piutang",
+    DIGITAL: "Digital",
+    TEMPO: "Piutang",
+    // Fallback untuk baris lama yang belum termigrasi (migration 034).
+    BANK_TRANSFER: "Digital",
+    QRIS: "Digital",
   };
   return labels[method] ?? method;
 }
@@ -554,39 +556,6 @@ export default function TransactionDetailModal({
                         <span className="font-mono tabular-nums text-lco-coral font-medium">
                           {formatDate(payment.due_date).split(" ")[0]}
                         </span>
-                      </div>
-                    )}
-                    {payment.proofs && payment.proofs.length > 0 && (
-                      <div className="mt-1">
-                        <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-400 mb-1.5 block">
-                          Bukti Pembayaran:
-                        </span>
-                        <div className="grid grid-cols-3 gap-2">
-                          {payment.proofs.map((proof) => (
-                            <a
-                              key={proof.id}
-                              href={proof.file_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="block aspect-square rounded-md border border-zinc-200 dark:border-zinc-800 overflow-hidden hover:border-lco-teal transition-colors"
-                            >
-                              {proof.file_url.match(
-                                /\.(jpeg|jpg|gif|png)$/i,
-                              ) ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={proof.file_url}
-                                  alt="Bukti"
-                                  className="w-full h-full object-cover"
-                                />
-                              ) : (
-                                <div className="w-full h-full flex items-center justify-center bg-zinc-50 dark:bg-zinc-900 text-[9px] text-zinc-400 p-1 text-center break-all">
-                                  {proof.file_name || "File"}
-                                </div>
-                              )}
-                            </a>
-                          ))}
-                        </div>
                       </div>
                     )}
                   </div>

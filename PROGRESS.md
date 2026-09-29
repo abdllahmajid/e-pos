@@ -15,6 +15,47 @@
 > per langkah**, diserahkan sebagai file yang bisa diunduh — bukan banyak
 > kode sekaligus di dalam chat.
 
+## Perubahan: Metode bayar jadi 3 + hapus bukti bayar (sesi #23, 2026-09-30)
+
+Permintaan pemilik project: metode pembayaran hanya **Tunai, Digital, Piutang**.
+Pembayaran digital nanti disambungkan ke **Midtrans**, jadi konsep upload bukti
+TF/QRIS dihapus, termasuk tabelnya.
+
+- **Keputusan penamaan:** value database `CASH` (Tunai), `DIGITAL` (baru, gabungan
+  QRIS + transfer + debit/kredit lama), `TEMPO` (label UI "Piutang"; value TEMPO
+  sengaja dipertahankan supaya `settle_receivable`, laporan piutang, dashboard
+  tidak ikut berubah).
+- **Migration `034_simplify_payment_methods.sql` (BELUM dijalankan di production):**
+  enum `payment_method` dibangun ulang jadi tepat 3 nilai; data lama dipetakan
+  (tunai->CASH; transfer/QRIS/BANK_TRANSFER->DIGITAL); `create_transaction`
+  dibuat ulang dari definisi yang ada di database (bukan diketik ulang); tabel
+  `payment_proofs` + policy Storage-nya dihapus. Baris `lainnya` (kalau ada)
+  menghentikan migration supaya diputuskan manual. Satu transaksi, aman diulang.
+- **Konsekuensi yang perlu diketahui:** tabel `payment_proofs` juga dipakai untuk
+  bukti PELUNASAN piutang (`proof_type = 'settlement'`), jadi upload bukti di
+  modal "Tandai Lunas" (Laporan) ikut dihapus — pelunasan tinggal ditandai lunas.
+  Bucket Storage `payment-proofs` + filenya harus dihapus MANUAL lewat Dashboard
+  (Supabase melarang hapus data storage lewat SQL).
+- **Kode:** `PaymentModal.tsx` (3 tombol, blok upload bukti tunggal & split
+  dihapus, `uploadPaymentProofs` tidak dipakai lagi), `transactionApi.ts` (tipe
+  `PaymentMethod` 3 nilai; `PaymentProof`, `proofs`, fungsi upload, select
+  `payment_proofs` dihapus), `useTransactions.ts`, `KasirModule.tsx`,
+  `TransactionDetailModal.tsx` (galeri bukti dihapus), `LaporanModule.tsx`,
+  `useReports.ts` (komentar), `printLogic.ts` & `cek-struk/page.tsx` (label).
+  Label lama (BANK_TRANSFER/QRIS/transfer/tunai) dipertahankan hanya sebagai
+  fallback tampilan untuk data yang belum termigrasi.
+- **Belum ada:** integrasi Midtrans. Sampai itu jadi, "Digital" hanya mencatat
+  pembayaran sebagai lunas atas konfirmasi kasir, tanpa verifikasi otomatis.
+  `payment_id` tetap dikembalikan dari RPC untuk dipakai sebagai referensi order.
+- **Status:** migration diuji di PostgreSQL 16 lokal (schema.sql + data lama semua
+  jenis metode + bukti): pemetaan data benar; `create_transaction` jalan untuk
+  CASH/DIGITAL/TEMPO dan split CASH+DIGITAL, stok berkurang benar; nilai lama
+  (QRIS) ditolak. `tsc` bersih untuk file yang diubah (2 error lama di
+  `app/layout.tsx` & `printerConnection.ts` tidak terkait). **Belum dites di
+  browser.** `supabase/schema.sql` (setup dari nol) TIDAK diubah — sudah tertinggal
+  dari rantai migration sejak 028.
+- **Urutan deploy:** jalankan migration 034 dulu, baru deploy kode.
+
 ## Perubahan: Buka/Tutup Shift sepenuhnya di layar Kasir (sesi #22, 2026-09-29)
 
 Permintaan pemilik project: tombol Buka & Tutup Shift **hanya** ada di layar

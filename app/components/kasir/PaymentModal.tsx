@@ -4,16 +4,11 @@ import { useState, useEffect, useRef } from "react";
 import {
   X,
   Wallet,
-  Building2,
-  CreditCard,
   QrCode,
   CalendarClock,
   CheckCircle2,
   Loader2,
   AlertTriangle,
-  Upload,
-  Paperclip,
-  Trash2,
   User,
   Phone,
   MessageCircle,
@@ -24,10 +19,7 @@ import type {
   PaymentMethod,
   SplitPaymentLine,
 } from "@/lib/pos/transactionApi";
-import {
-  uploadPaymentProofs,
-  validateSplitPayments,
-} from "@/lib/pos/transactionApi";
+import { validateSplitPayments } from "@/lib/pos/transactionApi";
 // ── PERBAIKAN (konsep baru: preview struk + cetak manual) ── Sebelumnya di
 // sini ada tipe `ReceiptPreviewData` yang didefinisikan ULANG secara manual
 // (supaya PaymentModal "tidak perlu tahu" bentuk printLogic.ts) — tapi itu
@@ -48,23 +40,18 @@ import Toast from "@/app/components/ui/Toast";
 // punya dependency RUNTIME ke printLogic.ts — lihat catatan di atas soal
 // `import type` ReceiptData). Kalau labelnya diubah di printLogic.ts, ubah
 // juga di sini supaya preview & hasil cetak tetap sama persis.
-// ── PERUBAHAN (Fase 3: relabel metode pembayaran) ── Sebelumnya "Transfer
-// Bank" / "QRIS" terpisah. Flow yang diminta menyebut 3 metode utama: Tunai,
-// Digital (QRIS/e-wallet), Debit/Kredit. Value ENUM di database (CASH/
-// BANK_TRANSFER/QRIS/TEMPO, lihat schema.sql) SENGAJA TIDAK diubah — supaya
-// tidak perlu migration baru & tidak menyentuh RPC create_transaction/
-// laporan yang sudah bergantung pada value-value itu. Yang berubah CUMA
-// label & ikon yang tampil ke kasir. Harus tetap sama persis dengan
-// METHOD_LABELS di lib/pos/printLogic.ts (lihat catatan di file itu).
-// TEMPO (piutang) tetap apa adanya — fitur kredit toko yang beda konsep dari
-// 3 metode pembayaran langsung, jadi dipertahankan sebagai pilihan ke-4.
+// ── PERUBAHAN (metode bayar disederhanakan) ── Sekarang hanya 3 metode:
+// Tunai (CASH), Digital (DIGITAL), Piutang (TEMPO). Key lama (tunai/transfer/
+// BANK_TRANSFER/QRIS) sengaja dibiarkan sebagai fallback label supaya baris
+// lama yang belum termigrasi (migration 034) tidak tampil sebagai teks mentah.
 const PREVIEW_METHOD_LABELS: Record<string, string> = {
-  tunai: "Tunai",
   CASH: "Tunai",
-  transfer: "Debit/Kredit",
-  BANK_TRANSFER: "Debit/Kredit",
+  DIGITAL: "Digital",
+  TEMPO: "Piutang",
+  tunai: "Tunai",
+  transfer: "Digital",
+  BANK_TRANSFER: "Digital",
   QRIS: "Digital",
-  TEMPO: "Tempo / Piutang",
 };
 
 function formatMethodLabel(method: string): string {
@@ -93,8 +80,7 @@ type PaymentModalProps = {
    * (beberapa metode sekaligus). Opsional: kalau parent tidak mengirim prop ini,
    * pilihan "Split Bayar" disembunyikan dan modal berperilaku persis seperti
    * sebelumnya. Hasilnya memuat `payments` (id tiap baris pembayaran yang baru
-   * tersimpan) supaya modal ini bisa menempelkan bukti transfer/QRIS ke baris
-   * yang benar.
+   * tersimpan).
    */
   onConfirmSplitPayment?: (
     lines: SplitPaymentLine[],
@@ -139,22 +125,19 @@ const METHODS: {
   icon: typeof Wallet;
 }[] = [
   { value: "CASH", label: "Tunai", icon: Wallet },
-  { value: "QRIS", label: "Digital", icon: QrCode },
-  { value: "BANK_TRANSFER", label: "Debit/Kredit", icon: CreditCard },
-  { value: "TEMPO", label: "Tempo / Piutang", icon: CalendarClock },
+  { value: "DIGITAL", label: "Digital", icon: QrCode },
+  { value: "TEMPO", label: "Piutang", icon: CalendarClock },
 ];
 
 // ── TAMBAHAN (021) ── Urutan tampil & urutan baris yang dikirim ke RPC pada mode split.
-const SPLIT_ORDER: PaymentMethod[] = ["CASH", "BANK_TRANSFER", "QRIS", "TEMPO"];
-
-type ProofMethod = "BANK_TRANSFER" | "QRIS";
+const SPLIT_ORDER: PaymentMethod[] = ["CASH", "DIGITAL", "TEMPO"];
 
 function emptyMethodFlags(): Record<PaymentMethod, boolean> {
-  return { CASH: false, BANK_TRANSFER: false, QRIS: false, TEMPO: false };
+  return { CASH: false, DIGITAL: false, TEMPO: false };
 }
 
 function emptyMethodAmounts(): Record<PaymentMethod, number> {
-  return { CASH: 0, BANK_TRANSFER: 0, QRIS: 0, TEMPO: 0 };
+  return { CASH: 0, DIGITAL: 0, TEMPO: 0 };
 }
 
 function methodLabel(method: PaymentMethod): string {
@@ -186,9 +169,6 @@ export default function PaymentModal({
   const [customerPhone, setCustomerPhone] = useState("");
   const [dueDate, setDueDate] = useState(defaultDueDate());
 
-  const [proofFiles, setProofFiles] = useState<File[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   // ── TAMBAHAN (021) ── State mode split. Sengaja terpisah dari `method`/`paidAmount`
   // milik mode tunggal supaya berpindah mode tidak saling menimpa input kasir.
   // - splitOn: metode mana yang dipakai (tiap metode maksimal 1 baris, sama seperti RPC).
@@ -202,23 +182,13 @@ export default function PaymentModal({
   const [splitAmount, setSplitAmount] =
     useState<Record<PaymentMethod, number>>(emptyMethodAmounts());
   const [splitCashReceived, setSplitCashReceived] = useState<number>(0);
-  const [splitProofs, setSplitProofs] = useState<Record<ProofMethod, File[]>>({
-    BANK_TRANSFER: [],
-    QRIS: [],
-  });
-  const splitFileRefs = useRef<Record<ProofMethod, HTMLInputElement | null>>({
-    BANK_TRANSFER: null,
-    QRIS: null,
-  });
 
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isUploadingProof, setIsUploadingProof] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
-  const [proofWarning, setProofWarning] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
 
   // ── TAMBAHAN (013) ── Status tombol "Kirim WA" di layar sukses. Terpisah dari
-  // isProcessing/isUploadingProof karena aksi ini terjadi SETELAH transaksi
+  // isProcessing karena aksi ini terjadi SETELAH transaksi
   // sudah tersimpan — gagal di sini tidak boleh terlihat seperti transaksi
   // gagal (uang & stok sudah benar, cuma pengiriman gambar struk yang gagal).
   const [waStatus, setWaStatus] = useState<
@@ -251,16 +221,12 @@ export default function PaymentModal({
       setCustomerName("");
       setCustomerPhone("");
       setDueDate(defaultDueDate());
-      setProofFiles([]);
       setMode("single");
       setSplitOn(emptyMethodFlags());
       setSplitAmount(emptyMethodAmounts());
       setSplitCashReceived(0);
-      setSplitProofs({ BANK_TRANSFER: [], QRIS: [] });
       setIsProcessing(false);
-      setIsUploadingProof(false);
       setIsSuccess(false);
-      setProofWarning(null);
       setLocalError(null);
       setWaStatus("idle");
       setWaMethod(null);
@@ -376,42 +342,10 @@ export default function PaymentModal({
     setSplitAmountFor(target, Math.max(total - others, 0));
   }
 
-  function handlePickSplitFiles(
-    target: ProofMethod,
-    e: React.ChangeEvent<HTMLInputElement>,
-  ) {
-    const picked = Array.from(e.target.files ?? []);
-    if (picked.length === 0) return;
-    setSplitProofs((prev) => ({
-      ...prev,
-      [target]: [...prev[target], ...picked],
-    }));
-    e.target.value = "";
-  }
-
-  function handleRemoveSplitFile(target: ProofMethod, index: number) {
-    setSplitProofs((prev) => ({
-      ...prev,
-      [target]: prev[target].filter((_, i) => i !== index),
-    }));
-  }
-
-  function handlePickFiles(e: React.ChangeEvent<HTMLInputElement>) {
-    const picked = Array.from(e.target.files ?? []);
-    if (picked.length === 0) return;
-    setProofFiles((prev) => [...prev, ...picked]);
-    e.target.value = "";
-  }
-
-  function handleRemoveFile(index: number) {
-    setProofFiles((prev) => prev.filter((_, i) => i !== index));
-  }
-
   async function handleProcessPayment() {
     if (!isPayable || isProcessing) return;
 
     setLocalError(null);
-    setProofWarning(null);
     setIsProcessing(true);
 
     try {
@@ -423,116 +357,48 @@ export default function PaymentModal({
       // kalau kosong, konsisten dengan pola customerName di TEMPO.
       const trimmedPhone = customerPhone.trim();
 
-      const { paymentId } = await onConfirmPayment(
-        method,
-        finalPaidAmount,
-        finalChange,
-        {
-          // ── KOREKSI (021) ── Sebelumnya nama HANYA dikirim untuk TEMPO, padahal
-          // field "Nama Pelanggan (opsional)" tampil untuk semua metode lain —
-          // nama yang diketik kasir diam-diam terbuang dan tidak pernah tersimpan.
-          customerName: customerName.trim() || undefined,
-          customerPhone: trimmedPhone || undefined,
-          dueDate: method === "TEMPO" ? dueDate : undefined,
-        },
-      );
-
-      // ── KOREKSI (021) ── `setIsProcessing(false)` dulu dipanggil DI SINI, sebelum
-      // upload bukti. Selama upload (bisa beberapa detik) tombol Bayar aktif lagi
-      // dan klik kedua akan MEMBUAT TRANSAKSI GANDA (stok terpotong 2x). Sekarang
-      // baru dimatikan setelah upload selesai (lihat di bawah).
-
-      let warning: string | null = null;
-      if (
-        (method === "BANK_TRANSFER" || method === "QRIS") &&
-        proofFiles.length > 0
-      ) {
-        setIsUploadingProof(true);
-        try {
-          await uploadPaymentProofs(paymentId, proofFiles);
-        } catch (proofErr) {
-          warning =
-            proofErr instanceof Error
-              ? proofErr.message
-              : "Transaksi tersimpan, tapi bukti pembayaran gagal diunggah.";
-          setProofWarning(warning);
-        } finally {
-          setIsUploadingProof(false);
-        }
-      }
+      await onConfirmPayment(method, finalPaidAmount, finalChange, {
+        // ── KOREKSI (021) ── Sebelumnya nama HANYA dikirim untuk TEMPO, padahal
+        // field "Nama Pelanggan (opsional)" tampil untuk semua metode lain —
+        // nama yang diketik kasir diam-diam terbuang dan tidak pernah tersimpan.
+        customerName: customerName.trim() || undefined,
+        customerPhone: trimmedPhone || undefined,
+        dueDate: method === "TEMPO" ? dueDate : undefined,
+      });
 
       setIsProcessing(false);
 
-      // ── KOREKSI (013) ── Sebelumnya di sini ada setTimeout yang otomatis
-      // menutup modal (900ms, atau 2500ms kalau ada proofWarning) — TIDAK
-      // cukup waktu untuk kasir sempat menekan tombol apa pun, apalagi PRD
-      // §4.2 secara eksplisit minta layar sukses menawarkan "kirim struk via
-      // WhatsApp" DAN "opsi transaksi baru" sebagai dua aksi terpisah, bukan
-      // sesuatu yang lewat begitu saja dalam waktu kurang dari 1 detik.
-      // Sekarang layar sukses tetap terbuka sampai kasir menekan salah satu
-      // tombol (lihat blok isSuccess di bawah) — struk tetap otomatis
-      // tercetak/tersimpan seperti sebelumnya (dipanggil parent sebelum
-      // Promise ini resolve), hanya PENUTUPAN modal yang sekarang manual.
+      // ── KOREKSI (013) ── Layar sukses tetap terbuka sampai kasir menekan
+      // salah satu tombolnya (kirim WA / transaksi baru) — tidak ada lagi
+      // penutupan otomatis. Struk sudah dicetak/disiapkan parent sebelum
+      // Promise ini resolve.
       setIsSuccess(true);
     } catch (err) {
       setIsProcessing(false);
-      setIsUploadingProof(false);
       setLocalError(
         err instanceof Error ? err.message : "Pembayaran gagal diproses.",
       );
     }
   }
 
-  // ── TAMBAHAN (021) ── Proses pembayaran mode split. Alurnya sama dengan
-  // handleProcessPayment: simpan transaksi dulu (atomik di RPC), BARU unggah bukti
-  // ke baris pembayaran yang benar. Gagal unggah bukti tidak membatalkan transaksi
-  // (uang & stok sudah benar) — hanya jadi peringatan di layar sukses.
+  // ── TAMBAHAN (021) ── Proses pembayaran mode split. Transaksi disimpan
+  // atomik di RPC; kalau gagal, pesan errornya ditampilkan di modal.
   async function handleProcessSplitPayment() {
     if (!onConfirmSplitPayment || !isPayable || isProcessing) return;
 
     setLocalError(null);
-    setProofWarning(null);
     setIsProcessing(true);
 
     try {
-      const { payments } = await onConfirmSplitPayment(splitLines, {
+      await onConfirmSplitPayment(splitLines, {
         customerName: customerName.trim() || undefined,
         customerPhone: customerPhone.trim() || undefined,
       });
 
-      const warnings: string[] = [];
-      for (const target of ["BANK_TRANSFER", "QRIS"] as ProofMethod[]) {
-        const files = splitProofs[target];
-        if (!splitOn[target] || files.length === 0) continue;
-
-        const created = payments.find((p) => p.method === target);
-        if (!created) {
-          warnings.push(
-            `Bukti ${methodLabel(target)} tidak bisa ditautkan ke pembayaran.`,
-          );
-          continue;
-        }
-
-        setIsUploadingProof(true);
-        try {
-          await uploadPaymentProofs(created.payment_id, files);
-        } catch (proofErr) {
-          warnings.push(
-            proofErr instanceof Error
-              ? `${methodLabel(target)}: ${proofErr.message}`
-              : `Transaksi tersimpan, tapi bukti ${methodLabel(target)} gagal diunggah.`,
-          );
-        } finally {
-          setIsUploadingProof(false);
-        }
-      }
-
-      if (warnings.length > 0) setProofWarning(warnings.join(" "));
       setIsProcessing(false);
       setIsSuccess(true);
     } catch (err) {
       setIsProcessing(false);
-      setIsUploadingProof(false);
       setLocalError(
         err instanceof Error ? err.message : "Pembayaran gagal diproses.",
       );
@@ -595,14 +461,6 @@ export default function PaymentModal({
                   : "Kirim struk digital ke pelanggan atau lanjut ke transaksi berikutnya."}
               </p>
             </div>
-
-            {proofWarning && (
-              <div className="px-6 shrink-0">
-                <p className="mb-3 text-[11px] text-lco-mustard border border-lco-mustard/40 bg-lco-mustard/10 rounded-md px-3 py-2">
-                  {proofWarning}
-                </p>
-              </div>
-            )}
 
             {/* ── Preview struk/nota — dipaksa bg putih & teks gelap (bg-white
               text-zinc-800, TANPA varian dark:) apa pun tema aplikasinya,
@@ -894,7 +752,7 @@ export default function PaymentModal({
 
           {!isSplit && (
             <>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-6">
+              <div className="grid grid-cols-3 gap-2 mb-6">
                 {METHODS.map(({ value, label, icon: Icon }) => (
                   <button
                     key={value}
@@ -1014,67 +872,16 @@ export default function PaymentModal({
                 </div>
               )}
 
-              {(method === "BANK_TRANSFER" || method === "QRIS") && (
-                <div className="space-y-4">
-                  <div className="p-4 bg-lco-mustard/10 rounded-xl border border-lco-mustard/30 text-center">
-                    {method === "BANK_TRANSFER" ? (
-                      <Building2 className="w-6 h-6 mx-auto text-lco-mustard mb-2" />
-                    ) : (
-                      <QrCode className="w-6 h-6 mx-auto text-lco-mustard mb-2" />
-                    )}
-                    <p className="text-xs text-zinc-600 dark:text-zinc-400">
-                      Nominal dibayar penuh sebesar{" "}
-                      <span className="font-mono font-semibold">
-                        {formatRp(total)}
-                      </span>
-                      . Lampirkan bukti (opsional).
-                    </p>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">
-                      Bukti Pembayaran
-                    </label>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*,.pdf"
-                      multiple
-                      onChange={handlePickFiles}
-                      disabled={isProcessing}
-                      className="hidden"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isProcessing}
-                      className="w-full flex items-center justify-center gap-2 py-3 rounded-md border border-dashed border-zinc-300 dark:border-zinc-700 text-xs font-medium text-zinc-500 hover:border-lco-teal hover:text-lco-teal transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <Upload className="w-4 h-4" /> Pilih Foto Bukti
-                    </button>
-                    {proofFiles.length > 0 && (
-                      <ul className="mt-3 space-y-1.5">
-                        {proofFiles.map((file, index) => (
-                          <li
-                            key={`${file.name}-${index}`}
-                            className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-600 dark:text-zinc-300"
-                          >
-                            <span className="flex items-center gap-2 truncate">
-                              <Paperclip className="w-3.5 h-3.5 shrink-0 text-zinc-400" />
-                              <span className="truncate">{file.name}</span>
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveFile(index)}
-                              disabled={isProcessing}
-                              className="p-1 text-zinc-400 hover:text-lco-coral rounded-md shrink-0 disabled:cursor-not-allowed"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
+              {method === "DIGITAL" && (
+                <div className="p-4 bg-lco-mustard/10 rounded-xl border border-lco-mustard/30 text-center">
+                  <QrCode className="w-6 h-6 mx-auto text-lco-mustard mb-2" />
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                    Nominal dibayar penuh sebesar{" "}
+                    <span className="font-mono font-semibold">
+                      {formatRp(total)}
+                    </span>{" "}
+                    lewat pembayaran digital.
+                  </p>
                 </div>
               )}
 
@@ -1157,7 +964,7 @@ export default function PaymentModal({
                     (minimal 2)
                   </span>
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   {METHODS.map(({ value, label, icon: Icon }) => {
                     const on = splitOn[value];
                     return (
@@ -1285,54 +1092,6 @@ export default function PaymentModal({
                       </div>
                     </div>
                   )}
-
-                  {(m === "BANK_TRANSFER" || m === "QRIS") && (
-                    <div>
-                      <input
-                        ref={(el) => {
-                          splitFileRefs.current[m] = el;
-                        }}
-                        type="file"
-                        accept="image/*,.pdf"
-                        multiple
-                        onChange={(e) => handlePickSplitFiles(m, e)}
-                        disabled={isProcessing}
-                        className="hidden"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => splitFileRefs.current[m]?.click()}
-                        disabled={isProcessing}
-                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-md border border-dashed border-zinc-300 dark:border-zinc-700 text-xs font-medium text-zinc-500 hover:border-lco-teal hover:text-lco-teal transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <Upload className="w-4 h-4" /> Bukti {methodLabel(m)}{" "}
-                        (opsional)
-                      </button>
-                      {splitProofs[m].length > 0 && (
-                        <ul className="mt-2 space-y-1.5">
-                          {splitProofs[m].map((file, index) => (
-                            <li
-                              key={`${file.name}-${index}`}
-                              className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-600 dark:text-zinc-300"
-                            >
-                              <span className="flex items-center gap-2 truncate">
-                                <Paperclip className="w-3.5 h-3.5 shrink-0 text-zinc-400" />
-                                <span className="truncate">{file.name}</span>
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveSplitFile(m, index)}
-                                disabled={isProcessing}
-                                className="p-1 text-zinc-400 hover:text-lco-coral rounded-md shrink-0 disabled:cursor-not-allowed"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
                 </div>
               ))}
 
@@ -1437,9 +1196,7 @@ export default function PaymentModal({
             {isProcessing ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                {isUploadingProof
-                  ? "Mengunggah Bukti..."
-                  : "Menyimpan Transaksi..."}
+                Menyimpan Transaksi...
               </>
             ) : isSplit && splitError ? (
               splitError

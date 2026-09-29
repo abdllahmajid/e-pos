@@ -291,8 +291,8 @@ export function usePromoMedia(screenId: string): UsePromoMediaResult {
       }
 
       // Gambar dikompres (TV 1080p tidak butuh lebih dari 1920px); kalau
-      // kompresi gagal pakai file asli, sama seperti bukti pembayaran di
-      // lib/pos/transactionApi.ts. Video tidak dikompres di browser.
+      // kompresi gagal pakai file asli.
+      // Video tidak dikompres di browser.
       let uploadFile = file;
       if (info.type === "image") {
         try {

@@ -87,13 +87,12 @@ import { useHoldOrders } from "@/hooks/useHoldOrders";
 // struk (mis. "Tunai + Transfer") — ReceiptData.method bertipe `string`
 // bebas (lib/pos/printLogic.ts), jadi aman diisi gabungan begini, beda dari
 // PaymentMethod tunggal yang dipakai jalur pembayaran biasa.
-// ── PERUBAHAN (Fase 3: relabel metode pembayaran) ── Disamakan dengan
-// METHODS/PREVIEW_METHOD_LABELS di PaymentModal.tsx — lihat catatan di sana.
+// ── PERUBAHAN (migration 034) ── Metode bayar disederhanakan jadi 3. Disamakan
+// dengan METHODS/PREVIEW_METHOD_LABELS di PaymentModal.tsx — lihat catatan di sana.
 const SPLIT_METHOD_LABELS: Record<PaymentMethod, string> = {
   CASH: "Tunai",
-  BANK_TRANSFER: "Debit/Kredit",
-  QRIS: "Digital",
-  TEMPO: "Tempo",
+  DIGITAL: "Digital",
+  TEMPO: "Piutang",
 };
 
 // ── TAMBAHAN (Kasir: pelanggan + poin loyalitas) ── Nilai tukar 1 poin
@@ -659,9 +658,8 @@ export default function KasirModule({
   // - `paidAmount` struk = jumlah SEMUA baris (bukan satu nilai yang dikirim
   //   kasir), dan `method` struk digabung dari semua metode yang dipakai
   //   (mis. "Tunai + Transfer") memakai SPLIT_METHOD_LABELS di atas.
-  // - Mengembalikan `payments` (bukan `paymentId` tunggal) — PaymentModal
-  //   butuh ini untuk menempelkan bukti transfer/QRIS ke baris yang benar
-  //   (lihat handleProcessSplitPayment di PaymentModal.tsx).
+  // - Mengembalikan `payments` (bukan `paymentId` tunggal) — id tiap baris
+  //   pembayaran yang baru tersimpan.
   const handleConfirmSplitPayment = async (
     lines: SplitPaymentLine[],
     extra?: {

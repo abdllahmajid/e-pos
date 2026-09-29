@@ -2,9 +2,7 @@
 
 // app/components/laporan/LaporanModule.tsx
 // ── TAMBAHAN (T-08) ── Modul Laporan (PRD §17 Fase E, §4.5, §4.7).
-// Konsumen hooks/useReports.ts (data 3 sub-tab) + lib/pos/transactionApi.ts
-// (upload bukti pelunasan, reuse fungsi yang sama dengan bukti pembayaran
-// checkout, lihat parameter `proofType` yang ditambahkan untuk T-08 ini).
+// Konsumen hooks/useReports.ts (data 3 sub-tab).
 //
 // Akses: **diasumsikan admin/supervisor saja** (sama seperti StokModule.tsx),
 // BUKAN dikutip langsung dari teks PRD — lihat catatan ASUMSI di header
@@ -29,7 +27,7 @@
 // AKTIF (bukan seluruh halaman) supaya PDF-nya cuma berisi data laporan,
 // tidak ikut menangkap filter tanggal/tombol tab.
 
-import { useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Loader2,
   AlertTriangle,
@@ -41,7 +39,6 @@ import {
   CalendarDays,
   CheckCircle2,
   Clock,
-  Upload,
   X,
   Download,
   ChevronDown,
@@ -55,7 +52,6 @@ import {
 } from "@/hooks/useReports";
 import { useAuth, hasPermission } from "@/hooks/useAuth";
 import { formatRupiah } from "@/lib/pos/cartLogic";
-import { uploadPaymentProofs } from "@/lib/pos/transactionApi";
 import { exportReportToExcel, exportReportToPdf } from "@/lib/pos/reportExport";
 
 type ReportTab = "harian" | "shift" | "piutang";
@@ -257,29 +253,15 @@ function SettleReceivableModal({
   onClose: () => void;
   onSettle: (paymentId: string) => Promise<void>;
 }) {
-  const [files, setFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
-
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    setFiles(Array.from(e.target.files ?? []));
-  };
 
   const handleSubmit = async () => {
     setError(null);
     setIsSubmitting(true);
     try {
-      // Urutan sengaja: tandai lunas DULU lewat RPC (itu yang mengunci status),
-      // baru upload bukti (opsional). Kalau upload gagal, status lunas tetap
-      // tersimpan — bukti bisa diupload ulang lain kali, tapi piutang yang
-      // sudah dibayar tidak boleh "ke-block" cuma gara-gara upload foto gagal.
       await onSettle(receivable.payment_id);
-
-      if (files.length > 0) {
-        await uploadPaymentProofs(receivable.payment_id, files, "settlement");
-      }
-
       setDone(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal menandai lunas.");
@@ -337,23 +319,6 @@ function SettleReceivableModal({
                 </span>
               </div>
             </div>
-
-            <label className="mb-1 block text-xs font-medium text-zinc-500">
-              Bukti pelunasan (opsional)
-            </label>
-            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed border-zinc-300 px-3 py-4 text-xs text-zinc-500 transition-colors duration-150 hover:border-lco-teal hover:text-lco-teal dark:border-zinc-700">
-              <Upload className="h-4 w-4" />
-              {files.length > 0
-                ? `${files.length} file dipilih`
-                : "Pilih foto/PDF bukti transfer"}
-              <input
-                type="file"
-                accept="image/*,.pdf"
-                multiple
-                className="hidden"
-                onChange={handleFileChange}
-              />
-            </label>
 
             {error && (
               <div className="mt-3 flex items-start gap-2 rounded-md border border-lco-coral/30 bg-lco-coral/10 p-3 text-xs text-lco-coral">
@@ -570,7 +535,7 @@ function PiutangTab({
       <div className="flex min-h-40 flex-col items-center justify-center rounded-xl border border-zinc-200 px-6 text-center dark:border-zinc-800">
         <Inbox className="mb-2 h-6 w-6 text-zinc-400" />
         <p className="text-sm text-zinc-500">
-          Tidak ada piutang TEMPO — baik yang belum lunas maupun yang lunas 30
+          Tidak ada piutang — baik yang belum lunas maupun yang lunas 30
           hari terakhir.
         </p>
       </div>

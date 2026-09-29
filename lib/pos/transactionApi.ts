@@ -1,14 +1,12 @@
 import { createClient } from "@/lib/supabase/client";
 import { CartItem } from "./types";
-import imageCompression from "browser-image-compression";
 
 const supabase = createClient();
 
-export type PaymentMethod =
-  | "CASH"
-  | "BANK_TRANSFER"
-  | "QRIS"
-  | "TEMPO";
+// ── PERUBAHAN (migration 034) ── Metode pembayaran disederhanakan jadi 3:
+// CASH = Tunai, DIGITAL = pembayaran digital (nanti lewat Midtrans),
+// TEMPO = Piutang (label di UI "Piutang", value di database tetap TEMPO).
+export type PaymentMethod = "CASH" | "DIGITAL" | "TEMPO";
 
 // ── TAMBAHAN (021, T-11 bagian 2) ── Satu baris pembayaran untuk split payment.
 // Bentuk ini SAMA dengan elemen `p_payments` di RPC create_transaction (migration
@@ -74,7 +72,7 @@ export function validateSplitPayments(
     }
 
     if (line.method === "TEMPO" && !line.dueDate) {
-      return "Tanggal jatuh tempo wajib diisi untuk pembayaran TEMPO.";
+      return "Tanggal jatuh tempo wajib diisi untuk piutang.";
     }
   }
 
@@ -85,7 +83,7 @@ export function validateSplitPayments(
   }
 
   if (seen.has("TEMPO") && !customerName?.trim()) {
-    return "Nama pelanggan wajib diisi untuk pembayaran TEMPO.";
+    return "Nama pelanggan wajib diisi untuk piutang.";
   }
 
   return null;
@@ -147,8 +145,8 @@ export type CreateTransactionParams = CreateTransactionBaseParams &
   (SinglePaymentParams | SplitPaymentParams);
 
 // ── TAMBAHAN (021) ── Satu baris pembayaran yang baru tersimpan, dari hasil RPC.
-// PaymentModal memakai `payment_id` ini untuk menempelkan bukti transfer/QRIS ke
-// baris yang benar (satu transaksi split bisa punya beberapa baris non-tunai).
+// `payment_id` berguna untuk mengaitkan baris pembayaran dengan sistem lain
+// (mis. order id gateway pembayaran digital nanti).
 export interface CreatedPayment {
   payment_id: string;
   method: PaymentMethod;
@@ -220,10 +218,10 @@ export async function createTransaction(
     // sebelum roundtrip ke server. RPC tetap validasi ulang (wajib, bukan opsional).
     if (params.paymentMethod === "TEMPO") {
       if (!params.customerName || !params.customerName.trim()) {
-        throw new Error("Nama pelanggan wajib diisi untuk pembayaran TEMPO.");
+        throw new Error("Nama pelanggan wajib diisi untuk piutang.");
       }
       if (!params.dueDate) {
-        throw new Error("Tanggal jatuh tempo wajib diisi untuk pembayaran TEMPO.");
+        throw new Error("Tanggal jatuh tempo wajib diisi untuk piutang.");
       }
     }
   }
@@ -325,14 +323,6 @@ export interface TransactionDetailItem {
   subtotal: number;
 }
 
-// ── TAMBAHAN (T-02) ── Metadata 1 file bukti pembayaran (baris `payment_proofs`).
-export interface PaymentProof {
-  id: string;
-  file_url: string;
-  file_name: string | null;
-  created_at: string;
-}
-
 export interface TransactionDetailPayment {
   id: string;
   method: PaymentMethod | string;
@@ -343,8 +333,6 @@ export interface TransactionDetailPayment {
   notes: string | null;
   /** ── TAMBAHAN (T-02) ── Jatuh tempo, hanya terisi untuk method TEMPO. */
   due_date: string | null;
-  /** ── TAMBAHAN (T-02) ── Bukti transfer/QRIS, bisa lebih dari 1 file. */
-  proofs: PaymentProof[];
 }
 
 export interface TransactionDetail {
@@ -399,8 +387,7 @@ export async function getTransactionDetail(
         qty, returned_qty, unit_price, discount, subtotal
       ),
       payments (
-        id, method, amount, received_amount, change_amount, reference_no, notes, due_date,
-        payment_proofs ( id, file_url, file_name, created_at )
+        id, method, amount, received_amount, change_amount, reference_no, notes, due_date
       )
     `,
     )
@@ -430,9 +417,6 @@ export async function getTransactionDetail(
     cashier_name: row.cashier?.full_name ?? null,
     created_at: row.created_at,
     items: row.transaction_items ?? [],
-    // ── TAMBAHAN (T-02) ── PostgREST mengembalikan nama relasi asli (`payment_proofs`),
-    // di-map ke `proofs` di sini supaya nama field di TransactionDetailPayment tetap
-    // ringkas & tidak bocor nama tabel ke konsumen (TransactionDetailModal.tsx).
     payments: (row.payments ?? []).map((p: any) => ({
       id: p.id,
       method: p.method,
@@ -442,7 +426,6 @@ export async function getTransactionDetail(
       reference_no: p.reference_no,
       notes: p.notes,
       due_date: p.due_date,
-      proofs: p.payment_proofs ?? [],
     })),
   };
 }
@@ -582,116 +565,4 @@ export async function restoreTransaction(
   }
 
   return { success: true, transaction_id: data.transaction_id };
-}
-
-// ── TAMBAHAN (T-02) ── Upload bukti pembayaran (transfer/QRIS) ke Storage bucket
-// "payment-proofs" (migration 006_payment_enhance.sql), lalu simpan metadatanya ke
-// tabel payment_proofs. Dipanggil dari PaymentModal.tsx SETELAH createTransaction()
-// sukses dan payment_id sudah didapat — supaya bukti selalu terikat ke payment yang
-// benar-benar tersimpan (tidak upload dulu baru transaksi gagal, jadi file nyasar).
-
-export interface UploadPaymentProofResult {
-  id: string;
-  fileUrl: string;
-}
-
-/**
- * Kompresi gambar (browser-image-compression, sesuai PRD §7 util) lalu upload ke
- * Storage. Kalau file bukan gambar (jarang, tapi bukti bisa juga PDF hasil screenshot
- * transfer di beberapa bank), lewati kompresi dan upload apa adanya.
- */
-async function compressIfImage(file: File): Promise<File> {
-  if (!file.type.startsWith("image/")) {
-    return file;
-  }
-
-  try {
-    return await imageCompression(file, {
-      maxSizeMB: 0.5,
-      maxWidthOrHeight: 1600,
-      useWebWorker: true,
-    });
-  } catch (err) {
-    // Kompresi gagal (mis. format tidak didukung browser) — upload file asli saja
-    // daripada gagal total. Ukuran lebih besar masih lebih baik daripada tidak ada bukti.
-    console.error("Kompresi bukti pembayaran gagal, upload file asli:", err);
-    return file;
-  }
-}
-
-export async function uploadPaymentProof(
-  paymentId: string,
-  file: File,
-  // ── TAMBAHAN (T-08) ── 'payment' (default) = bukti saat checkout, tidak
-  // berubah untuk pemanggil lama (PaymentModal.tsx). 'settlement' = bukti
-  // pelunasan piutang TEMPO, dipakai LaporanModule.tsx (kolom proof_type,
-  // migration 012_receivables_settlement.sql).
-  proofType: "payment" | "settlement" = "payment",
-): Promise<UploadPaymentProofResult> {
-  if (!paymentId) {
-    throw new Error("payment_id tidak valid untuk upload bukti pembayaran.");
-  }
-
-  const compressed = await compressIfImage(file);
-
-  const extMatch = file.name.match(/\.[a-zA-Z0-9]+$/);
-  const ext = extMatch ? extMatch[0] : "";
-  const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const path = `${paymentId}/${uniqueSuffix}${ext}`;
-
-  const { error: uploadError } = await supabase.storage
-    .from("payment-proofs")
-    .upload(path, compressed, {
-      contentType: compressed.type || file.type || undefined,
-      upsert: false,
-    });
-
-  if (uploadError) {
-    console.error("Upload bukti pembayaran error:", uploadError);
-    throw new Error(uploadError.message || "Gagal mengunggah bukti pembayaran.");
-  }
-
-  const { data: publicUrlData } = supabase.storage
-    .from("payment-proofs")
-    .getPublicUrl(path);
-
-  const { data, error } = await supabase
-    .from("payment_proofs")
-    .insert({
-      payment_id: paymentId,
-      file_url: publicUrlData.publicUrl,
-      file_name: file.name,
-      file_size: compressed.size,
-      proof_type: proofType,
-    })
-    .select("id, file_url")
-    .single();
-
-  if (error) {
-    console.error("Simpan metadata bukti pembayaran error:", error);
-    throw new Error(
-      error.message || "Bukti terunggah tapi gagal disimpan datanya.",
-    );
-  }
-
-  return { id: data.id, fileUrl: data.file_url };
-}
-
-/**
- * Upload beberapa bukti sekaligus. Berhenti di file pertama yang gagal — sengaja
- * TIDAK "best effort lanjut" supaya user tahu persis file mana yang gagal (pesan
- * error dari uploadPaymentProof sudah spesifik per file).
- */
-export async function uploadPaymentProofs(
-  paymentId: string,
-  files: File[],
-  proofType: "payment" | "settlement" = "payment",
-): Promise<UploadPaymentProofResult[]> {
-  const results: UploadPaymentProofResult[] = [];
-
-  for (const file of files) {
-    results.push(await uploadPaymentProof(paymentId, file, proofType));
-  }
-
-  return results;
 }

@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/client"; // ganti sesuai path clien
 
 // ── Enum ini HARUS sinkron persis dengan enum Postgres `payment_method` & `transaction_status`.
 // Kalau backend menambah nilai baru, update di sini juga.
-export type PaymentMethod = "CASH" | "BANK_TRANSFER" | "QRIS" | "TEMPO";
+export type PaymentMethod = "CASH" | "DIGITAL" | "TEMPO";
 export type TransactionStatus = "PAID" | "VOID" | "RETURN";
 
 export interface TransactionPayment {
