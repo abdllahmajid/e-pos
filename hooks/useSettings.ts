@@ -48,6 +48,8 @@ export interface Settings {
   promoUrl: string;
   /** Teks ajakan di atas QR. Kosong -> "Scan untuk ikuti kami". */
   promoText: string;
+  /** Kalau false, metode Digital (Midtrans) disembunyikan di kasir & ditolak server. */
+  digitalPaymentEnabled: boolean;
 }
 
 // Default fallback — SENGAJA persis sama dengan seed di migration 005_settings.sql.
@@ -70,6 +72,8 @@ export const DEFAULT_SETTINGS: Settings = {
   promoEnabled: false,
   promoUrl: "",
   promoText: "Scan untuk ikuti kami",
+  // Sengaja false: kalau fetch gagal/migration 036 belum jalan, kasir aman (tunai saja).
+  digitalPaymentEnabled: false,
 };
 
 // Pemetaan key DB (snake_case, sesuai migration) -> field Settings (camelCase).
@@ -90,6 +94,7 @@ const KEY_MAP: Record<keyof Settings, string> = {
   promoEnabled: "promo_enabled",
   promoUrl: "promo_url",
   promoText: "promo_text",
+  digitalPaymentEnabled: "digital_payment_enabled",
 };
 
 function parseSettings(rows: SettingRow[]): Settings {

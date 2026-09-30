@@ -82,6 +82,21 @@ export async function POST(request: NextRequest) {
     throw err;
   }
 
+  // Saklar di Pengaturan: kalau pembayaran digital dimatikan, tolak order BARU.
+  // (status/cancel/notification sengaja tidak dicek: order yang sudah berjalan
+  // tetap harus bisa dilunasi/dibatalkan.) Gagal baca = anggap nonaktif.
+  const { data: toggleRow, error: toggleError } = await admin
+    .from("settings")
+    .select("value")
+    .eq("key", "digital_payment_enabled")
+    .maybeSingle();
+  if (toggleError || toggleRow?.value !== true) {
+    return jsonError(
+      "Pembayaran digital sedang dinonaktifkan. Aktifkan di Pengaturan > Toko & Struk.",
+      403,
+    );
+  }
+
   const expiryMs = cfg.expiryMinutes * 60_000;
 
   const respond = (row: DigitalPaymentRow, token: string, reused: boolean) =>

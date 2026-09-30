@@ -141,6 +141,8 @@ type PaymentModalProps = {
    * ataupun notif "Struk berhasil dicetak" yang muncul.
    */
   onPrint?: () => void;
+  /** Tampilkan metode Digital (Midtrans). Default false = hanya Tunai & Piutang. */
+  digitalEnabled?: boolean;
 };
 
 const METHODS: {
@@ -215,7 +217,12 @@ export default function PaymentModal({
   onSendWhatsApp,
   receipt,
   onPrint,
+  digitalEnabled = false,
 }: PaymentModalProps) {
+  // Daftar metode yang boleh dipilih; DIGITAL hanya kalau diaktifkan di Pengaturan.
+  const availableMethods = digitalEnabled
+    ? METHODS
+    : METHODS.filter((m) => m.value !== "DIGITAL");
   const [method, setMethod] = useState<PaymentMethod>("CASH");
   const [paidAmount, setPaidAmount] = useState<number>(0);
 
@@ -1078,8 +1085,10 @@ export default function PaymentModal({
 
           {!isSplit && (
             <>
-              <div className="grid grid-cols-3 gap-2 mb-6">
-                {METHODS.map(({ value, label, icon: Icon }) => (
+              <div
+                className={`grid gap-2 mb-6 ${availableMethods.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}
+              >
+                {availableMethods.map(({ value, label, icon: Icon }) => (
                   <button
                     key={value}
                     onClick={() => setMethod(value)}
@@ -1292,8 +1301,10 @@ export default function PaymentModal({
                     (minimal 2)
                   </span>
                 </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {METHODS.map(({ value, label, icon: Icon }) => {
+                <div
+                  className={`grid gap-2 ${availableMethods.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}
+                >
+                  {availableMethods.map(({ value, label, icon: Icon }) => {
                     const on = splitOn[value];
                     return (
                       <button

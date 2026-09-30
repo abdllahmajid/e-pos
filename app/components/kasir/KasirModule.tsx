@@ -1718,6 +1718,7 @@ export default function KasirModule({
         // klik tombol "Cetak" manual lagi.
         receipt={lastReceipt}
         onPrint={handlePrintReceipt}
+        digitalEnabled={posSettings.digitalPaymentEnabled}
       />
 
       {/* ── TAMBAHAN (T-11 bagian 1) ── Modal konfirmasi "Tunda". */}

@@ -329,6 +329,34 @@ export default function PengaturanTokoTab() {
         </div>
       </div>
 
+      {/* ── Pembayaran digital (Midtrans) ── */}
+      <div>
+        <h3 className="mb-3 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+          Pembayaran Digital
+        </h3>
+        <label className="flex cursor-pointer items-center gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/40">
+          <input
+            type="checkbox"
+            checked={form.digitalPaymentEnabled}
+            onChange={(e) =>
+              updateField("digitalPaymentEnabled", e.target.checked)
+            }
+            disabled={isSaving}
+            className="h-4 w-4 rounded border-zinc-300 text-lco-green focus:ring-lco-teal"
+          />
+          <div>
+            <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+              Aktifkan pembayaran digital (Midtrans)
+            </p>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              Kalau dimatikan, kasir hanya menampilkan Tunai dan Piutang. Kunci
+              Midtrans tetap diatur di server (.env). Kasir yang sedang membuka
+              halaman perlu me-refresh agar perubahan berlaku.
+            </p>
+          </div>
+        </label>
+      </div>
+
       {/* ── Promosi di struk ── */}
       <div>
         <h3 className="mb-3 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
@@ -347,8 +375,8 @@ export default function PengaturanTokoTab() {
               Tampilkan promosi di struk
             </p>
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Mencetak teks ajakan dan QR di bagian paling bawah struk
-              penjualan (tidak di struk Buka Kasir).
+              Mencetak teks ajakan dan QR di bagian paling bawah struk penjualan
+              (tidak di struk Buka Kasir).
             </p>
           </div>
         </label>
@@ -367,10 +395,10 @@ export default function PengaturanTokoTab() {
                 className={inputClass}
               />
               <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                Pakai link pendek (Linktree / link-in-bio) supaya QR lebih
-                besar dan mudah discan di kertas 58mm. Link boleh diganti
-                kapan saja; berlaku di struk berikutnya. Kalau kosong atau
-                tidak valid, QR tidak dicetak.
+                Pakai link pendek (Linktree / link-in-bio) supaya QR lebih besar
+                dan mudah discan di kertas 58mm. Link boleh diganti kapan saja;
+                berlaku di struk berikutnya. Kalau kosong atau tidak valid, QR
+                tidak dicetak.
               </p>
             </div>
             <div className="sm:col-span-2">
