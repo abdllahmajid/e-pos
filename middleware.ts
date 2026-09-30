@@ -8,7 +8,17 @@ import { NextResponse, type NextRequest } from "next/server";
 // tidak diizinkan di sini, request-nya sendiri di-redirect ke /login duluan,
 // dan kode `?code=...` di URL hilang sebelum sempat ditukar jadi sesi. Lihat
 // app/auth/callback/route.ts.
-const PUBLIC_PATHS = ["/login", "/cek-struk", "/auth/callback"];
+// ── TAMBAHAN (Midtrans) ── /api/midtrans/notification WAJIB publik: ini webhook
+// yang dipanggil server Midtrans (tanpa cookie login). Kalau tidak diizinkan di
+// sini, panggilan Midtrans di-redirect ke /login dan status pembayaran tidak
+// pernah terupdate otomatis. Keamanannya ada di route itu sendiri (verifikasi
+// signature_key). Route Midtrans lain (create/status/cancel) TETAP butuh login.
+const PUBLIC_PATHS = [
+  "/login",
+  "/cek-struk",
+  "/auth/callback",
+  "/api/midtrans/notification",
+];
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });

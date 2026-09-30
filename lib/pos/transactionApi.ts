@@ -4,7 +4,7 @@ import { CartItem } from "./types";
 const supabase = createClient();
 
 // ── PERUBAHAN (migration 034) ── Metode pembayaran disederhanakan jadi 3:
-// CASH = Tunai, DIGITAL = pembayaran digital (nanti lewat Midtrans),
+// CASH = Tunai, DIGITAL = pembayaran digital (lewat Midtrans, lihat lib/midtrans/),
 // TEMPO = Piutang (label di UI "Piutang", value di database tetap TEMPO).
 export type PaymentMethod = "CASH" | "DIGITAL" | "TEMPO";
 
@@ -139,6 +139,17 @@ interface CreateTransactionBaseParams {
    * bukan saat SIMPAN (lihat komentar migration 013).
    */
   customerPhone?: string;
+
+  /**
+   * ── TAMBAHAN (Midtrans, migration 035) ── Order ID Midtrans yang sudah
+   * LUNAS untuk porsi DIGITAL transaksi ini (dari lib/midtrans/client.ts →
+   * createMidtransOrder). Kalau diisi, transaksi disimpan lewat RPC
+   * `create_transaction_digital`, yang memverifikasi di server bahwa order itu
+   * lunas, nominalnya sama dengan porsi DIGITAL, dan belum pernah dipakai —
+   * baru kemudian memanggil create_transaction. Kosongkan untuk transaksi
+   * tanpa pembayaran digital (Tunai / Piutang).
+   */
+  digitalOrderId?: string;
 }
 
 export type CreateTransactionParams = CreateTransactionBaseParams &
@@ -234,7 +245,24 @@ export async function createTransaction(
     subtotal: item.product.sell_price * item.qty,
   }));
 
-  const { data, error } = await supabase.rpc("create_transaction", {
+  // ── TAMBAHAN (Midtrans) ── Ada digitalOrderId => lewat RPC pembungkus yang
+  // memverifikasi pembayaran Midtrans dulu. Argumen lainnya SAMA persis.
+  const digitalOrderId = params.digitalOrderId?.trim() || undefined;
+  if (digitalOrderId) {
+    const hasDigitalLine = splitLines
+      ? splitLines.some((line) => line.method === "DIGITAL")
+      : params.paymentMethod === "DIGITAL";
+    if (!hasDigitalLine) {
+      throw new Error(
+        "Order pembayaran digital diberikan, tetapi transaksi tidak memiliki pembayaran Digital.",
+      );
+    }
+  }
+
+  const { data, error } = await supabase.rpc(
+    digitalOrderId ? "create_transaction_digital" : "create_transaction",
+    {
+    ...(digitalOrderId ? { p_order_id: digitalOrderId } : {}),
     p_items: rpcItems,
     p_subtotal: params.subtotal,
     p_discount: params.discount ?? 0,
@@ -266,7 +294,8 @@ export async function createTransaction(
     // di atas. Named parameter, jadi ditambahkan di akhir daftar RPC di sini
     // tidak bergantung urutan parameter di definisi SQL-nya.
     p_customer_phone: params.customerPhone?.trim() || null,
-  });
+    },
+  );
 
   if (error) {
     console.error("create_transaction RPC error:", error);

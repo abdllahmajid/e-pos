@@ -13,6 +13,9 @@ import {
   Phone,
   MessageCircle,
   ArrowRight,
+  RefreshCw,
+  ExternalLink,
+  XCircle,
 } from "lucide-react";
 import type {
   CreatedPayment,
@@ -33,6 +36,19 @@ import { validateSplitPayments } from "@/lib/pos/transactionApi";
 // manual lagi.
 import type { ReceiptData } from "@/lib/pos/printLogic";
 import Toast from "@/app/components/ui/Toast";
+// ── TAMBAHAN (Midtrans, langkah 7) ── Helper pembayaran digital (sisi browser).
+// Tidak memegang kunci rahasia — lihat lib/midtrans/client.ts.
+import {
+  cancelMidtransOrder,
+  closeSnapPopup,
+  createMidtransOrder,
+  getMidtransStatus,
+  isAbortError,
+  openSnapPopup,
+  waitForMidtransResult,
+  type MidtransOrder,
+  type MidtransStatusResult,
+} from "@/lib/midtrans/client";
 
 // ── TAMBAHAN (bug: preview tidak sama dengan hasil cetak) ── Duplikat kecil
 // dari METHOD_LABELS/formatMethod() di printLogic.ts (tidak diexport dari
@@ -73,6 +89,12 @@ type PaymentModalProps = {
       /** ── TAMBAHAN (013) ── Nomor HP pelanggan, opsional untuk semua metode. */
       customerPhone?: string;
       dueDate?: string;
+      /**
+       * ── TAMBAHAN (Midtrans) ── Order ID Midtrans yang SUDAH LUNAS untuk
+       * metode Digital. Diisi PaymentModal setelah pembayaran terkonfirmasi;
+       * parent meneruskannya ke createTransaction({ digitalOrderId }).
+       */
+      digitalOrderId?: string;
     },
   ) => Promise<{ paymentId: string }>;
   /**
@@ -87,6 +109,8 @@ type PaymentModalProps = {
     extra?: {
       customerName?: string;
       customerPhone?: string;
+      /** ── TAMBAHAN (Midtrans) ── Order ID lunas untuk baris DIGITAL di split. */
+      digitalOrderId?: string;
     },
   ) => Promise<{ payments: CreatedPayment[] }>;
   /**
@@ -144,6 +168,36 @@ function methodLabel(method: PaymentMethod): string {
   return METHODS.find((m) => m.value === method)?.label ?? method;
 }
 
+// ── TAMBAHAN (Midtrans) ── Dilempar saat kasir sengaja membatalkan pembayaran
+// digital. Bukan kegagalan, jadi tidak ditampilkan sebagai banner error.
+class DigitalCancelledError extends Error {
+  constructor() {
+    super("Pembayaran digital dibatalkan.");
+    this.name = "DigitalCancelledError";
+  }
+}
+
+// Teks status Midtrans untuk kasir (nilai mentah tetap muncul kalau tak dikenal).
+function digitalStatusLabel(midtransStatus: string | null): string {
+  if (!midtransStatus) return "Pelanggan belum memilih metode bayar";
+  switch (midtransStatus) {
+    case "pending":
+      return "Menunggu pembayaran";
+    case "settlement":
+    case "capture":
+      return "Lunas";
+    case "expire":
+      return "Kedaluwarsa";
+    case "cancel":
+      return "Dibatalkan";
+    case "deny":
+    case "failure":
+      return "Ditolak";
+    default:
+      return midtransStatus;
+  }
+}
+
 function defaultDueDate(): string {
   const d = new Date();
   d.setDate(d.getDate() + 7);
@@ -186,6 +240,34 @@ export default function PaymentModal({
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+
+  // ── TAMBAHAN (Midtrans, langkah 7) ── State pembayaran digital.
+  // - digitalPhase: "creating" = meminta token ke server; "waiting" = popup
+  //   Snap dibuka & polling status berjalan; "idle" = tidak ada proses digital.
+  // - digitalOrder: order Midtrans yang sedang ditunggu (untuk panel status).
+  // - paidDigital: pembayaran digital SUDAH LUNAS tapi transaksi POS belum
+  //   tersimpan. Selama terisi, percobaan simpan berikutnya memakai order yang
+  //   sama dan TIDAK menagih pelanggan lagi; form dikunci supaya nominalnya
+  //   tidak bisa diubah.
+  const [digitalPhase, setDigitalPhase] = useState<
+    "idle" | "creating" | "waiting"
+  >("idle");
+  const [digitalOrder, setDigitalOrder] = useState<MidtransOrder | null>(null);
+  const [paidDigital, setPaidDigital] = useState<{
+    orderId: string;
+    amount: number;
+  } | null>(null);
+  const [digitalNote, setDigitalNote] = useState<string | null>(null);
+  const [digitalMidtransStatus, setDigitalMidtransStatus] = useState<
+    string | null
+  >(null);
+  const [checkingDigital, setCheckingDigital] = useState(false);
+  const [cancellingDigital, setCancellingDigital] = useState(false);
+  // Ref untuk nilai yang dibaca dari callback async / tombol saat polling
+  // berjalan (state di closure bisa basi).
+  const digitalOrderRef = useRef<MidtransOrder | null>(null);
+  const pollAbortRef = useRef<AbortController | null>(null);
+  const cancelResultRef = useRef<MidtransStatusResult | null>(null);
 
   // ── TAMBAHAN (013) ── Status tombol "Kirim WA" di layar sukses. Terpisah dari
   // isProcessing karena aksi ini terjadi SETELAH transaksi
@@ -231,6 +313,17 @@ export default function PaymentModal({
       setWaStatus("idle");
       setWaMethod(null);
       setWaError(null);
+      // ── TAMBAHAN (Midtrans) ── Bersihkan sisa pembayaran digital sebelumnya.
+      pollAbortRef.current?.abort();
+      digitalOrderRef.current = null;
+      cancelResultRef.current = null;
+      setDigitalPhase("idle");
+      setDigitalOrder(null);
+      setPaidDigital(null);
+      setDigitalNote(null);
+      setDigitalMidtransStatus(null);
+      setCheckingDigital(false);
+      setCancellingDigital(false);
       autoPrintedRef.current = false;
       if (printToastTimeoutRef.current) {
         clearTimeout(printToastTimeoutRef.current);
@@ -263,6 +356,15 @@ export default function PaymentModal({
     return () => {
       if (printToastTimeoutRef.current)
         clearTimeout(printToastTimeoutRef.current);
+    };
+  }, []);
+
+  // ── TAMBAHAN (Midtrans) ── Hentikan polling & tutup popup Snap kalau
+  // komponen dilepas (mis. pindah halaman) supaya tidak ada loop yatim.
+  useEffect(() => {
+    return () => {
+      pollAbortRef.current?.abort();
+      closeSnapPopup();
     };
   }, []);
 
@@ -325,6 +427,11 @@ export default function PaymentModal({
         ? customerName.trim().length > 0 && dueDate.length > 0
         : true;
 
+  // ── TAMBAHAN (Midtrans) ── Form terkunci saat proses berjalan ATAU saat
+  // pembayaran digital sudah lunas tapi transaksi belum tersimpan (nominal &
+  // metode tidak boleh berubah lagi, supaya cocok dengan yang sudah dibayar).
+  const lockInputs = isProcessing || paidDigital !== null;
+
   function toggleSplitMethod(target: PaymentMethod) {
     setLocalError(null);
     setSplitOn((prev) => ({ ...prev, [target]: !prev[target] }));
@@ -342,6 +449,197 @@ export default function PaymentModal({
     setSplitAmountFor(target, Math.max(total - others, 0));
   }
 
+  // ── TAMBAHAN (Midtrans, langkah 7) ── Popup Snap. Gagal membuka popup TIDAK
+  // menggagalkan proses: order sudah ada, kasir bisa menekan "Buka Pembayaran"
+  // lagi atau "Batalkan".
+  async function openSnapForOrder(order: MidtransOrder) {
+    try {
+      await openSnapPopup(order, {
+        // Pelanggan baru saja menyelesaikan pembayaran di popup: cek status
+        // segera (webhook/polling berikutnya bisa terlambat beberapa detik).
+        onSuccess: () => {
+          void getMidtransStatus(order.orderId).catch(() => undefined);
+        },
+        onError: () =>
+          setDigitalNote(
+            "Midtrans melaporkan kendala pada pembayaran ini. Kalau pelanggan sudah membayar, status akan terupdate otomatis.",
+          ),
+      });
+    } catch (err) {
+      setDigitalNote(
+        err instanceof Error ? err.message : "Popup pembayaran gagal dibuka.",
+      );
+    }
+  }
+
+  // Menjalankan pembayaran digital sampai LUNAS, lalu mengembalikan Order ID.
+  // Melempar error kalau gagal/kedaluwarsa/dibatalkan. Transaksi POS BARU
+  // disimpan sesudah fungsi ini berhasil (lihat handleProcessPayment).
+  async function runDigitalPayment(amount: number): Promise<string> {
+    // Sudah lunas di percobaan sebelumnya (penyimpanan transaksi yang gagal):
+    // jangan tagih lagi, cukup simpan ulang transaksinya.
+    if (paidDigital) {
+      if (paidDigital.amount !== amount) {
+        throw new Error(
+          `Pembayaran digital ${formatRp(paidDigital.amount)} sudah diterima (Order ${paidDigital.orderId}), tetapi nominal digital transaksi sekarang ${formatRp(amount)}. Hubungi supervisor.`,
+        );
+      }
+      return paidDigital.orderId;
+    }
+
+    cancelResultRef.current = null;
+    setDigitalNote(null);
+    setDigitalMidtransStatus(null);
+    setDigitalPhase("creating");
+
+    let order: MidtransOrder;
+    try {
+      order = await createMidtransOrder({
+        amount,
+        customerName: customerName.trim() || undefined,
+        customerPhone: customerPhone.trim() || undefined,
+        // Kalau percobaan sebelumnya berhenti karena gangguan jaringan, order
+        // pending yang sama dipakai lagi (bukan membuat tagihan kedua).
+        reuseOrderId: digitalOrderRef.current?.orderId,
+      });
+    } catch (err) {
+      setDigitalPhase("idle");
+      throw err;
+    }
+
+    digitalOrderRef.current = order;
+    setDigitalOrder(order);
+    setDigitalPhase("waiting");
+    void openSnapForOrder(order);
+
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
+
+    let result: MidtransStatusResult | null = null;
+    try {
+      result = await waitForMidtransResult(order.orderId, {
+        signal: controller.signal,
+        expiresAt: order.expiresAt,
+        onUpdate: (r) => setDigitalMidtransStatus(r.midtransStatus),
+      });
+    } catch (err) {
+      if (!isAbortError(err)) {
+        // Gangguan jaringan berkepanjangan: order tetap pending di server,
+        // percobaan berikutnya akan memakainya lagi.
+        closeSnapPopup();
+        setDigitalPhase("idle");
+        throw err;
+      }
+      // Dibatalkan kasir. Kalau ternyata pelanggan SUDAH membayar di detik
+      // terakhir (hasil cancel = paid), uangnya sudah masuk — lanjutkan simpan.
+      // (cast: TypeScript mengira ref ini masih null karena di atas kita
+      // mengisinya null — padahal handleCancelDigital mengisinya saat menunggu.)
+      const cancelled = cancelResultRef.current as MidtransStatusResult | null;
+      if (cancelled && cancelled.status === "paid") result = cancelled;
+    } finally {
+      pollAbortRef.current = null;
+    }
+
+    closeSnapPopup();
+    setDigitalPhase("idle");
+
+    if (!result) {
+      digitalOrderRef.current = null;
+      setDigitalOrder(null);
+      throw new DigitalCancelledError();
+    }
+
+    if (result.status === "paid") {
+      if (result.used) {
+        digitalOrderRef.current = null;
+        setDigitalOrder(null);
+        throw new Error(
+          "Order pembayaran digital ini sudah dipakai untuk transaksi lain. Ulangi pembayaran.",
+        );
+      }
+      digitalOrderRef.current = null;
+      setDigitalOrder(null);
+      setPaidDigital({ orderId: order.orderId, amount });
+      return order.orderId;
+    }
+
+    // failed / expired / cancelled: order sudah tidak bisa dibayar.
+    digitalOrderRef.current = null;
+    setDigitalOrder(null);
+    throw new Error(
+      result.status === "expired"
+        ? "Waktu pembayaran digital habis. Silakan coba lagi."
+        : result.status === "failed"
+          ? "Pembayaran digital ditolak atau gagal. Silakan coba lagi."
+          : "Pembayaran digital dibatalkan.",
+    );
+  }
+
+  // Kasir menekan "Cek Status": tanya server sekarang juga. Perubahan status
+  // akan ditangkap loop polling paling lambat pada tik berikutnya (3 detik).
+  async function handleCheckDigitalStatus() {
+    const order = digitalOrderRef.current;
+    if (!order || checkingDigital) return;
+    setCheckingDigital(true);
+    try {
+      const r = await getMidtransStatus(order.orderId);
+      setDigitalMidtransStatus(r.midtransStatus);
+      setDigitalNote(
+        r.status === "pending" ? "Belum ada pembayaran yang masuk." : null,
+      );
+    } catch (err) {
+      setDigitalNote(
+        err instanceof Error ? err.message : "Gagal mengecek status.",
+      );
+    } finally {
+      setCheckingDigital(false);
+    }
+  }
+
+  async function handleReopenSnap() {
+    const order = digitalOrderRef.current;
+    if (!order) return;
+    setDigitalNote(null);
+    await openSnapForOrder(order);
+  }
+
+  // Kasir menekan "Batalkan Pembayaran Digital". Order dibatalkan di Midtrans
+  // (bukan cuma ditutup di layar) supaya pelanggan tidak bisa membayar
+  // belakangan tanpa ada transaksi. Hasilnya diserahkan ke runDigitalPayment
+  // lewat cancelResultRef + abort polling.
+  async function handleCancelDigital() {
+    const order = digitalOrderRef.current;
+    if (!order || cancellingDigital) return;
+    setCancellingDigital(true);
+    try {
+      const result = await cancelMidtransOrder(order.orderId);
+      cancelResultRef.current = result;
+      pollAbortRef.current?.abort();
+    } catch (err) {
+      setDigitalNote(
+        err instanceof Error
+          ? `Gagal membatalkan: ${err.message}`
+          : "Gagal membatalkan pembayaran.",
+      );
+    } finally {
+      setCancellingDigital(false);
+    }
+  }
+
+  // Menutup modal lewat tombol X. Kalau pembayaran digital sudah lunas tapi
+  // transaksi belum tersimpan, minta konfirmasi dulu.
+  function handleRequestClose() {
+    if (
+      paidDigital &&
+      !window.confirm(
+        `Pembayaran digital ${formatRp(paidDigital.amount)} sudah diterima tetapi transaksi BELUM tersimpan.\n\nOrder ID: ${paidDigital.orderId}\n\nCatat Order ID ini dan hubungi supervisor. Tetap tutup?`,
+      )
+    ) {
+      return;
+    }
+    onClose();
+  }
+
   async function handleProcessPayment() {
     if (!isPayable || isProcessing) return;
 
@@ -357,6 +655,13 @@ export default function PaymentModal({
       // kalau kosong, konsisten dengan pola customerName di TEMPO.
       const trimmedPhone = customerPhone.trim();
 
+      // ── TAMBAHAN (Midtrans) ── Metode Digital: tagih & tunggu LUNAS dulu,
+      // baru transaksi disimpan (stok/kas tidak tersentuh kalau tidak jadi bayar).
+      let digitalOrderId: string | undefined;
+      if (method === "DIGITAL") {
+        digitalOrderId = await runDigitalPayment(total);
+      }
+
       await onConfirmPayment(method, finalPaidAmount, finalChange, {
         // ── KOREKSI (021) ── Sebelumnya nama HANYA dikirim untuk TEMPO, padahal
         // field "Nama Pelanggan (opsional)" tampil untuk semua metode lain —
@@ -364,8 +669,10 @@ export default function PaymentModal({
         customerName: customerName.trim() || undefined,
         customerPhone: trimmedPhone || undefined,
         dueDate: method === "TEMPO" ? dueDate : undefined,
+        digitalOrderId,
       });
 
+      setPaidDigital(null);
       setIsProcessing(false);
 
       // ── KOREKSI (013) ── Layar sukses tetap terbuka sampai kasir menekan
@@ -375,6 +682,11 @@ export default function PaymentModal({
       setIsSuccess(true);
     } catch (err) {
       setIsProcessing(false);
+      // Dibatalkan kasir sendiri: kembali ke form tanpa banner error.
+      if (err instanceof DigitalCancelledError) {
+        setLocalError(null);
+        return;
+      }
       setLocalError(
         err instanceof Error ? err.message : "Pembayaran gagal diproses.",
       );
@@ -390,15 +702,29 @@ export default function PaymentModal({
     setIsProcessing(true);
 
     try {
+      // ── TAMBAHAN (Midtrans) ── Ada baris DIGITAL di split: tagih porsi itu
+      // saja dan tunggu lunas sebelum menyimpan transaksi.
+      const digitalLine = splitLines.find((line) => line.method === "DIGITAL");
+      let digitalOrderId: string | undefined;
+      if (digitalLine) {
+        digitalOrderId = await runDigitalPayment(digitalLine.amount);
+      }
+
       await onConfirmSplitPayment(splitLines, {
         customerName: customerName.trim() || undefined,
         customerPhone: customerPhone.trim() || undefined,
+        digitalOrderId,
       });
 
+      setPaidDigital(null);
       setIsProcessing(false);
       setIsSuccess(true);
     } catch (err) {
       setIsProcessing(false);
+      if (err instanceof DigitalCancelledError) {
+        setLocalError(null);
+        return;
+      }
       setLocalError(
         err instanceof Error ? err.message : "Pembayaran gagal diproses.",
       );
@@ -686,7 +1012,7 @@ export default function PaymentModal({
             Pembayaran
           </h2>
           <button
-            onClick={onClose}
+            onClick={handleRequestClose}
             disabled={isProcessing}
             className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-md transition-colors duration-150 text-zinc-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -737,7 +1063,7 @@ export default function PaymentModal({
                     setLocalError(null);
                     setMode(opt.value);
                   }}
-                  disabled={isProcessing}
+                  disabled={lockInputs}
                   className={`flex-1 px-3 py-2 text-xs font-medium rounded-sm transition-colors duration-150 disabled:cursor-not-allowed ${
                     mode === opt.value
                       ? "bg-white dark:bg-zinc-950 text-lco-teal border border-zinc-200 dark:border-zinc-800"
@@ -757,7 +1083,7 @@ export default function PaymentModal({
                   <button
                     key={value}
                     onClick={() => setMethod(value)}
-                    disabled={isProcessing}
+                    disabled={lockInputs}
                     className={`flex flex-col items-center gap-2 p-3 rounded-xl border transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60 ${method === value ? "border-lco-teal bg-zinc-50 dark:bg-zinc-900 text-lco-teal" : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-zinc-500 hover:border-lco-teal/50"}`}
                   >
                     <Icon className="w-5 h-5" />
@@ -787,7 +1113,7 @@ export default function PaymentModal({
                         type="text"
                         value={customerName}
                         onChange={(e) => setCustomerName(e.target.value)}
-                        disabled={isProcessing}
+                        disabled={lockInputs}
                         placeholder="Nama"
                         className="w-full pl-10 pr-3 py-2.5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 text-sm text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                       />
@@ -806,7 +1132,7 @@ export default function PaymentModal({
                         type="tel"
                         value={customerPhone}
                         onChange={(e) => setCustomerPhone(e.target.value)}
-                        disabled={isProcessing}
+                        disabled={lockInputs}
                         placeholder="08xxxxxxxxxx"
                         className="w-full pl-10 pr-3 py-2.5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 font-mono text-sm text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                       />
@@ -829,7 +1155,7 @@ export default function PaymentModal({
                         type="number"
                         value={paidAmount || ""}
                         onChange={(e) => setPaidAmount(Number(e.target.value))}
-                        disabled={isProcessing}
+                        disabled={lockInputs}
                         className="w-full pl-12 pr-4 py-3 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 font-mono text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                         placeholder="0"
                         autoFocus
@@ -839,21 +1165,21 @@ export default function PaymentModal({
                   <div className="grid grid-cols-3 gap-3">
                     <button
                       onClick={() => setPaidAmount(total)}
-                      disabled={isProcessing}
+                      disabled={lockInputs}
                       className="py-2 px-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:border-lco-teal/50 rounded-md text-xs font-medium transition-colors duration-150 text-zinc-700 dark:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       Uang Pas
                     </button>
                     <button
                       onClick={() => setPaidAmount(50000)}
-                      disabled={isProcessing}
+                      disabled={lockInputs}
                       className="py-2 px-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:border-lco-teal/50 rounded-md text-xs font-mono tabular-nums font-medium transition-colors duration-150 text-zinc-700 dark:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       50.000
                     </button>
                     <button
                       onClick={() => setPaidAmount(100000)}
-                      disabled={isProcessing}
+                      disabled={lockInputs}
                       className="py-2 px-3 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:border-lco-teal/50 rounded-md text-xs font-mono tabular-nums font-medium transition-colors duration-150 text-zinc-700 dark:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       100.000
@@ -880,7 +1206,9 @@ export default function PaymentModal({
                     <span className="font-mono font-semibold">
                       {formatRp(total)}
                     </span>{" "}
-                    lewat pembayaran digital.
+                    lewat pembayaran digital (Virtual Account, QRIS, dll. via
+                    Midtrans). Transaksi baru tersimpan setelah pembayaran
+                    lunas.
                   </p>
                 </div>
               )}
@@ -907,7 +1235,7 @@ export default function PaymentModal({
                         type="text"
                         value={customerName}
                         onChange={(e) => setCustomerName(e.target.value)}
-                        disabled={isProcessing}
+                        disabled={lockInputs}
                         placeholder="Nama pelanggan"
                         className="w-full pl-11 pr-4 py-3 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 text-sm text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                       />
@@ -922,7 +1250,7 @@ export default function PaymentModal({
                       type="date"
                       value={dueDate}
                       onChange={(e) => setDueDate(e.target.value)}
-                      disabled={isProcessing}
+                      disabled={lockInputs}
                       min={new Date().toISOString().slice(0, 10)}
                       className="w-full px-4 py-3 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 font-mono text-sm text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                     />
@@ -940,7 +1268,7 @@ export default function PaymentModal({
                         type="tel"
                         value={customerPhone}
                         onChange={(e) => setCustomerPhone(e.target.value)}
-                        disabled={isProcessing}
+                        disabled={lockInputs}
                         placeholder="08xxxxxxxxxx"
                         className="w-full pl-11 pr-4 py-3 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 font-mono text-sm text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                       />
@@ -972,7 +1300,7 @@ export default function PaymentModal({
                         key={value}
                         type="button"
                         onClick={() => toggleSplitMethod(value)}
-                        disabled={isProcessing}
+                        disabled={lockInputs}
                         aria-pressed={on}
                         className={`flex flex-col items-center gap-2 p-3 rounded-xl border transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60 ${on ? "border-lco-teal bg-zinc-50 dark:bg-zinc-900 text-lco-teal" : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-zinc-500 hover:border-lco-teal/50"}`}
                       >
@@ -1000,7 +1328,7 @@ export default function PaymentModal({
                       <button
                         type="button"
                         onClick={() => fillSplitRemainder(m)}
-                        disabled={isProcessing}
+                        disabled={lockInputs}
                         className="text-[11px] font-medium text-lco-teal hover:underline disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         Isi sisa
@@ -1030,7 +1358,7 @@ export default function PaymentModal({
                           type="date"
                           value={dueDate}
                           onChange={(e) => setDueDate(e.target.value)}
-                          disabled={isProcessing}
+                          disabled={lockInputs}
                           min={new Date().toISOString().slice(0, 10)}
                           className="w-full px-4 py-2.5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 font-mono text-sm text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                         />
@@ -1048,7 +1376,7 @@ export default function PaymentModal({
                         onChange={(e) =>
                           setSplitAmountFor(m, Number(e.target.value))
                         }
-                        disabled={isProcessing}
+                        disabled={lockInputs}
                         placeholder="0"
                         className="w-full pl-12 pr-4 py-2.5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 font-mono text-base font-semibold tabular-nums text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                       />
@@ -1076,7 +1404,7 @@ export default function PaymentModal({
                               Math.max(0, Math.floor(Number(e.target.value))),
                             )
                           }
-                          disabled={isProcessing}
+                          disabled={lockInputs}
                           placeholder="0"
                           className="w-full pl-12 pr-4 py-2.5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 font-mono text-base tabular-nums text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                         />
@@ -1146,7 +1474,7 @@ export default function PaymentModal({
                       aria-label="Nama pelanggan"
                       value={customerName}
                       onChange={(e) => setCustomerName(e.target.value)}
-                      disabled={isProcessing}
+                      disabled={lockInputs}
                       placeholder="Nama"
                       className="w-full pl-10 pr-3 py-2.5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 text-sm text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                     />
@@ -1166,12 +1494,127 @@ export default function PaymentModal({
                       aria-label="No. HP pelanggan"
                       value={customerPhone}
                       onChange={(e) => setCustomerPhone(e.target.value)}
-                      disabled={isProcessing}
+                      disabled={lockInputs}
                       placeholder="08xxxxxxxxxx"
                       className="w-full pl-10 pr-3 py-2.5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 font-mono text-sm text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                     />
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── TAMBAHAN (Midtrans) ── Panel menunggu pembayaran digital. Tombol
+              di dalamnya TIDAK ikut terkunci oleh isProcessing (memang harus
+              bisa ditekan selagi menunggu). */}
+          {digitalPhase !== "idle" && (
+            <div className="mt-5 rounded-xl border border-lco-teal/30 bg-lco-teal/5 p-4">
+              {digitalPhase === "creating" || !digitalOrder ? (
+                <div className="flex items-center justify-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Menyiapkan pembayaran digital...
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Loader2 className="w-4 h-4 animate-spin text-lco-teal shrink-0" />
+                    <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                      Menunggu pelanggan membayar
+                    </p>
+                  </div>
+                  <dl className="space-y-1.5 text-xs">
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-zinc-500">Nominal</dt>
+                      <dd className="font-mono font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">
+                        {formatRp(digitalOrder.amount)}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-zinc-500 shrink-0">Order ID</dt>
+                      <dd className="font-mono text-[11px] text-zinc-700 dark:text-zinc-300 break-all text-right">
+                        {digitalOrder.orderId}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-zinc-500">Berlaku hingga</dt>
+                      <dd className="font-mono tabular-nums text-zinc-700 dark:text-zinc-300">
+                        {new Date(digitalOrder.expiresAt).toLocaleTimeString(
+                          "id-ID",
+                          { hour: "2-digit", minute: "2-digit" },
+                        )}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-zinc-500">Status</dt>
+                      <dd className="text-zinc-700 dark:text-zinc-300 text-right">
+                        {digitalStatusLabel(digitalMidtransStatus)}
+                      </dd>
+                    </div>
+                  </dl>
+                  <p className="mt-3 text-[11px] text-zinc-500">
+                    Status dicek otomatis setiap 3 detik. Struk keluar sendiri
+                    begitu pembayaran lunas.
+                  </p>
+                  {digitalNote && (
+                    <p className="mt-2 text-[11px] text-lco-coral">
+                      {digitalNote}
+                    </p>
+                  )}
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={handleReopenSnap}
+                      className="flex items-center justify-center gap-1.5 py-2 rounded-md border border-zinc-300 dark:border-zinc-700 text-xs font-medium text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors duration-150"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      Buka Pembayaran
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCheckDigitalStatus}
+                      disabled={checkingDigital}
+                      className="flex items-center justify-center gap-1.5 py-2 rounded-md border border-zinc-300 dark:border-zinc-700 text-xs font-medium text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors duration-150 disabled:opacity-50"
+                    >
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 ${checkingDigital ? "animate-spin" : ""}`}
+                      />
+                      Cek Status
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCancelDigital}
+                    disabled={cancellingDigital}
+                    className="mt-2 w-full flex items-center justify-center gap-1.5 py-2 rounded-md border border-lco-coral/40 text-xs font-medium text-lco-coral hover:bg-lco-coral/10 transition-colors duration-150 disabled:opacity-50"
+                  >
+                    {cancellingDigital ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <XCircle className="w-3.5 h-3.5" />
+                    )}
+                    Batalkan Pembayaran Digital
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ── TAMBAHAN (Midtrans) ── Pembayaran digital sudah lunas tetapi
+              transaksi belum tersimpan (mis. koneksi ke database putus). */}
+          {paidDigital && digitalPhase === "idle" && (
+            <div className="mt-5 flex items-start gap-2 rounded-md border border-lco-green/30 bg-lco-green/10 p-3 text-xs text-lco-green">
+              <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold mb-1">
+                  Pembayaran digital diterima
+                </p>
+                <p>
+                  {formatRp(paidDigital.amount)} sudah lunas (Order{" "}
+                  <span className="font-mono">{paidDigital.orderId}</span>).{" "}
+                  {isProcessing
+                    ? "Menyimpan transaksi..."
+                    : "Transaksi belum tersimpan — tekan tombol di bawah untuk menyimpan ulang. Jangan menagih pelanggan lagi."}
+                </p>
               </div>
             </div>
           )}
@@ -1193,7 +1636,12 @@ export default function PaymentModal({
             disabled={!isPayable || isProcessing}
             className="w-full py-3 rounded-md bg-lco-green hover:bg-lco-green-hover text-white text-sm font-semibold transition-colors duration-150 disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            {isProcessing ? (
+            {digitalPhase !== "idle" ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Menunggu Pembayaran Digital...
+              </>
+            ) : isProcessing ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
                 Menyimpan Transaksi...
@@ -1204,6 +1652,10 @@ export default function PaymentModal({
               `Uang Kurang ( ${formatRp(Math.abs(changeAmount))} )`
             ) : !isSplit && method === "TEMPO" && !isPayable ? (
               "Lengkapi Nama & Jatuh Tempo"
+            ) : paidDigital ? (
+              "Simpan Transaksi (Digital Sudah Lunas)"
+            ) : (isSplit ? splitOn.DIGITAL : method === "DIGITAL") ? (
+              "Lanjut ke Pembayaran Digital"
             ) : (
               "Proses Pembayaran"
             )}
