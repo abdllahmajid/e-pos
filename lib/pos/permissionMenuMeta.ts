@@ -54,6 +54,9 @@ export const PERMISSION_GROUPS: PermissionGroupMeta[] = [
     items: [
       { key: "kasir", icon: ShoppingCart },
       { key: "produk", icon: Package },
+      // ── TAMBAHAN (migration 035) ── menu Pelanggan, di grup "Utama" sama
+      // seperti posisinya di Sidebar.tsx.
+      { key: "pelanggan", icon: Users },
       // Tidak punya menu sidebar sendiri (nempel di layar Riwayat Transaksi)
       // — lihat catatan header. Ditaruh di grup "Utama" karena Riwayat
       // Transaksi ada di grup itu.

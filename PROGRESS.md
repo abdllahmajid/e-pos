@@ -2370,3 +2370,46 @@ atau sebaiknya di-deprecate sekarang rantai migration sudah berjalan sampai `010
 </details>
 
 </details>
+
+---
+
+## Menu Pelanggan (manajemen pelanggan lengkap)
+
+**Status:** kode selesai, BELUM dites di database/browser sungguhan.
+
+**Wajib dijalankan dulu:** `supabase/migrations/035_customers_management.sql`
+di SQL Editor Supabase (idempotent, aman diulang). Setelah itu, update juga
+`supabase/schema.sql` (snapshot) kalau dipakai untuk instalasi baru.
+
+**Yang ditambah**
+
+- Migration 035: kolom `is_active` & `created_by` (pendaftaran SEDERHANA ala
+  member minimarket: hanya no. HP wajib & unik, nama opsional — kalau kosong,
+  nama diisi = no. HP dan UI menampilkannya "Tanpa nama"; unique index no. HP
+  dibuat otomatis kalau tidak ada data kembar), tabel `customer_point_logs`, permission baru
+  `pelanggan` (Lihat/Tambah/Ubah/Hapus), RPC `adjust_customer_points`,
+  `set_customer_active`, `get_customer_stats`, `get_customer_transactions`,
+  helper `normalize_phone` & `customer_transaction_links`.
+- `redeem_loyalty_points` di-replace (signature sama) hanya untuk mencatat
+  riwayat poin. `create_transaction` / tabel `transactions` TIDAK disentuh.
+- Policy UPDATE `customers` diperketat ke permission `pelanggan`:edit
+  (SELECT & INSERT tetap terbuka untuk semua user aktif — dipakai Kasir).
+- Frontend: `hooks/useCustomerAdmin.ts`, `app/components/pelanggan/*`
+  (Module, FormModal, DetailPanel, PoinAdjustModal), menu di `Sidebar.tsx`,
+  render di `app/page.tsx`, ikon di `lib/pos/permissionMenuMeta.ts`, urutan di
+  `hooks/useRoles.ts`. `hooks/useCustomers.ts` (Kasir) kini hanya memuat
+  pelanggan `is_active = true`.
+
+**Keputusan & batasan yang perlu diketahui**
+
+- Transaksi belum punya `customer_id`. Keterkaitan dihitung saat query: cocok
+  no. HP (dinormalisasi 62xxx), atau nama persis bila nama itu milik tepat satu
+  pelanggan aktif DAN transaksi tidak punya no. HP. Pelanggan tanpa no. HP /
+  nama kembar bisa tidak terkaitkan. Solusi permanen: tambah `customer_id` ke
+  `create_transaction` (perlu rewrite RPC besar — sengaja ditunda).
+- Poin hanya bisa BERTAMBAH lewat penyesuaian manual. Belum ada perolehan
+  otomatis dari transaksi (butuh keputusan tarif, mis. 1 poin per Rp X).
+- Default permission: Admin & Supervisor penuh; Kasir & QC hanya Lihat +
+  Tambah. Role custom harus diatur manual di Pengaturan > Role.
+- `LOYALTY_POINT_VALUE = 100` diduplikasi di `PelangganModule.tsx` (konstanta
+  di KasirModule tidak di-export) — ubah keduanya bersamaan.

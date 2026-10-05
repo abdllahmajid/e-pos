@@ -19,6 +19,7 @@ import {
   // tombol "Buka Kasir" yang baru.
   ReceiptText,
   Package,
+  Users,
   Wallet,
   Boxes,
   Monitor,
@@ -92,6 +93,15 @@ export const MENU_GROUPS: SidebarMenuGroup[] = [
       { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
       { key: "produk", label: "Produk", icon: Package },
       { key: "riwayat", label: "Riwayat Transaksi", icon: ReceiptText },
+      // ── TAMBAHAN (menu Pelanggan, migration 035) ── Kelola pelanggan:
+      // daftar, riwayat belanja, poin loyalitas, piutang. Tampil kalau role
+      // punya permission "pelanggan" (Pengaturan > Role > Kelola Pelanggan).
+      {
+        key: "pelanggan",
+        label: "Pelanggan",
+        icon: Users,
+        permissions: ["pelanggan"],
+      },
     ],
   },
   {

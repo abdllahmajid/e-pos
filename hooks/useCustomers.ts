@@ -56,6 +56,9 @@ export function useCustomers(): UseCustomersResult {
       const { data, error: fetchError } = await supabase
         .from("customers")
         .select("id, name, phone, loyalty_points")
+        // ── TAMBAHAN (migration 035) ── pelanggan yang diarsipkan lewat menu
+        // Pelanggan tidak muncul lagi di pencarian Kasir.
+        .eq("is_active", true)
         .order("name", { ascending: true });
 
       if (isCancelled) return;

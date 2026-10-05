@@ -77,6 +77,16 @@ function formatMethodLabel(method: string): string {
 type PaymentModalProps = {
   isOpen: boolean;
   onClose: () => void;
+  /**
+   * ── TAMBAHAN (menu Pelanggan) ── Pelanggan yang sudah dipilih di layar
+   * Kasir (kolom "Pelanggan [F2]"). Nama & no. HP-nya DIISIKAN OTOMATIS ke
+   * form di bawah saat modal dibuka — kasir tetap bisa mengubahnya. Kalau
+   * tidak ada pelanggan terpilih, form kosong: kasir boleh membiarkannya,
+   * atau mengisi nama/no. HP untuk mendaftarkan member baru sekaligus
+   * (didaftarkan oleh KasirModule setelah pembayaran berhasil).
+   */
+  initialCustomerName?: string;
+  initialCustomerPhone?: string;
   subtotal: number;
   tax: number;
   total: number;
@@ -209,6 +219,8 @@ function defaultDueDate(): string {
 export default function PaymentModal({
   isOpen,
   onClose,
+  initialCustomerName = "",
+  initialCustomerPhone = "",
   subtotal,
   tax,
   total,
@@ -307,8 +319,11 @@ export default function PaymentModal({
     if (isOpen) {
       setMethod("CASH");
       setPaidAmount(0);
-      setCustomerName("");
-      setCustomerPhone("");
+      // ── TAMBAHAN (menu Pelanggan) ── Isi dari pelanggan yang dipilih di
+      // Kasir (kosong kalau tidak ada). Dibaca hanya saat modal DIBUKA —
+      // makanya deps efek ini sengaja tetap [isOpen] saja.
+      setCustomerName(initialCustomerName);
+      setCustomerPhone(initialCustomerPhone);
       setDueDate(defaultDueDate());
       setMode("single");
       setSplitOn(emptyMethodFlags());
@@ -338,6 +353,7 @@ export default function PaymentModal({
       }
       setPrintToastVisible(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   // ── PERBAIKAN (auto-print setelah bayar) ── Begitu layar sukses muncul

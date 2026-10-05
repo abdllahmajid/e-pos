@@ -40,6 +40,7 @@ const supabase = createClient();
 const PERMISSION_ORDER = [
   "kasir",
   "produk",
+  "pelanggan",
   "retur_void",
   "stok",
   "promo",

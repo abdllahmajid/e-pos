@@ -28,6 +28,7 @@ import KasirTopBar from "./KasirTopBar";
 import KasirModulePC from "./KasirModulePC";
 // ── TAMBAHAN (Kasir: pelanggan + poin loyalitas) ──
 import { useCustomers, type Customer } from "@/hooks/useCustomers";
+import { normalizePhone } from "@/hooks/useCustomerAdmin";
 import {
   shareReceiptViaWhatsApp,
   type ReceiptData,
@@ -167,7 +168,7 @@ export default function KasirModule({
   } = useShifts();
   const { printReceipt } = usePrinterProfiles();
   // ── TAMBAHAN (Kasir: pelanggan + poin loyalitas) ──
-  const { customers, redeemPoints } = useCustomers();
+  const { customers, redeemPoints, addCustomer } = useCustomers();
   const {
     heldOrders,
     isLoading: isHeldOrdersLoading,
@@ -529,6 +530,25 @@ export default function KasirModule({
   }, [pointsBeingUsed, manualDiscount, subtotal, tax]);
   const grandTotal = subtotal - discount + tax;
 
+  // ── TAMBAHAN (menu Pelanggan) ── Daftarkan member baru otomatis dari form
+  // Pembayaran: kalau kasir TIDAK memilih pelanggan di kolom Pelanggan tapi
+  // mengisi no. HP di PaymentModal, dan no. HP itu belum terdaftar, buat
+  // pelanggan baru (nama kosong → no. HP dipakai sebagai nama). Dipanggil
+  // SETELAH transaksi tersimpan & sengaja tidak melempar error — gagal
+  // mendaftar (mis. nomor milik pelanggan yang diarsipkan) tidak boleh
+  // membatalkan transaksi yang sudah sukses.
+  const autoRegisterCustomer = async (name?: string, phone?: string) => {
+    if (selectedCustomer || !phone) return;
+    const key = normalizePhone(phone);
+    if (key.length < 9) return;
+    if (customers.some((c) => normalizePhone(c.phone) === key)) return;
+    try {
+      await addCustomer(name?.trim() || phone.trim(), phone.trim());
+    } catch (registerErr) {
+      console.error("Gagal mendaftarkan pelanggan baru:", registerErr);
+    }
+  };
+
   const handleConfirmPayment = async (
     method: PaymentMethod,
     paidAmount: number,
@@ -566,6 +586,8 @@ export default function KasirModule({
         customerPhone: effectiveCustomerPhone,
         dueDate: extra?.dueDate,
       });
+
+      await autoRegisterCustomer(extra?.customerName, extra?.customerPhone);
 
       // ── TAMBAHAN (Kasir: poin loyalitas) ── Kurangi poin SETELAH transaksi
       // tersimpan (bukan sebelum) — kalau baris di atas melempar error,
@@ -687,6 +709,8 @@ export default function KasirModule({
         customerName: effectiveCustomerName,
         customerPhone: effectiveCustomerPhone,
       });
+
+      await autoRegisterCustomer(extra?.customerName, extra?.customerPhone);
 
       if (pointsBeingUsed > 0 && selectedCustomer) {
         try {
@@ -1700,6 +1724,17 @@ export default function KasirModule({
 
       <PaymentModal
         isOpen={isPaymentModalOpen}
+        // ── TAMBAHAN (menu Pelanggan) ── Pelanggan yang dipilih di kolom
+        // "Pelanggan [F2]" otomatis terisi di form nama/no. HP pembayaran.
+        // Pelanggan "tanpa nama" (nama = no. HP) → nama dikosongkan.
+        initialCustomerName={
+          selectedCustomer &&
+          normalizePhone(selectedCustomer.name) !==
+            normalizePhone(selectedCustomer.phone)
+            ? selectedCustomer.name
+            : ""
+        }
+        initialCustomerPhone={selectedCustomer?.phone ?? ""}
         onClose={() => {
           if (!isSavingTransaction) setIsPaymentModalOpen(false);
         }}

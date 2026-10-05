@@ -88,6 +88,15 @@ const PromoModule = dynamic(() => import("./components/promo/PromoModule"), {
   ssr: false,
 });
 
+// ── TAMBAHAN (menu Pelanggan, migration 035) ── Modul manajemen pelanggan
+// (daftar, riwayat transaksi, poin loyalitas, piutang).
+const PelangganModule = dynamic(
+  () => import("./components/pelanggan/PelangganModule"),
+  {
+    ssr: false,
+  },
+);
+
 export default function LCOPOS() {
   // ── KOREKSI (setelah login diarahkan ke Dashboard) ── Sebelumnya default
   // "kasir", jadi kasir/admin yang baru login langsung masuk layar POS.
@@ -175,6 +184,7 @@ export default function LCOPOS() {
           )}
           {activeMenu === "produk" && <ProdukModule />}
           {activeMenu === "riwayat" && <TransactionHistoryModule />}
+          {activeMenu === "pelanggan" && <PelangganModule />}
           {activeMenu === "stok" && <StokModule />}
           {activeMenu === "kas" && <KasModule />}
           {activeMenu === "promo" && <PromoModule />}
