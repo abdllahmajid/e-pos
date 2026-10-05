@@ -8,7 +8,6 @@ Aplikasi kasir (POS) berbasis Next.js + Supabase untuk Langitan.co. Lihat
 
 - **Next.js** (App Router) + TypeScript
 - **Supabase** — Postgres, Auth, Storage, RLS
-- **Firebase Cloud Messaging** — notifikasi push (opsional)
 
 ## Quick start
 
@@ -68,20 +67,6 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 # Admin). Project Settings > API > service_role.
 # JANGAN pernah di-expose ke client/browser.
 SUPABASE_SERVICE_ROLE_KEY=
-
-# Opsional — notifikasi push (PWA). Aplikasi tetap jalan normal tanpa ini,
-# hanya fitur notifikasi yang tidak aktif. Isi dari Firebase Console kalau
-# dibutuhkan.
-NEXT_PUBLIC_FIREBASE_API_KEY=
-NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=
-NEXT_PUBLIC_FIREBASE_PROJECT_ID=
-NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=
-NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
-NEXT_PUBLIC_FIREBASE_APP_ID=
-NEXT_PUBLIC_FIREBASE_VAPID_KEY=
-FIREBASE_ADMIN_PROJECT_ID=
-FIREBASE_ADMIN_CLIENT_EMAIL=
-FIREBASE_ADMIN_PRIVATE_KEY=
 ```
 
 ### 5. Jalankan

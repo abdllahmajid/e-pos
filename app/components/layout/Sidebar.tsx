@@ -26,8 +26,6 @@ import {
   Trash2,
   ClipboardList,
   Settings,
-  Bell,
-  BellOff,
   Sun,
   Moon,
   Loader2,
@@ -37,14 +35,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useAuth, hasPermission, type AuthUser } from "@/hooks/useAuth";
-// ── TAMBAHAN (T-12) ── Dipanggil DI SINI SAJA (satu-satunya titik panggil di
-// seluruh app, lihat catatan header hooks/useFcmToken.ts) — bukan per-device
-// admin-only, jadi tombolnya harus terlihat SEMUA role, bukan di
-// PengaturanModule.tsx (yang admin+supervisor only).
-import { useFcmToken } from "@/hooks/useFcmToken";
-// ── TAMBAHAN (dark mode toggle, sidebar) ── Sama alasannya dengan
-// useFcmToken di atas: preferensi PER-DEVICE, bukan pengaturan toko, jadi
-// tombolnya sengaja ditaruh di sini (footer Sidebar), BUKAN di
+// ── TAMBAHAN (dark mode toggle, sidebar) ── Preferensi PER-DEVICE, bukan
+// pengaturan toko, jadi tombolnya sengaja ditaruh di sini (footer Sidebar), BUKAN di
 // PengaturanModule.tsx (admin/supervisor only) — supaya semua role kasir
 // bisa mengatur tampilan device yang sedang mereka pakai sendiri, kapan
 // saja, tanpa perlu izin admin. Lihat catatan lengkap di
@@ -249,71 +241,6 @@ function filterMenuGroups(groups: SidebarMenuGroup[], user: AuthUser | null) {
     .filter((group) => group.items.length > 0);
 }
 
-/**
- * ── TAMBAHAN (T-12) ── Status + tombol aktifkan notifikasi push, ditaruh di
- * footer Sidebar (bukan Pengaturan) supaya terlihat SEMUA role — ini
- * pengaturan per-device kasir, bukan pengaturan toko.
- *
- * Kalau `status` "unsupported" atau "missing_config" (env Firebase belum
- * diisi — lihat lib/firebase/client.ts), SENGAJA tidak dirender apa-apa:
- * menampilkan tombol yang pasti gagal cuma membingungkan kasir yang tidak
- * bisa berbuat apa-apa soal itu (butuh env var diisi pemilik project, bukan
- * aksi dari layar ini).
- */
-function NotificationStatus() {
-  const { status, requestPermission } = useFcmToken();
-
-  if (status === "unsupported" || status === "missing_config") return null;
-
-  if (status === "granted") {
-    return (
-      <div className="flex items-center gap-2 px-3 py-2 text-xs text-zinc-500 dark:text-zinc-400">
-        <Bell className="h-3.5 w-3.5 text-lco-teal" />
-        Notifikasi aktif
-      </div>
-    );
-  }
-
-  if (status === "checking") {
-    return (
-      <div className="flex items-center gap-2 px-3 py-2 text-xs text-zinc-500 dark:text-zinc-400">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        Mengaktifkan notifikasi...
-      </div>
-    );
-  }
-
-  if (status === "denied") {
-    // Browser TIDAK akan menampilkan prompt lagi begitu ditolak — satu-satunya
-    // jalan adalah user ubah manual dari pengaturan browser, tombol di sini
-    // percuma dipanggil ulang (lihat catatan header lib/firebase/client.ts).
-    return (
-      <div className="px-3 py-2 text-xs text-zinc-400 dark:text-zinc-500">
-        <div className="flex items-center gap-2">
-          <BellOff className="h-3.5 w-3.5" />
-          Notifikasi diblokir browser
-        </div>
-        <p className="mt-0.5 text-[11px] leading-snug">
-          Aktifkan lewat pengaturan izin situs di browser.
-        </p>
-      </div>
-    );
-  }
-
-  // status "idle" atau "error" — tombol untuk minta izin/coba lagi.
-  return (
-    <button
-      onClick={() => void requestPermission()}
-      className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-zinc-600 transition-colors duration-150 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
-    >
-      <Bell className="h-3.5 w-3.5" />
-      {status === "error"
-        ? "Coba aktifkan notifikasi lagi"
-        : "Aktifkan Notifikasi"}
-    </button>
-  );
-}
-
 // ── TAMBAHAN (dark mode toggle, sidebar) ── Toggle terang/gelap, ditaruh di
 // footer Sidebar (bukan Pengaturan) atas permintaan langsung — preferensi
 // ini per-device, dibaca/ditulis lewat hooks/useThemePreference.ts
@@ -419,9 +346,7 @@ export default function Sidebar({
     setMobileOpen(false);
   }
 
-  // ── TAMBAHAN (logout) ── `signOut()` di hooks/useAuth.ts sudah ada dan sudah
-  // menghapus token FCM SEBELUM mengakhiri sesi, tapi sebelumnya tidak ada
-  // komponen yang memanggilnya. Setelah sesi berakhir kita pindah halaman
+  // ── TAMBAHAN (logout) ── `signOut()` di hooks/useAuth.ts. Setelah sesi berakhir kita pindah halaman
   // dengan reload penuh (bukan router.push) supaya semua state di memori —
   // keranjang, data shift, cache hook — ikut hilang dan tidak bocor ke user
   // berikutnya di tablet kasir yang dipakai bergantian.
@@ -486,9 +411,9 @@ export default function Sidebar({
             : "md:static md:z-auto md:w-64 md:translate-x-0 md:transition-none"
         } ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
       >
-        {/* ── TAMBAHAN (T-12) ── Dibungkus flex-1 overflow-y-auto supaya daftar
+        {/* ── Dibungkus flex-1 overflow-y-auto supaya daftar
           menu bisa scroll sendiri kalau kepanjangan, TANPA ikut menggeser
-          footer notifikasi di bawah keluar layar. */}
+          footer di bawah keluar layar. */}
         <div className="flex-1 overflow-y-auto">
           {/* ── PERBAIKAN (garis bawah sejajar dengan Header) ── Dulu tinggi blok
               ini "ikut isi" (padding p-5 + tinggi teks judul + 1px border =
@@ -590,12 +515,11 @@ export default function Sidebar({
           ))}
         </div>
 
-        {/* ── TAMBAHAN (T-12) ── Footer notifikasi, di luar area scroll di atas
+        {/* ── Footer sidebar, di luar area scroll di atas
           supaya selalu terlihat. */}
         <div className="border-t border-zinc-200 p-2 dark:border-zinc-800">
           {/* ── TAMBAHAN (dark mode toggle, sidebar) ── */}
           <ThemeToggle />
-          <NotificationStatus />
 
           {/* ── TAMBAHAN (logout) ── Identitas user + tombol Keluar. */}
           <div className="mt-1 border-t border-zinc-200 px-3 pt-3 pb-1 dark:border-zinc-800">
