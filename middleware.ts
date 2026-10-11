@@ -13,11 +13,20 @@ import { NextResponse, type NextRequest } from "next/server";
 // sini, panggilan Midtrans di-redirect ke /login dan status pembayaran tidak
 // pernah terupdate otomatis. Keamanannya ada di route itu sendiri (verifikasi
 // signature_key). Route Midtrans lain (create/status/cancel) TETAP butuh login.
+// ── PERBAIKAN (layar TV) ── "/tv/" WAJIB publik: layar TV promosi
+// (app/tv/[access_token]/page.tsx) dibuka di perangkat TV yang tidak punya
+// akun/login — akses dibatasi oleh `access_token` di URL (RPC
+// `get_screen_playlist`, migration 027), bukan oleh sesi. Tanpa entri ini
+// TV dialihkan ke /login dan layar promosi tidak pernah tampil. Sengaja
+// memakai garis miring penutup ("/tv/", bukan "/tv"): hanya path ber-token
+// yang publik. Link lama "/tv" polos (halaman pengalih ke beranda) dan path
+// mirip seperti "/tvxyz" tetap butuh login.
 const PUBLIC_PATHS = [
   "/login",
   "/cek-struk",
   "/auth/callback",
   "/api/midtrans/notification",
+  "/tv/",
 ];
 
 export async function middleware(request: NextRequest) {

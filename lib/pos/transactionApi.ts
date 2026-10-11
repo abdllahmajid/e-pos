@@ -150,6 +150,23 @@ interface CreateTransactionBaseParams {
    * tanpa pembayaran digital (Tunai / Piutang).
    */
   digitalOrderId?: string;
+
+  /**
+   * ── TAMBAHAN (migration 036) ── ID pelanggan (tabel `customers`) yang
+   * dipilih/terdaftar untuk transaksi ini. Disimpan di baris transaksi
+   * (`transactions.customer_id`) dan dipakai server untuk menambah poin dari
+   * belanja. Kosongkan kalau transaksi tanpa pelanggan.
+   */
+  customerId?: string;
+
+  /**
+   * ── TAMBAHAN (migration 036) ── Jumlah POIN loyalti yang dipakai sebagai
+   * potongan. Nilai rupiahnya HARUS sudah termasuk di `discount` (server
+   * menolak kalau potongan lebih kecil dari nilai poin). Pemotongan saldo
+   * poin dilakukan server di dalam transaksi yang sama — TIDAK ada lagi
+   * pemanggilan redeem_loyalty_points terpisah dari client.
+   */
+  pointsRedeemed?: number;
 }
 
 export type CreateTransactionParams = CreateTransactionBaseParams &
@@ -174,6 +191,14 @@ export interface CreateTransactionResult {
   payments: CreatedPayment[];
   /** Total kembalian dari semua baris CASH (0 kalau tidak ada). */
   change_amount: number;
+  /**
+   * ── TAMBAHAN (036) ── Poin yang dipakai & didapat pada transaksi ini, serta
+   * saldo poin pelanggan sesudahnya (null kalau transaksi tanpa pelanggan).
+   * Server lama (sebelum migration 036) tidak mengirimkannya -> 0 / null.
+   */
+  points_redeemed: number;
+  points_earned: number;
+  points_balance: number | null;
 }
 
 /**
@@ -259,6 +284,15 @@ export async function createTransaction(
     }
   }
 
+  // ── TAMBAHAN (036/038) ── Poin yang dipakai (jumlah poin, bukan rupiah).
+  // Nilai rupiahnya sudah ada di `discount`; server memvalidasi keduanya dan
+  // yang memotong saldo. Dikirim di KEDUA jalur (biasa & digital) — pembungkus
+  // create_transaction_digital meneruskannya sejak migration 038.
+  const pointsRedeemed = params.pointsRedeemed ?? 0;
+  if (pointsRedeemed < 0 || !Number.isInteger(pointsRedeemed)) {
+    throw new Error("Jumlah poin yang dipakai tidak valid.");
+  }
+
   const { data, error } = await supabase.rpc(
     digitalOrderId ? "create_transaction_digital" : "create_transaction",
     {
@@ -294,6 +328,10 @@ export async function createTransaction(
     // di atas. Named parameter, jadi ditambahkan di akhir daftar RPC di sini
     // tidak bergantung urutan parameter di definisi SQL-nya.
     p_customer_phone: params.customerPhone?.trim() || null,
+    // ── TAMBAHAN (036) ── pelanggan + poin dipakai. Poin yang DIDAPAT dihitung
+    // server (aturan di loyalty_earn_unit()), bukan dikirim dari sini.
+    p_customer_id: params.customerId ?? null,
+    p_points_redeemed: pointsRedeemed,
     },
   );
 
@@ -328,6 +366,12 @@ export async function createTransaction(
           },
         ],
     change_amount: Number(data.change_amount ?? 0),
+    points_redeemed: Number(data.points_redeemed ?? 0),
+    points_earned: Number(data.points_earned ?? 0),
+    points_balance:
+      data.points_balance === null || data.points_balance === undefined
+        ? null
+        : Number(data.points_balance),
   };
 }
 
@@ -362,6 +406,64 @@ export interface TransactionDetailPayment {
   notes: string | null;
   /** ── TAMBAHAN (T-02) ── Jatuh tempo, hanya terisi untuk method TEMPO. */
   due_date: string | null;
+  /** ── TAMBAHAN (retur) ── Sudah dilunasi? Relevan untuk baris TEMPO (piutang). */
+  is_settled: boolean;
+}
+
+/**
+ * ── TAMBAHAN (migration 037) ── Satu retur yang sudah tercatat atas sebuah
+ * transaksi penjualan (baris transaksi berstatus RETURN yang
+ * `related_transaction_id`-nya menunjuk ke penjualan itu).
+ */
+export interface TransactionReturnRecord {
+  id: string;
+  receipt_no: string;
+  created_at: string;
+  cashier_name: string | null;
+  reason: string | null;
+  /** Nilai refund (kolom `subtotal` baris retur, selalu positif). */
+  refund_amount: number;
+  items: {
+    id: string;
+    product_name: string;
+    unit: string | null;
+    qty: number;
+    subtotal: number;
+  }[];
+  /** Pembayaran NEGATIF baris retur: refund tunai/digital yang dicatat. */
+  payments: {
+    method: PaymentMethod | string;
+    amount: number;
+    reference_no: string | null;
+    notes: string | null;
+  }[];
+}
+
+// Bentuk mentah satu baris retur dari query PostgREST di getTransactionDetail().
+interface ReturnRowRaw {
+  id: string;
+  receipt_no: string;
+  created_at: string;
+  subtotal: number | null;
+  void_reason: string | null;
+  cashier: { full_name: string | null } | null;
+  transaction_items:
+    | {
+        id: string;
+        product_name: string;
+        unit: string | null;
+        qty: number | null;
+        subtotal: number | null;
+      }[]
+    | null;
+  payments:
+    | {
+        method: string;
+        amount: number | null;
+        reference_no: string | null;
+        notes: string | null;
+      }[]
+    | null;
 }
 
 export interface TransactionDetail {
@@ -381,6 +483,14 @@ export interface TransactionDetail {
   created_at: string;
   items: TransactionDetailItem[];
   payments: TransactionDetailPayment[];
+  /** ── TAMBAHAN (036) ── Pelanggan tertaut & poin transaksi ini. */
+  customer_id: string | null;
+  points_earned: number;
+  points_redeemed: number;
+  /** ── TAMBAHAN (037) ── Khusus baris retur: nomor struk penjualan asalnya. */
+  original_receipt_no: string | null;
+  /** ── TAMBAHAN (037) ── Khusus transaksi penjualan: retur-retur atasnya (lama -> baru). */
+  returns: TransactionReturnRecord[];
 }
 
 /**
@@ -410,13 +520,16 @@ export async function getTransactionDetail(
       void_reason,
       related_transaction_id,
       created_at,
+      customer_id,
+      points_earned,
+      points_redeemed,
       cashier:profiles!cashier_id ( full_name ),
       transaction_items (
         id, product_id, sku, product_name, unit,
         qty, returned_qty, unit_price, discount, subtotal
       ),
       payments (
-        id, method, amount, received_amount, change_amount, reference_no, notes, due_date
+        id, method, amount, received_amount, change_amount, reference_no, notes, due_date, is_settled
       )
     `,
     )
@@ -429,6 +542,69 @@ export async function getTransactionDetail(
   }
 
   const row: any = data;
+
+  // ── TAMBAHAN (037) ── Dua hal tambahan, tergantung jenis barisnya:
+  // - Baris RETUR (related_transaction_id terisi): ambil nomor struk asalnya.
+  // - Transaksi penjualan yang sudah diretur (status RETURN): ambil daftar
+  //   retur atasnya. Dibuat error keras (bukan diam-diam kosong) karena dari
+  //   sinilah peringatan refund digital/piutang di layar berasal.
+  let originalReceiptNo: string | null = null;
+  let returns: TransactionReturnRecord[] = [];
+
+  if (row.related_transaction_id) {
+    const { data: original } = await supabase
+      .from("transactions")
+      .select("receipt_no")
+      .eq("id", row.related_transaction_id)
+      .maybeSingle();
+    originalReceiptNo =
+      (original as { receipt_no: string } | null)?.receipt_no ?? null;
+  } else if (row.status === "RETURN") {
+    const { data: returnRows, error: returnsError } = await supabase
+      .from("transactions")
+      .select(
+        `
+        id,
+        receipt_no,
+        created_at,
+        subtotal,
+        void_reason,
+        cashier:profiles!cashier_id ( full_name ),
+        transaction_items ( id, product_name, unit, qty, subtotal ),
+        payments ( method, amount, reference_no, notes )
+      `,
+      )
+      .eq("related_transaction_id", transactionId)
+      .eq("status", "RETURN")
+      .order("created_at", { ascending: true });
+
+    if (returnsError) {
+      console.error("getTransactionDetail (returns) error:", returnsError);
+      throw new Error(returnsError.message || "Gagal memuat riwayat retur.");
+    }
+
+    returns = ((returnRows ?? []) as unknown as ReturnRowRaw[]).map((r) => ({
+      id: r.id,
+      receipt_no: r.receipt_no,
+      created_at: r.created_at,
+      cashier_name: r.cashier?.full_name ?? null,
+      reason: r.void_reason ?? null,
+      refund_amount: Number(r.subtotal ?? 0),
+      items: (r.transaction_items ?? []).map((i) => ({
+        id: i.id,
+        product_name: i.product_name,
+        unit: i.unit ?? null,
+        qty: Number(i.qty ?? 0),
+        subtotal: Number(i.subtotal ?? 0),
+      })),
+      payments: (r.payments ?? []).map((p) => ({
+        method: p.method,
+        amount: Number(p.amount ?? 0),
+        reference_no: p.reference_no ?? null,
+        notes: p.notes ?? null,
+      })),
+    }));
+  }
 
   return {
     id: row.id,
@@ -455,7 +631,13 @@ export async function getTransactionDetail(
       reference_no: p.reference_no,
       notes: p.notes,
       due_date: p.due_date,
+      is_settled: Boolean(p.is_settled),
     })),
+    customer_id: row.customer_id ?? null,
+    points_earned: Number(row.points_earned ?? 0),
+    points_redeemed: Number(row.points_redeemed ?? 0),
+    original_receipt_no: originalReceiptNo,
+    returns,
   };
 }
 
@@ -471,6 +653,14 @@ export interface ReturnTransactionResult {
   return_transaction_id: string;
   receipt_no: string;
   refund_amount: number;
+  /** ── TAMBAHAN (037) ── Rincian refund. Server lama -> 0. */
+  refund_cash: number;
+  refund_digital: number;
+  /** Bagian dari bagian piutang (TEMPO) yang TIDAK tercatat sebagai kas/digital. */
+  refund_not_recorded: number;
+  /** ── TAMBAHAN (039) ── Poin yang dicabut / dikembalikan ke pelanggan. */
+  points_reversed: number;
+  points_returned: number;
 }
 
 /** Retur sebagian/penuh — hanya boleh dipanggil oleh admin/supervisor (dicek ulang di RPC). */
@@ -507,6 +697,11 @@ export async function returnTransaction(
     return_transaction_id: data.return_transaction_id,
     receipt_no: data.receipt_no,
     refund_amount: Number(data.refund_amount ?? 0),
+    refund_cash: Number(data.refund_cash ?? 0),
+    refund_digital: Number(data.refund_digital ?? 0),
+    refund_not_recorded: Number(data.refund_not_recorded ?? 0),
+    points_reversed: Number(data.points_reversed ?? 0),
+    points_returned: Number(data.points_returned ?? 0),
   };
 }
 

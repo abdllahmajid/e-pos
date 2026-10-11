@@ -23,6 +23,7 @@ import {
   StickyNote,
   ChevronDown,
   MessageCircle,
+  Info,
 } from "lucide-react";
 import { useAuth, hasPermissionAction } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings"; // ── TAMBAHAN ── Untuk mendapatkan paperNota setting
@@ -32,6 +33,9 @@ import {
   voidTransaction,
   type TransactionDetail,
 } from "@/lib/pos/transactionApi";
+// ── TAMBAHAN (migration 037/039) ── Perkiraan dana kembali & ringkasan retur
+// (fungsi murni, diuji terpisah). Angka final tetap dihitung server.
+import { estimateReturn, summarizeReturns } from "@/lib/pos/returnPreview";
 import {
   printA6Nota,
   shareReceiptViaWhatsApp,
@@ -74,6 +78,69 @@ function methodLabel(method: string): string {
     QRIS: "Digital",
   };
   return labels[method] ?? method;
+}
+
+// ── TAMBAHAN (migration 037) ── Peringatan untuk refund yang TIDAK otomatis
+// selesai di sistem. Dipakai di riwayat retur (transaksi penjualan) dan di
+// detail baris retur itu sendiri.
+function RefundWarnings({
+  digital,
+  unrecorded,
+  digitalRefs,
+  tempoSettled,
+}: {
+  digital: number;
+  unrecorded: number;
+  /** Order ID Midtrans pembayaran digital transaksi asli (kalau diketahui). */
+  digitalRefs?: string[];
+  /** Piutang transaksi asli sudah lunas? undefined = tidak diketahui. */
+  tempoSettled?: boolean;
+}) {
+  if (digital <= 0 && unrecorded <= 0) return null;
+
+  return (
+    <div className="space-y-2">
+      {digital > 0 && (
+        <div className="flex items-start gap-2 rounded-md border border-lco-mustard/40 bg-lco-mustard/10 p-3 text-xs text-zinc-800 dark:text-zinc-100">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-lco-mustard" />
+          <div className="space-y-1">
+            <p className="font-semibold">
+              Refund digital {formatRupiah(digital)} harus diproses manual
+            </p>
+            <p>
+              Sistem hanya mencatat refund ini. Dana BELUM otomatis kembali ke
+              pelanggan — kembalikan lewat dashboard Midtrans.
+              {digitalRefs && digitalRefs.length > 0 && (
+                <>
+                  {" "}
+                  Order ID:{" "}
+                  <span className="font-mono">{digitalRefs.join(", ")}</span>
+                </>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+      {unrecorded > 0 && (
+        <div className="flex items-start gap-2 rounded-md border border-lco-mustard/40 bg-lco-mustard/10 p-3 text-xs text-zinc-800 dark:text-zinc-100">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-lco-mustard" />
+          <div className="space-y-1">
+            <p className="font-semibold">
+              {formatRupiah(unrecorded)} berasal dari bagian piutang
+            </p>
+            <p>
+              Tagihan piutang TIDAK otomatis berkurang oleh retur ini.{" "}
+              {tempoSettled === true
+                ? "Piutang transaksi ini sudah dilunasi, jadi kembalikan dana bagian ini ke pelanggan secara manual."
+                : tempoSettled === false
+                  ? "Tagihan masih tercatat penuh — sesuaikan secara manual dengan pelanggan."
+                  : "Sesuaikan tagihan piutang pelanggan secara manual."}
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function TransactionDetailModal({
@@ -294,8 +361,33 @@ export default function TransactionDetailModal({
         reason: returnReason,
       });
 
+      // ── PERBAIKAN (037/039) ── Rincian dari server: sebagian refund bisa
+      // berupa digital (proses manual) atau bagian piutang (tidak tercatat
+      // sebagai kas), dan poin pelanggan ikut disesuaikan.
+      const refundParts: string[] = [];
+      if (result.refund_cash > 0)
+        refundParts.push(`tunai ${formatRupiah(result.refund_cash)}`);
+      if (result.refund_digital > 0)
+        refundParts.push(
+          `digital ${formatRupiah(result.refund_digital)} — proses manual di Midtrans`,
+        );
+      if (result.refund_not_recorded > 0)
+        refundParts.push(
+          `${formatRupiah(result.refund_not_recorded)} dari bagian piutang — tagihan tidak otomatis berkurang`,
+        );
+      const pointParts: string[] = [];
+      if (result.points_reversed > 0)
+        pointParts.push(`${result.points_reversed} poin dicabut`);
+      if (result.points_returned > 0)
+        pointParts.push(`${result.points_returned} poin dikembalikan`);
+
       setActionSuccess(
-        `Retur berhasil — ${result.receipt_no}, dana kembali ${formatRupiah(result.refund_amount)}.`,
+        `Retur berhasil — ${result.receipt_no}, dana kembali ${formatRupiah(result.refund_amount)}` +
+          (refundParts.length > 0 ? ` (${refundParts.join("; ")})` : "") +
+          "." +
+          (pointParts.length > 0
+            ? ` Poin pelanggan: ${pointParts.join(", ")}.`
+            : ""),
       );
       onChanged();
 
@@ -343,7 +435,92 @@ export default function TransactionDetailModal({
     }
   }
 
-  const canStillAct = detail?.status === "PAID";
+  // ── PERBAIKAN (037) ── Dulu `canStillAct = status === "PAID"`. Setelah retur
+  // PERTAMA status transaksi berubah jadi RETURN, sehingga tombol Retur hilang
+  // padahal server (migration 037) sudah mengizinkan retur sebagian berulang.
+  // Sekarang: transaksi PENJUALAN (bukan baris retur) berstatus PAID atau
+  // RETURN, selama masih ada qty yang bisa diretur. Void tetap hanya untuk
+  // PAID (void_transaction menolak status lain).
+  const isReturnRow = Boolean(detail?.related_transaction_id);
+  const hasReturnableQty = detail
+    ? detail.items.some((item) => item.qty - item.returned_qty > 0)
+    : false;
+  const canStillReturn =
+    Boolean(detail) &&
+    !isReturnRow &&
+    (detail?.status === "PAID" || detail?.status === "RETURN") &&
+    hasReturnableQty;
+  const canStillVoid = detail?.status === "PAID";
+
+  // Defensif: kalau lib/pos/transactionApi.ts di proyek belum versi terbaru
+  // (belum mengirim `returns`), modal tetap tampil — hanya tanpa riwayat retur —
+  // dan tidak crash dengan "Cannot read properties of undefined".
+  const returnList = detail?.returns ?? [];
+  const returnsSummary = detail
+    ? summarizeReturns(
+        returnList.map((r) => ({
+          refundAmount: r.refund_amount,
+          payments: r.payments,
+        })),
+      )
+    : null;
+  const digitalRefs = detail
+    ? detail.payments
+        .filter((p) => p.method === "DIGITAL" && p.reference_no)
+        .map((p) => p.reference_no as string)
+    : [];
+  const tempoPayments = detail
+    ? detail.payments.filter((p) => p.method === "TEMPO")
+    : [];
+  const tempoSettled =
+    tempoPayments.length > 0
+      ? tempoPayments.every((p) => p.is_settled)
+      : undefined;
+  // Untuk baris retur: bagian piutang = nilai refund dikurangi refund yang tercatat.
+  const returnRowSummary =
+    detail && isReturnRow
+      ? summarizeReturns([
+          { refundAmount: detail.subtotal, payments: detail.payments },
+        ])
+      : null;
+
+  const returnEstimate =
+    detail && mode === "retur"
+      ? estimateReturn({
+          items: detail.items,
+          qtyById: returnQtyById,
+          saleSubtotal: detail.subtotal,
+          saleTotal: detail.total,
+          payments: detail.payments.map((p) => ({
+            method: p.method,
+            amount: p.amount,
+          })),
+          previouslyRefunded: returnsSummary?.refundTotal ?? 0,
+        })
+      : null;
+
+  function statusBadge(d: TransactionDetail): { label: string; cls: string } {
+    if (d.status === "VOID")
+      return {
+        label: "Dibatalkan (void)",
+        cls: "bg-lco-coral/10 text-lco-coral border-lco-coral/30",
+      };
+    if (d.status === "RETURN") {
+      if (d.related_transaction_id)
+        return {
+          label: "Retur",
+          cls: "bg-lco-mustard/10 text-lco-mustard border-lco-mustard/40",
+        };
+      return {
+        label: hasReturnableQty ? "Diretur sebagian" : "Diretur seluruhnya",
+        cls: "bg-lco-mustard/10 text-lco-mustard border-lco-mustard/40",
+      };
+    }
+    return {
+      label: "Selesai",
+      cls: "bg-lco-teal/10 text-lco-teal border-lco-teal/30",
+    };
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/40 p-4">
@@ -353,9 +530,18 @@ export default function TransactionDetailModal({
             <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
               Riwayat Transaksi
             </p>
-            <h2 className="font-mono font-semibold text-base tracking-tight text-zinc-900 dark:text-zinc-100">
-              {detail?.receipt_no ?? "Memuat..."}
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2 className="font-mono font-semibold text-base tracking-tight text-zinc-900 dark:text-zinc-100">
+                {detail?.receipt_no ?? "Memuat..."}
+              </h2>
+              {detail && (
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusBadge(detail).cls}`}
+                >
+                  {statusBadge(detail).label}
+                </span>
+              )}
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -416,6 +602,16 @@ export default function TransactionDetailModal({
                     </p>
                     <p className="font-mono tabular-nums text-zinc-900 dark:text-zinc-100">
                       {detail.customer_phone}
+                    </p>
+                  </div>
+                )}
+                {isReturnRow && detail.original_receipt_no && (
+                  <div className="col-span-2">
+                    <p className="text-zinc-400 uppercase tracking-wider text-[10px] font-semibold mb-1">
+                      Retur dari struk
+                    </p>
+                    <p className="font-mono text-zinc-900 dark:text-zinc-100">
+                      {detail.original_receipt_no}
                     </p>
                   </div>
                 )}
@@ -512,7 +708,9 @@ export default function TransactionDetailModal({
 
               <div className="space-y-1.5 text-sm border-t border-zinc-200 dark:border-zinc-800 pt-4">
                 <div className="flex justify-between text-zinc-500 text-xs">
-                  <span>Subtotal</span>
+                  <span>
+                    {isReturnRow ? "Nilai barang diretur" : "Subtotal"}
+                  </span>
                   <span className="font-mono tabular-nums">
                     {formatRupiah(detail.subtotal)}
                   </span>
@@ -534,9 +732,11 @@ export default function TransactionDetailModal({
                   </div>
                 )}
                 <div className="flex justify-between font-semibold text-base pt-2">
-                  <span>Total</span>
+                  <span>{isReturnRow ? "Dana dikembalikan" : "Total"}</span>
                   <span className="font-mono tabular-nums text-lco-teal">
-                    {formatRupiah(detail.total)}
+                    {formatRupiah(
+                      isReturnRow ? Math.abs(detail.total) : detail.total,
+                    )}
                   </span>
                 </div>
                 {detail.payments.map((payment) => (
@@ -545,9 +745,17 @@ export default function TransactionDetailModal({
                     className="pt-2 flex flex-col gap-2 border-t border-zinc-100 dark:border-zinc-800/50 mt-2 first:border-0 first:mt-0"
                   >
                     <div className="flex justify-between text-zinc-500 text-xs">
-                      <span>{methodLabel(payment.method)}</span>
+                      <span>
+                        {isReturnRow
+                          ? `Refund ${methodLabel(payment.method)}`
+                          : methodLabel(payment.method)}
+                      </span>
                       <span className="font-mono tabular-nums text-zinc-900 dark:text-zinc-100">
-                        {formatRupiah(payment.amount)}
+                        {formatRupiah(
+                          isReturnRow
+                            ? Math.abs(payment.amount)
+                            : payment.amount,
+                        )}
                       </span>
                     </div>
                     {payment.method === "TEMPO" && payment.due_date && (
@@ -558,9 +766,102 @@ export default function TransactionDetailModal({
                         </span>
                       </div>
                     )}
+                    {isReturnRow && payment.notes && (
+                      <p className="text-[11px] text-zinc-400">
+                        {payment.notes}
+                      </p>
+                    )}
                   </div>
                 ))}
+                {!isReturnRow &&
+                  (detail.points_earned > 0 || detail.points_redeemed > 0) && (
+                    <div className="flex justify-between text-zinc-500 text-xs pt-2 border-t border-zinc-100 dark:border-zinc-800/50 mt-2">
+                      <span>Poin</span>
+                      <span className="font-mono tabular-nums">
+                        {detail.points_earned > 0 &&
+                          `+${detail.points_earned} didapat`}
+                        {detail.points_earned > 0 &&
+                          detail.points_redeemed > 0 &&
+                          " · "}
+                        {detail.points_redeemed > 0 &&
+                          `-${detail.points_redeemed} dipakai`}
+                      </span>
+                    </div>
+                  )}
               </div>
+
+              {/* ── TAMBAHAN (037) ── Peringatan + riwayat retur */}
+              {isReturnRow && returnRowSummary && (
+                <RefundWarnings
+                  digital={returnRowSummary.digital}
+                  unrecorded={returnRowSummary.unrecorded}
+                />
+              )}
+
+              {!isReturnRow && returnList.length > 0 && returnsSummary && (
+                <div className="space-y-3">
+                  <RefundWarnings
+                    digital={returnsSummary.digital}
+                    unrecorded={returnsSummary.unrecorded}
+                    digitalRefs={digitalRefs}
+                    tempoSettled={tempoSettled}
+                  />
+
+                  <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+                    <div className="flex items-center justify-between px-3 py-2 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                        Riwayat Retur ({returnList.length})
+                      </p>
+                      <p className="text-xs font-mono tabular-nums text-zinc-700 dark:text-zinc-300">
+                        Total kembali {formatRupiah(returnsSummary.refundTotal)}
+                      </p>
+                    </div>
+                    <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                      {returnList.map((ret) => (
+                        <div key={ret.id} className="p-3 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">
+                              {ret.receipt_no}
+                            </p>
+                            <p className="font-mono tabular-nums text-lco-mustard font-semibold">
+                              {formatRupiah(ret.refund_amount)}
+                            </p>
+                          </div>
+                          <p className="text-zinc-400 font-mono tabular-nums">
+                            {formatDate(ret.created_at)}
+                            {ret.cashier_name ? ` · ${ret.cashier_name}` : ""}
+                          </p>
+                          <ul className="text-zinc-700 dark:text-zinc-300">
+                            {ret.items.map((item) => (
+                              <li key={item.id}>
+                                {item.product_name}{" "}
+                                <span className="font-mono tabular-nums text-zinc-500">
+                                  × {item.qty}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                          {ret.payments.length > 0 && (
+                            <p className="text-zinc-500">
+                              {ret.payments
+                                .map(
+                                  (pay) =>
+                                    `${methodLabel(pay.method)} ${formatRupiah(Math.abs(pay.amount))}`,
+                                )
+                                .join(" · ")}
+                            </p>
+                          )}
+                          {ret.reason && (
+                            <p className="text-zinc-500">
+                              Alasan: {ret.reason}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {actionSuccess && (
                 <div className="rounded-md border border-lco-teal/30 bg-lco-teal/10 p-3 text-xs text-lco-teal">
@@ -576,6 +877,70 @@ export default function TransactionDetailModal({
 
               {mode === "retur" && (
                 <div className="space-y-3 rounded-xl border border-lco-mustard/40 bg-lco-mustard/10 p-4">
+                  {/* ── TAMBAHAN (037/039) ── Pratinjau dana kembali. Angka final
+                      dihitung server; bisa beda beberapa rupiah (pembulatan). */}
+                  <div className="rounded-md border border-lco-mustard/30 bg-white/60 dark:bg-zinc-950/60 p-3 text-xs space-y-1.5">
+                    {returnEstimate && returnEstimate.refundTotal > 0 ? (
+                      <>
+                        <div className="flex justify-between font-semibold text-zinc-900 dark:text-zinc-100">
+                          <span>Perkiraan dana kembali</span>
+                          <span className="font-mono tabular-nums">
+                            {formatRupiah(returnEstimate.refundTotal)}
+                          </span>
+                        </div>
+                        {returnEstimate.cash > 0 && (
+                          <div className="flex justify-between text-zinc-600 dark:text-zinc-400">
+                            <span>Tunai (dari laci kasir)</span>
+                            <span className="font-mono tabular-nums">
+                              {formatRupiah(returnEstimate.cash)}
+                            </span>
+                          </div>
+                        )}
+                        {returnEstimate.digital > 0 && (
+                          <div className="flex justify-between text-zinc-600 dark:text-zinc-400">
+                            <span>Digital (proses manual di Midtrans)</span>
+                            <span className="font-mono tabular-nums">
+                              {formatRupiah(returnEstimate.digital)}
+                            </span>
+                          </div>
+                        )}
+                        {returnEstimate.unrecorded > 0 && (
+                          <div className="flex justify-between text-zinc-600 dark:text-zinc-400">
+                            <span>
+                              Bagian piutang (tagihan tidak otomatis berkurang)
+                            </span>
+                            <span className="font-mono tabular-nums">
+                              {formatRupiah(returnEstimate.unrecorded)}
+                            </span>
+                          </div>
+                        )}
+                        {returnEstimate.cash > 0 && (
+                          <p className="flex items-start gap-1.5 text-zinc-500 pt-1">
+                            <Info className="w-3.5 h-3.5 shrink-0 mt-px" />
+                            Retur tunai butuh shift kasir yang sedang terbuka.
+                          </p>
+                        )}
+                        {(detail.points_earned > 0 ||
+                          detail.points_redeemed > 0) && (
+                          <p className="flex items-start gap-1.5 text-zinc-500">
+                            <Info className="w-3.5 h-3.5 shrink-0 mt-px" />
+                            Poin pelanggan ikut disesuaikan: poin yang didapat
+                            dicabut dan poin yang dipakai dikembalikan,
+                            sebanding dengan barang yang diretur.
+                          </p>
+                        )}
+                        <p className="text-[10px] text-zinc-400">
+                          Perkiraan — angka final dihitung server dan bisa
+                          berbeda beberapa rupiah karena pembulatan.
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-zinc-500">
+                        Isi jumlah barang yang diretur untuk melihat perkiraan
+                        dana kembali.
+                      </p>
+                    )}
+                  </div>
                   <label className="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
                     Alasan Retur
                   </label>
@@ -698,7 +1063,7 @@ export default function TransactionDetailModal({
               Kirim WA
             </button>
 
-            {canRetur && canStillAct && (
+            {canRetur && canStillReturn && (
               <button
                 onClick={() => {
                   setActionError(null);
@@ -712,7 +1077,7 @@ export default function TransactionDetailModal({
                 Retur
               </button>
             )}
-            {canVoid && canStillAct && (
+            {canVoid && canStillVoid && (
               <button
                 onClick={() => {
                   setActionError(null);

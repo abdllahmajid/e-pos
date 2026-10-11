@@ -168,7 +168,10 @@ export default function KasirModule({
   } = useShifts();
   const { printReceipt } = usePrinterProfiles();
   // ── TAMBAHAN (Kasir: pelanggan + poin loyalitas) ──
-  const { customers, redeemPoints, addCustomer } = useCustomers();
+  // ── PERUBAHAN (migration 036) ── `redeemPoints` tidak dipakai lagi di sini:
+  // poin dipotong/ditambah SERVER di dalam create_transaction (atomik). Yang
+  // tersisa cuma `refetch` untuk menyegarkan saldo poin di daftar pelanggan.
+  const { customers, refetch: refetchCustomers, addCustomer } = useCustomers();
   const {
     heldOrders,
     isLoading: isHeldOrdersLoading,
@@ -507,8 +510,8 @@ export default function KasirModule({
   // terpilih KALAU kasir menekan "Gunakan Poin" — poin yang benar-benar
   // dipakai (`pointsBeingUsed`) dibatasi supaya potongannya tidak pernah
   // melebihi subtotal+pajak (total tidak pernah negatif), dan angka INI juga
-  // yang dikirim ke redeemPoints() setelah transaksi sukses (lihat kedua
-  // handleConfirmPayment*), bukan seluruh saldo poin pelanggan.
+  // yang dikirim ke createTransaction() sebagai `pointsRedeemed` (server yang
+  // memotong saldo — migration 036), bukan seluruh saldo poin pelanggan.
   const pointsBeingUsed = useMemo(() => {
     if (!usePoints || !selectedCustomer) return 0;
     const maxAffordablePoints = Math.floor(
@@ -537,15 +540,35 @@ export default function KasirModule({
   // SETELAH transaksi tersimpan & sengaja tidak melempar error — gagal
   // mendaftar (mis. nomor milik pelanggan yang diarsipkan) tidak boleh
   // membatalkan transaksi yang sudah sukses.
-  const autoRegisterCustomer = async (name?: string, phone?: string) => {
-    if (selectedCustomer || !phone) return;
+  // ── PERUBAHAN (migration 036) ── Dulu `autoRegisterCustomer`, dipanggil
+  // SETELAH transaksi tersimpan dan hanya mendaftarkan. Sekarang dipanggil
+  // SEBELUM transaksi dan mengembalikan ID pelanggan untuk dikirim ke server,
+  // supaya transaksi tertaut ke pelanggan dan poin belanja otomatis masuk:
+  //   1. pelanggan yang dipilih kasir di panel Pelanggan -> pakai itu;
+  //   2. tidak dipilih, tapi no. HP yang diketik cocok dengan pelanggan aktif
+  //      -> tautkan ke pelanggan itu;
+  //   3. no. HP baru -> daftarkan (nama kosong -> no. HP dipakai sebagai nama).
+  // Sengaja tidak melempar error: gagal mendaftar (mis. nomor milik pelanggan
+  // yang diarsipkan) hanya berarti transaksi berjalan tanpa pelanggan.
+  const resolveCustomerId = async (
+    name?: string,
+    phone?: string,
+  ): Promise<string | undefined> => {
+    if (selectedCustomer) return selectedCustomer.id;
+    if (!phone) return undefined;
     const key = normalizePhone(phone);
-    if (key.length < 9) return;
-    if (customers.some((c) => normalizePhone(c.phone) === key)) return;
+    if (key.length < 9) return undefined;
+    const existing = customers.find((c) => normalizePhone(c.phone) === key);
+    if (existing) return existing.id;
     try {
-      await addCustomer(name?.trim() || phone.trim(), phone.trim());
+      const created = await addCustomer(
+        name?.trim() || phone.trim(),
+        phone.trim(),
+      );
+      return created.id;
     } catch (registerErr) {
       console.error("Gagal mendaftarkan pelanggan baru:", registerErr);
+      return undefined;
     }
   };
 
@@ -557,6 +580,10 @@ export default function KasirModule({
       customerName?: string;
       customerPhone?: string;
       dueDate?: string;
+      // ── PERBAIKAN (038) ── Order ID Midtrans yang sudah LUNAS dari
+      // PaymentModal. Dulu tipe ini tidak memuatnya sehingga nilainya
+      // terbuang dan server tidak pernah memverifikasi pembayaran digital.
+      digitalOrderId?: string;
     },
   ): Promise<{ paymentId: string }> => {
     if (cart.length === 0) throw new Error("Keranjang masih kosong.");
@@ -573,6 +600,11 @@ export default function KasirModule({
       const effectiveCustomerPhone =
         extra?.customerPhone || selectedCustomer?.phone || undefined;
 
+      const customerId = await resolveCustomerId(
+        extra?.customerName,
+        extra?.customerPhone,
+      );
+
       const result = await createTransaction({
         items: cart,
         subtotal,
@@ -585,23 +617,13 @@ export default function KasirModule({
         customerName: effectiveCustomerName,
         customerPhone: effectiveCustomerPhone,
         dueDate: extra?.dueDate,
+        customerId,
+        pointsRedeemed: pointsBeingUsed,
+        digitalOrderId: extra?.digitalOrderId,
       });
 
-      await autoRegisterCustomer(extra?.customerName, extra?.customerPhone);
-
-      // ── TAMBAHAN (Kasir: poin loyalitas) ── Kurangi poin SETELAH transaksi
-      // tersimpan (bukan sebelum) — kalau baris di atas melempar error,
-      // blok ini tidak pernah tercapai, jadi poin tidak berkurang percuma.
-      if (pointsBeingUsed > 0 && selectedCustomer) {
-        try {
-          await redeemPoints(selectedCustomer.id, pointsBeingUsed);
-        } catch (redeemErr) {
-          // Transaksi sudah tersimpan & struk sudah mau dicetak — kegagalan
-          // memotong poin TIDAK BOLEH membatalkan itu. Cukup log, jangan
-          // dilempar ke pemanggil (beda dari error createTransaction di atas).
-          console.error("Gagal memakai poin loyalitas:", redeemErr);
-        }
-      }
+      // Segarkan saldo poin di daftar pelanggan (server sudah memotong/menambah).
+      refetchCustomers();
 
       const receiptData: ReceiptData = {
         // ── KOREKSI (bug: data Pengaturan Toko/Struk tidak muncul di struk
@@ -687,6 +709,8 @@ export default function KasirModule({
     extra?: {
       customerName?: string;
       customerPhone?: string;
+      // ── PERBAIKAN (038) ── Order ID lunas untuk baris DIGITAL di split.
+      digitalOrderId?: string;
     },
   ): Promise<{ payments: CreatedPayment[] }> => {
     if (cart.length === 0) throw new Error("Keranjang masih kosong.");
@@ -699,6 +723,11 @@ export default function KasirModule({
       const effectiveCustomerPhone =
         extra?.customerPhone || selectedCustomer?.phone || undefined;
 
+      const customerId = await resolveCustomerId(
+        extra?.customerName,
+        extra?.customerPhone,
+      );
+
       const result = await createTransaction({
         items: cart,
         subtotal,
@@ -708,17 +737,13 @@ export default function KasirModule({
         payments: lines,
         customerName: effectiveCustomerName,
         customerPhone: effectiveCustomerPhone,
+        customerId,
+        pointsRedeemed: pointsBeingUsed,
+        digitalOrderId: extra?.digitalOrderId,
       });
 
-      await autoRegisterCustomer(extra?.customerName, extra?.customerPhone);
-
-      if (pointsBeingUsed > 0 && selectedCustomer) {
-        try {
-          await redeemPoints(selectedCustomer.id, pointsBeingUsed);
-        } catch (redeemErr) {
-          console.error("Gagal memakai poin loyalitas:", redeemErr);
-        }
-      }
+      // Segarkan saldo poin di daftar pelanggan (server sudah memotong/menambah).
+      refetchCustomers();
 
       const totalPaid = lines.reduce((sum, line) => sum + line.amount, 0);
       const methodLabel = lines
