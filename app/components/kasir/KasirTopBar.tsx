@@ -15,7 +15,14 @@
 
 "use client";
 
-import { ArrowLeft, Pause, Lock, LayoutGrid, Monitor } from "lucide-react";
+import {
+  ArrowLeft,
+  Pause,
+  Lock,
+  LayoutGrid,
+  Monitor,
+  Banknote,
+} from "lucide-react";
 
 interface KasirTopBarProps {
   storeName: string;
@@ -23,6 +30,8 @@ interface KasirTopBarProps {
   heldOrdersCount: number;
   onOpenHeldList: () => void;
   onCloseShift?: () => void;
+  /** ── TAMBAHAN (migration 040) ── Buka modal catat kas masuk/keluar. */
+  onOpenCashMovement?: () => void;
   layoutMode: "tablet" | "pc";
   onToggleLayout: () => void;
   onOpenDisplay: () => void;
@@ -36,6 +45,7 @@ export default function KasirTopBar({
   heldOrdersCount,
   onOpenHeldList,
   onCloseShift,
+  onOpenCashMovement,
   layoutMode,
   onToggleLayout,
   onOpenDisplay,
@@ -87,6 +97,17 @@ export default function KasirTopBar({
       </h1>
 
       <div className="flex items-center gap-2 justify-self-end">
+        {onOpenCashMovement && (
+          <button
+            onClick={onOpenCashMovement}
+            title="Catat uang yang keluar atau masuk laci di luar penjualan"
+            className={btnNeutral}
+          >
+            <Banknote className={iconSize} />
+            <span className="hidden md:inline">Kas Masuk/Keluar</span>
+            <span className="md:hidden">Kas</span>
+          </button>
+        )}
         {onCloseShift && (
           <button
             onClick={onCloseShift}

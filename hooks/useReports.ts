@@ -57,6 +57,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+// ── TAMBAHAN (migration 040) ── total kas masuk/keluar per shift untuk tab Per Shift.
+import { fetchCashTotalsByShift } from "@/hooks/useCashMovements";
 
 const supabase = createClient();
 
@@ -181,6 +183,13 @@ export interface ShiftReportRow {
   expected_cash: number | null;
   actual_cash: number | null;
   difference: number | null;
+  /**
+   * ── TAMBAHAN (migration 040) ── Total kas masuk / kas keluar yang dicatat di
+   * shift ini (catatan yang dibatalkan tidak dihitung). null = gagal dimuat
+   * (ditampilkan "-", BUKAN 0, supaya tidak terbaca seolah tidak ada kas keluar).
+   */
+  cash_in: number | null;
+  cash_out: number | null;
 }
 
 // ── Tipe publik: Piutang/Tempo ───────────────────────────────────────────────
@@ -403,6 +412,16 @@ export function useReports(): UseReportsResult {
           }
         }
 
+        // ── TAMBAHAN (040) ── Kegagalan memuat kas masuk/keluar TIDAK menggagalkan
+        // seluruh laporan: kolomnya jadi "-" saja.
+        let cashTotals: Awaited<ReturnType<typeof fetchCashTotalsByShift>> | null =
+          null;
+        try {
+          cashTotals = await fetchCashTotalsByShift(rawShifts.map((s) => s.id));
+        } catch (cashError) {
+          console.error("useReports: gagal memuat kas masuk/keluar:", cashError);
+        }
+
         const shiftRows: ShiftReportRow[] = rawShifts.map((s) => ({
           id: s.id,
           cashier_id: s.cashier_id,
@@ -414,6 +433,8 @@ export function useReports(): UseReportsResult {
           expected_cash: s.expected_cash === null ? null : Number(s.expected_cash),
           actual_cash: s.actual_cash === null ? null : Number(s.actual_cash),
           difference: s.difference === null ? null : Number(s.difference),
+          cash_in: cashTotals ? (cashTotals[s.id]?.cashIn ?? 0) : null,
+          cash_out: cashTotals ? (cashTotals[s.id]?.cashOut ?? 0) : null,
         }));
 
         if (isCancelled) return;

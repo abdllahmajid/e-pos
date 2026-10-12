@@ -474,6 +474,12 @@ function PerShiftTab({
               Modal Awal
             </th>
             <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+              Kas Masuk
+            </th>
+            <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+              Kas Keluar
+            </th>
+            <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
               Selisih
             </th>
           </tr>
@@ -503,6 +509,12 @@ function PerShiftTab({
               </td>
               <td className="px-5 py-3 font-mono text-xs tabular-nums">
                 {formatRupiah(shift.opening_cash)}
+              </td>
+              <td className="px-5 py-3 font-mono text-xs tabular-nums">
+                {shift.cash_in === null ? "-" : formatRupiah(shift.cash_in)}
+              </td>
+              <td className="px-5 py-3 font-mono text-xs tabular-nums">
+                {shift.cash_out === null ? "-" : formatRupiah(shift.cash_out)}
               </td>
               <td
                 className={`px-5 py-3 font-mono text-xs font-medium tabular-nums ${differenceColorClass(shift.difference)}`}

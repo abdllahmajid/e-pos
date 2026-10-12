@@ -79,6 +79,12 @@ import {
   CloseShiftModal,
   CloseShiftSummaryModal,
 } from "@/app/components/kasir/CloseShiftModal";
+// ── TAMBAHAN (migration 040) ── Kas masuk/keluar dari laci (di luar penjualan).
+import { CashMovementModal } from "@/app/components/kasir/CashMovementModal";
+import {
+  useCashMovements,
+  type AddCashMovementParams,
+} from "@/hooks/useCashMovements";
 // ── TAMBAHAN (T-11 bagian 1) ── Hold order / "Tunda" — lihat komentar header
 // hooks/useHoldOrders.ts untuk pembagian tanggung jawab lengkap.
 import { useHoldOrders } from "@/hooks/useHoldOrders";
@@ -166,12 +172,27 @@ export default function KasirModule({
     openShift,
     closeShift,
   } = useShifts();
+  // ── TAMBAHAN (migration 040) ── Catatan kas masuk/keluar untuk shift aktif.
+  // `summary` hanya dipakai untuk pengingat di modal Tutup Sesi Kas — TIDAK
+  // pernah menampilkan "kas seharusnya" (penutupan kas dibuat "buta").
+  const {
+    summary: cashSummary,
+    addMovement: addCashMovement,
+  } = useCashMovements(activeShift?.id ?? null);
+  const [isCashModalOpen, setIsCashModalOpen] = useState(false);
+  const handleAddCashMovement = async (params: AddCashMovementParams) => {
+    await addCashMovement(params);
+  };
   const { printReceipt } = usePrinterProfiles();
   // ── TAMBAHAN (Kasir: pelanggan + poin loyalitas) ──
   // ── PERUBAHAN (migration 036) ── `redeemPoints` tidak dipakai lagi di sini:
   // poin dipotong/ditambah SERVER di dalam create_transaction (atomik). Yang
   // tersisa cuma `refetch` untuk menyegarkan saldo poin di daftar pelanggan.
-  const { customers, refetch: refetchCustomers, addCustomer } = useCustomers();
+  const {
+    customers,
+    refetch: refetchCustomers,
+    addCustomer,
+  } = useCustomers();
   const {
     heldOrders,
     isLoading: isHeldOrdersLoading,
@@ -561,10 +582,7 @@ export default function KasirModule({
     const existing = customers.find((c) => normalizePhone(c.phone) === key);
     if (existing) return existing.id;
     try {
-      const created = await addCustomer(
-        name?.trim() || phone.trim(),
-        phone.trim(),
-      );
+      const created = await addCustomer(name?.trim() || phone.trim(), phone.trim());
       return created.id;
     } catch (registerErr) {
       console.error("Gagal mendaftarkan pelanggan baru:", registerErr);
@@ -1179,6 +1197,7 @@ export default function KasirModule({
         heldOrdersCount={heldOrders.length}
         onOpenHeldList={openHeldList}
         onCloseShift={() => setIsCloseModalOpen(true)}
+        onOpenCashMovement={() => setIsCashModalOpen(true)}
         layoutMode={layoutMode}
         onToggleLayout={toggleLayoutMode}
         variant={layoutMode === "pc" ? "card" : "strip"}
@@ -1191,10 +1210,17 @@ export default function KasirModule({
         }
       />
 
+      {isCashModalOpen && (
+        <CashMovementModal
+          onClose={() => setIsCashModalOpen(false)}
+          onSubmit={handleAddCashMovement}
+        />
+      )}
       {isCloseModalOpen && (
         <CloseShiftModal
           onClose={() => setIsCloseModalOpen(false)}
           onSubmit={handleCloseSession}
+          cashMovementSummary={cashSummary}
         />
       )}
       {closeResult && (

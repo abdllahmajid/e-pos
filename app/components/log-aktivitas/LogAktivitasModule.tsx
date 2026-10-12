@@ -39,6 +39,8 @@ import {
   type ActivityLogAction,
   type ActivityLogEntity,
 } from "@/hooks/useActivityLogs";
+import { formatRupiah } from "@/lib/pos/cartLogic";
+import { categoryLabel } from "@/hooks/useCashMovements";
 
 const ENTITY_FILTER_OPTIONS: {
   value: ActivityLogEntity | "all";
@@ -47,7 +49,14 @@ const ENTITY_FILTER_OPTIONS: {
   { value: "all", label: "Semua Entitas" },
   { value: "transaction", label: "Transaksi" },
   { value: "product", label: "Produk" },
+  { value: "shift", label: "Shift & Kas" },
 ];
+
+function entityLabel(entity: string): string {
+  if (entity === "transaction") return "Transaksi";
+  if (entity === "shift") return "Shift & Kas";
+  return "Produk";
+}
 
 const ACTION_FILTER_OPTIONS = Object.entries(ACTIVITY_ACTION_LABEL) as [
   ActivityLogAction,
@@ -75,9 +84,25 @@ function summarizeMeta(meta: Record<string, unknown> | null): string | null {
     typeof meta.receipt_no === "string" ? meta.receipt_no : null;
   const sku = typeof meta.sku === "string" ? meta.sku : null;
 
-  const parts = [receiptNo, sku, reason ?? note].filter(
-    (part): part is string => !!part,
-  );
+  // ── TAMBAHAN (migration 040) ── Log kas masuk/keluar/batal membawa
+  // `movement_id`: tampilkan nominal & kategori supaya terbaca tanpa membuka detail.
+  const isCashLog = typeof meta.movement_id === "string";
+  const amountText =
+    isCashLog && typeof meta.amount === "number"
+      ? formatRupiah(meta.amount)
+      : null;
+  const categoryText =
+    isCashLog && typeof meta.category === "string"
+      ? categoryLabel(meta.category)
+      : null;
+
+  const parts = [
+    receiptNo,
+    sku,
+    amountText,
+    categoryText,
+    reason ?? note,
+  ].filter((part): part is string => !!part);
 
   return parts.length > 0 ? parts.join(" — ") : null;
 }
@@ -380,7 +405,7 @@ export default function LogAktivitasModule() {
                       </td>
 
                       <td className="px-4 py-3 capitalize text-zinc-600 dark:text-zinc-400">
-                        {log.entity === "transaction" ? "Transaksi" : "Produk"}
+                        {entityLabel(log.entity)}
                       </td>
 
                       <td className="px-4 py-3">

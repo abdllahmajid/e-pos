@@ -38,7 +38,15 @@ export interface ShiftSession {
 export interface CloseShiftResult {
   shift_id: string;
   opening_cash: number;
+  /** Penjualan tunai (bruto, tanpa refund & tanpa transaksi yang di-void). */
   cash_sales: number;
+  /** ── TAMBAHAN (migration 040) ── Refund tunai retur yang keluar dari laci. */
+  cash_refunds: number;
+  /** ── TAMBAHAN (040) ── Penjualan tunai yang di-void (dikeluarkan dari hitungan kas). */
+  cash_voided: number;
+  /** ── TAMBAHAN (040) ── Total kas masuk / kas keluar yang dicatat di shift ini. */
+  cash_in: number;
+  cash_out: number;
   expected_cash: number;
   actual_cash: number;
   difference: number;
@@ -197,6 +205,11 @@ export function useShifts(): UseShiftsResult {
         shift_id: data.shift_id,
         opening_cash: Number(data.opening_cash ?? 0),
         cash_sales: Number(data.cash_sales ?? 0),
+        // Server sebelum migration 040 tidak mengirim 5 field berikut -> 0.
+        cash_refunds: Number(data.cash_refunds ?? 0),
+        cash_voided: Number(data.cash_voided ?? 0),
+        cash_in: Number(data.cash_in ?? 0),
+        cash_out: Number(data.cash_out ?? 0),
         expected_cash: Number(data.expected_cash ?? 0),
         actual_cash: Number(data.actual_cash ?? 0),
         difference: Number(data.difference ?? 0),

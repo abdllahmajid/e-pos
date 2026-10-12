@@ -35,9 +35,13 @@ export type ActivityLogAction =
   | "product_delete"
   | "product_restore"
   | "transaction_delete"
-  | "transaction_restore";
+  | "transaction_restore"
+  // ── TAMBAHAN (migration 040) ── kas masuk/keluar dari laci (entity "shift")
+  | "cash_in"
+  | "cash_out"
+  | "cash_void";
 
-export type ActivityLogEntity = "transaction" | "product";
+export type ActivityLogEntity = "transaction" | "product" | "shift";
 
 /** Label Indonesia per action — dipakai tabel Log Aktivitas & filter dropdown. */
 export const ACTIVITY_ACTION_LABEL: Record<ActivityLogAction, string> = {
@@ -49,6 +53,9 @@ export const ACTIVITY_ACTION_LABEL: Record<ActivityLogAction, string> = {
   product_restore: "Pulihkan Produk",
   transaction_delete: "Hapus Transaksi",
   transaction_restore: "Pulihkan Transaksi",
+  cash_in: "Kas Masuk",
+  cash_out: "Kas Keluar",
+  cash_void: "Batalkan Catatan Kas",
 };
 
 /** Warna chip ringkas: merah untuk aksi "menghilangkan", hijau untuk "mengembalikan", abu untuk netral. */
@@ -62,7 +69,8 @@ export function activityActionTone(
   if (
     action === "product_delete" ||
     action === "transaction_delete" ||
-    action === "void_transaction"
+    action === "void_transaction" ||
+    action === "cash_void"
   ) {
     return "destructive";
   }

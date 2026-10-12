@@ -44,10 +44,17 @@ export function differenceLabel(difference: number | null): string {
 export function CloseShiftModal({
   onClose,
   onSubmit,
+  cashMovementSummary,
 }: {
   onClose: () => void;
   /** Kirim total kas fisik. Dilempar Error kalau gagal — pesannya ditampilkan di modal. */
   onSubmit: (actualCash: number) => Promise<void>;
+  /**
+   * ── TAMBAHAN (migration 040) ── Kas masuk/keluar yang SUDAH dicatat di shift
+   * ini, hanya sebagai pengingat sebelum menghitung uang fisik. Sengaja TIDAK
+   * menampilkan kas seharusnya — penutupan kas dibuat "buta".
+   */
+  cashMovementSummary?: { cashIn: number; cashOut: number; activeCount: number };
 }) {
   const [counts, setCounts] = useState<Record<number, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -99,6 +106,30 @@ export function CloseShiftModal({
           Hitung uang fisik di laci per pecahan. Selisih dihitung otomatis oleh
           sistem.
         </p>
+
+        {cashMovementSummary && (
+          <div className="mb-3 rounded-md border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+            {cashMovementSummary.activeCount > 0 ? (
+              <p>
+                Tercatat di shift ini: kas masuk{" "}
+                <span className="font-mono tabular-nums font-medium text-zinc-900 dark:text-zinc-100">
+                  {formatRupiah(cashMovementSummary.cashIn)}
+                </span>
+                , kas keluar{" "}
+                <span className="font-mono tabular-nums font-medium text-zinc-900 dark:text-zinc-100">
+                  {formatRupiah(cashMovementSummary.cashOut)}
+                </span>
+                .
+              </p>
+            ) : (
+              <p>Belum ada kas masuk/keluar yang dicatat di shift ini.</p>
+            )}
+            <p className="mt-1 text-zinc-400">
+              Pastikan semua uang yang keluar atau masuk laci sudah dicatat
+              sebelum menutup — shift yang sudah ditutup tidak bisa diubah.
+            </p>
+          </div>
+        )}
 
         <div className="space-y-2">
           {DENOMINATIONS.map((denom) => (
@@ -172,6 +203,57 @@ export function CloseShiftSummaryModal({
           Sesi Kas Ditutup
         </h3>
         <p className="mb-3 text-xs text-zinc-500">Ringkasan selisih kas:</p>
+
+        {/* ── TAMBAHAN (migration 040) ── Rincian asal angka "Kas seharusnya".
+            Baris yang nilainya 0 disembunyikan supaya ringkasan tetap pendek. */}
+        <div
+          className="mb-3 rounded-md border border-zinc-200 dark:border-zinc-800 p-4 space-y-1.5 text-xs"
+          aria-label="Rincian kas seharusnya"
+        >
+          <div className="flex justify-between">
+            <span className="text-zinc-500">Modal awal</span>
+            <span className="font-mono tabular-nums">
+              {formatRupiah(result.opening_cash)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-zinc-500">Penjualan tunai</span>
+            <span className="font-mono tabular-nums">
+              {formatRupiah(result.cash_sales)}
+            </span>
+          </div>
+          {result.cash_refunds > 0 && (
+            <div className="flex justify-between">
+              <span className="text-zinc-500">Refund tunai (retur)</span>
+              <span className="font-mono tabular-nums">
+                − {formatRupiah(result.cash_refunds)}
+              </span>
+            </div>
+          )}
+          {result.cash_in > 0 && (
+            <div className="flex justify-between">
+              <span className="text-zinc-500">Kas masuk</span>
+              <span className="font-mono tabular-nums">
+                + {formatRupiah(result.cash_in)}
+              </span>
+            </div>
+          )}
+          {result.cash_out > 0 && (
+            <div className="flex justify-between">
+              <span className="text-zinc-500">Kas keluar</span>
+              <span className="font-mono tabular-nums">
+                − {formatRupiah(result.cash_out)}
+              </span>
+            </div>
+          )}
+          {result.cash_voided > 0 && (
+            <p className="pt-1 text-zinc-400">
+              Penjualan tunai {formatRupiah(result.cash_voided)} yang di-void
+              tidak dihitung.
+            </p>
+          )}
+        </div>
+
         <div className="rounded-md border border-zinc-200 dark:border-zinc-800 p-4 space-y-2 text-sm">
           <div className="flex justify-between">
             <span className="text-zinc-500">Kas seharusnya</span>
