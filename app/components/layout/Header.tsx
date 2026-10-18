@@ -24,6 +24,13 @@ interface HeaderProps {
   onOpenKasir: () => void;
 }
 
+// ── TAMBAHAN ── Keterangan singkat di bawah judul menu (opsional per menu).
+// Menu yang tidak terdaftar di sini tampil seperti biasa tanpa keterangan.
+const MENU_DESCRIPTIONS: Record<string, string> = {
+  "label-barcode":
+    "Cetak label barcode / QR untuk ditempel di produk, supaya kasir tinggal scan.",
+};
+
 /** Cari label + ikon menu aktif beserta label grupnya (mis. "Alat Kasir"). */
 function findMenuMeta(key: string) {
   for (const group of MENU_GROUPS) {
@@ -63,6 +70,11 @@ export default function Header({ activeMenu, onOpenKasir }: HeaderProps) {
           <h2 className="truncate text-sm font-bold text-zinc-900 dark:text-zinc-100 md:text-base">
             {meta?.item.label ?? "LCO POS"}
           </h2>
+          {MENU_DESCRIPTIONS[activeMenu] && (
+            <p className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+              {MENU_DESCRIPTIONS[activeMenu]}
+            </p>
+          )}
         </div>
       </div>
 

@@ -1,7 +1,7 @@
 // lib/pos/labelPrint.ts
 // ── TAMBAHAN (menu Label Barcode) ── Logika murni (tanpa React) untuk
 // mencetak label barcode/QR produk ke kertas label stiker lembaran
-// (Tom & Jerry No.103 dst.) atau ukuran kustom.
+// (Label No.103 dst.) atau ukuran kustom.
 //
 // Satu fungsi pembuat HTML (`buildSheetHtml`) dipakai DUA tempat supaya
 // preview == hasil cetak (WYSIWYG): panel preview di LabelBarcodeModule.tsx
@@ -104,38 +104,38 @@ function sheetFromPitch(
 // merek/batch tetap mungkin — kalibrasi lewat "Cetak uji" (garis tepi).
 export const LABEL_PRESETS: LabelPreset[] = [
   {
-    key: "tj-103",
-    name: "Tom & Jerry No. 103",
+    key: "lb-103",
+    name: "Label No. 103",
     description:
-      "32 × 64 mm · 12 label/lembar (3 × 4) · kertas 204 × 165 mm · margin atas 9 / samping 2 mm",
-    spec: sheetFromPitch(204, 165, 3, 4, 64, 32, 2, 9, 67.5, 36.5),
+      "31 × 62,5 mm · 12 label/lembar (3 × 4) · kertas 195 × 135 mm · margin atas 2 / samping 2 mm",
+    spec: sheetFromPitch(195, 135, 3, 4, 62.5, 31, 2, 2, 64.5, 33),
   },
   {
-    key: "tj-121",
-    name: "Tom & Jerry No. 121",
+    key: "lb-121",
+    name: "Label No. 121",
     description:
       "38 × 75 mm · 10 label/lembar (2 × 5) · kertas 165 × 205 mm · margin atas 7 / samping 9,5 mm",
     spec: sheetFromPitch(165, 205, 2, 5, 75, 38, 9.5, 7, 79, 39.5),
   },
   {
-    key: "tj-107",
-    name: "Tom & Jerry No. 107",
+    key: "lb-107",
+    name: "Label No. 107",
     description:
-      "18 × 50 mm · 24 label/lembar (3 × 8) · kertas 165 × 205 mm · margin atas 6 / samping 3 mm",
-    spec: sheetFromPitch(165, 205, 3, 8, 50, 18, 3, 6, 54, 20.5),
+      "18 × 49 mm · 30 label/lembar (3 × 10) · kertas 155 × 195 mm · margin atas 2 / samping 3 mm",
+    spec: sheetFromPitch(155, 195, 3, 10, 49, 18, 2, 2, 51, 19.2),
   },
   {
     // Pitch vertikal 25,0 mm (batas bawah rentang 25–26): 8 baris dengan
     // 25,5 mm tidak muat di kertas 205 mm.
-    key: "tj-104",
-    name: "Tom & Jerry No. 104",
+    key: "lb-104",
+    name: "Label No. 104",
     description:
       "24 × 75 mm · 16 label/lembar (2 × 8) · kertas 165 × 205 mm · margin atas 5 / samping 5 mm",
     spec: sheetFromPitch(165, 205, 2, 8, 75, 24, 5, 5, 79, 25),
   },
   {
-    key: "tj-105",
-    name: "Tom & Jerry No. 105",
+    key: "lb-105",
+    name: "Label No. 105",
     description:
       "24 × 37 mm · 30 label/lembar (5 × 6) · kertas 205 × 165 mm · margin atas 5 / samping 3 mm",
     spec: sheetFromPitch(205, 165, 5, 6, 37, 24, 3, 5, 39.5, 25.5),
@@ -159,9 +159,44 @@ export const LABEL_PRESETS: LabelPreset[] = [
   },
 ];
 
+// ───────────────────────── Satuan & ukuran kertas (gaya dialog Word) ─────────────────────────
+// Di Word: Mailings → Labels → Options → Details. Isian di UI memakai istilah
+// yang sama (margin atas/samping, pitch vertikal/horizontal, jumlah kolom/
+// baris, ukuran kertas). Di dalam, semua tetap disimpan dalam MM; pitch =
+// ukuran label + jarak antar label (gapX/gapY).
+
+export type LabelUnit = "cm" | "mm" | "in";
+
+export const LABEL_UNITS: Record<
+  LabelUnit,
+  { label: string; perMm: number; decimals: number; step: number }
+> = {
+  cm: { label: "cm", perMm: 0.1, decimals: 2, step: 0.1 },
+  mm: { label: "mm", perMm: 1, decimals: 1, step: 0.5 },
+  in: { label: "inci", perMm: 1 / 25.4, decimals: 3, step: 0.05 },
+};
+
+export const PAGE_SIZES: { key: string; name: string; width: number; height: number }[] = [
+  { key: "a4", name: "A4 (21 × 29,7 cm)", width: 210, height: 297 },
+  { key: "a5", name: "A5 (14,8 × 21 cm)", width: 148, height: 210 },
+  { key: "letter", name: "Letter (21,59 × 27,94 cm)", width: 215.9, height: 279.4 },
+  { key: "f4", name: "F4 / Folio (21,5 × 33 cm)", width: 215, height: 330 },
+  { key: "legal", name: "Legal (21,59 × 35,56 cm)", width: 215.9, height: 355.6 },
+];
+
+/** Kunci ukuran kertas standar yang cocok dengan spesifikasi (portrait/landscape sama saja), atau "custom". */
+export function matchPageSize(spec: LabelSheetSpec): string {
+  const w = Math.min(spec.pageWidth, spec.pageHeight);
+  const h = Math.max(spec.pageWidth, spec.pageHeight);
+  const found = PAGE_SIZES.find(
+    (p) => Math.abs(p.width - w) < 0.05 && Math.abs(p.height - h) < 0.05,
+  );
+  return found ? found.key : "custom";
+}
+
 export const CUSTOM_PRESET_KEY = "custom";
 
-export const DEFAULT_PRESET_KEY = "tj-103";
+export const DEFAULT_PRESET_KEY = "lb-103";
 
 export function getPreset(key: string): LabelPreset | undefined {
   return LABEL_PRESETS.find((preset) => preset.key === key);
@@ -206,6 +241,12 @@ export function validateSpec(spec: LabelSheetSpec): string | null {
   }
   if (spec.cols < 1 || spec.rows < 1) {
     return "Kolom dan baris minimal 1.";
+  }
+  if (spec.gapX < -0.01) {
+    return "Pitch horizontal lebih kecil dari lebar label — label akan bertumpuk.";
+  }
+  if (spec.gapY < -0.01) {
+    return "Pitch vertikal lebih kecil dari tinggi label — label akan bertumpuk.";
   }
   const usedW =
     spec.marginLeft + spec.cols * spec.labelWidth + (spec.cols - 1) * spec.gapX;
@@ -341,7 +382,11 @@ function buildLabelHtml(
   content: LabelContentOptions,
 ): string {
   const pad = Math.min(1.5, spec.labelHeight * 0.06, spec.labelWidth * 0.04);
-  const innerH = spec.labelHeight - pad * 2;
+  // Ruang aman atas/bawah lebih longgar dari samping: beda merek stiker
+  // sering selisih sedikit, jadi isi dijauhkan dari tepi atas & bawah label
+  // supaya tidak terpotong / keluar dari stiker saat dicetak.
+  const padY = Math.min(3, spec.labelHeight * 0.1);
+  const innerH = spec.labelHeight - padY * 2;
   const innerW = spec.labelWidth - pad * 2;
 
   // Ukuran font ikut tinggi label supaya label kecil (18 mm) tidak meluap.
@@ -368,7 +413,7 @@ function buildLabelHtml(
     const qrHtml = svg
       ? `<div class="lbl-qr" style="width:${mm(qrSize)};height:${mm(qrSize)}">${svg}</div>`
       : `<div class="lbl-invalid" style="width:${mm(qrSize)}">QR gagal</div>`;
-    return `<div class="lbl-inner lbl-row" style="padding:${mm(pad)};gap:${mm(pad)}">${qrHtml}<div class="lbl-side">${nameHtml}${priceHtml}${codeHtml}</div></div>`;
+    return `<div class="lbl-inner lbl-row" style="padding:${mm(padY)} ${mm(pad)};gap:${mm(pad)}">${qrHtml}<div class="lbl-side">${nameHtml}${priceHtml}${codeHtml}</div></div>`;
   }
 
   const svg = barcodeSvg(item.code);
@@ -377,12 +422,18 @@ function buildLabelHtml(
     : `<div class="lbl-invalid">Kode tidak didukung barcode — gunakan QR</div>`;
 
   // Baris bawah: kode (kiri) & harga (kanan) berbagi satu baris supaya hemat tinggi.
+  // SVG barcode direntangkan penuh lebar label, termasuk zona sunyi kiri/kanan,
+  // jadi garis batang sebenarnya lebih sempit. Baris bawah diberi padding
+  // sebesar zona sunyi itu supaya kode & harga lurus dengan tepi batang
+  // (tidak menjorok keluar kiri/kanan barcode).
+  const totalModules = countBarcodeModules(item.code);
+  const quietPct = totalModules ? (QUIET_MODULES / totalModules) * 100 : 0;
   const footer =
     codeHtml || priceHtml
-      ? `<div class="lbl-footer">${codeHtml}${priceHtml}</div>`
+      ? `<div class="lbl-footer" style="padding:0 ${Math.round(quietPct * 100) / 100}%">${codeHtml}${priceHtml}</div>`
       : "";
 
-  return `<div class="lbl-inner lbl-col" style="padding:${mm(pad)};gap:${mm(pad * 0.6)}">${nameHtml}${barcodeHtml}${footer}</div>`;
+  return `<div class="lbl-inner lbl-col" style="padding:${mm(padY)} ${mm(pad)};gap:${mm(pad * 0.6)}">${nameHtml}${barcodeHtml}${footer}</div>`;
 }
 
 export const LABEL_SHEET_CSS = `
@@ -399,9 +450,9 @@ export const LABEL_SHEET_CSS = `
 .lbl-qr{flex:none}
 .lbl-qr svg{display:block;width:100%;height:100%}
 .lbl-side{flex:1 1 0;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:0.6mm;overflow:hidden}
-.lbl-footer{display:flex;justify-content:space-between;align-items:baseline;gap:1mm}
+.lbl-footer{display:flex;justify-content:space-between;align-items:baseline;gap:1mm;box-sizing:border-box;width:100%;min-width:0}
 .lbl-footer:has(.lbl-code:only-child),.lbl-footer:has(.lbl-price:only-child){justify-content:center}
-.lbl-code{font-family:"Courier New",monospace;letter-spacing:0.05mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lbl-code{min-width:0;font-family:"Courier New",monospace;letter-spacing:0.05mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lbl-price{font-weight:700;white-space:nowrap}
 .lbl-invalid{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;font-size:2mm;color:#b91c1c;border:0.2mm solid #b91c1c}
 `;

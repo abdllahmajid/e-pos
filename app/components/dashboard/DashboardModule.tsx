@@ -526,7 +526,7 @@ export default function DashboardModule({
         <div className="relative flex flex-col justify-between gap-5 md:flex-row md:items-center">
           <div>
             <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-lco-teal">
-              Utama
+              Assalamu'alaikum
             </p>
             <h2 className="text-2xl font-semibold tracking-tight">
               {now ? greeting(now.getHours()) : "Dashboard"}

@@ -34,12 +34,15 @@ import {
   DEFAULT_PRESET_KEY,
   LABEL_PRESETS,
   LABEL_SHEET_CSS,
+  LABEL_UNITS,
   MIN_SAFE_MODULE_MM,
+  PAGE_SIZES,
   buildSheetHtml,
   estimateModuleMm,
   getPreset,
   isLandscape,
   labelsPerSheet,
+  matchPageSize,
   outputPageSize,
   paginateLabels,
   printLabelSheets,
@@ -47,6 +50,7 @@ import {
   type LabelContentOptions,
   type LabelItem,
   type LabelSheetSpec,
+  type LabelUnit,
 } from "@/lib/pos/labelPrint";
 
 const MAX_QTY = 999;
@@ -117,6 +121,82 @@ function NumberField({
   );
 }
 
+// Isian ukuran dengan satuan yang bisa diganti (cm / mm / inci), seperti Word.
+// Nilai disimpan dalam mm; teks lokal dipakai supaya mengetik "3," atau "3,0"
+// tidak langsung dibulatkan saat sedang diketik.
+function UnitField({
+  label,
+  valueMm,
+  onChangeMm,
+  unit,
+}: {
+  label: string;
+  valueMm: number;
+  onChangeMm: (nextMm: number) => void;
+  unit: LabelUnit;
+}) {
+  const { perMm, decimals, label: unitLabel } = LABEL_UNITS[unit];
+  const format = (mm: number) =>
+    Number.isFinite(mm)
+      ? String(Number((mm * perMm).toFixed(decimals))).replace(".", ",")
+      : "";
+  const [text, setText] = useState(() => format(valueMm));
+  const focused = useRef(false);
+
+  useEffect(() => {
+    if (!focused.current) setText(format(valueMm));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [valueMm, unit]);
+
+  function nudge(direction: 1 | -1) {
+    const step = LABEL_UNITS[unit].step;
+    const next = Math.max(0, Number((valueMm * perMm + direction * step).toFixed(decimals)));
+    onChangeMm(Math.round((next / perMm) * 1000) / 1000);
+  }
+
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+        {label}
+      </span>
+      <div className="relative">
+        <input
+          type="text"
+          inputMode="decimal"
+          value={text}
+          onFocus={() => {
+            focused.current = true;
+          }}
+          onBlur={() => {
+            focused.current = false;
+            setText(format(valueMm));
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowUp") {
+              event.preventDefault();
+              nudge(1);
+            } else if (event.key === "ArrowDown") {
+              event.preventDefault();
+              nudge(-1);
+            }
+          }}
+          onChange={(event) => {
+            setText(event.target.value);
+            const parsed = parseFloat(event.target.value.replace(",", "."));
+            if (Number.isFinite(parsed) && parsed >= 0) {
+              onChangeMm(Math.round((parsed / perMm) * 1000) / 1000);
+            }
+          }}
+          className={`${inputClass} pr-11`}
+        />
+        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-zinc-400">
+          {unitLabel}
+        </span>
+      </div>
+    </label>
+  );
+}
+
 function SegmentedControl<T extends string>({
   value,
   options,
@@ -182,6 +262,7 @@ export default function LabelBarcodeModule() {
     () => getPreset(DEFAULT_PRESET_KEY)!.spec,
   );
   const [showDetail, setShowDetail] = useState(false);
+  const [unit, setUnit] = useState<LabelUnit>("cm");
   const [startPosition, setStartPosition] = useState(1);
   const [showOutline, setShowOutline] = useState(false);
   // true = lembar diputar 90° (orientasi kertas dibalik dari orientasi alami
@@ -230,6 +311,25 @@ export default function LabelBarcodeModule() {
   function updateSpec(patch: Partial<LabelSheetSpec>) {
     setSpec((prev) => ({ ...prev, ...patch }));
     setPresetKey(CUSTOM_PRESET_KEY);
+  }
+
+  // Pitch (gaya Word) = ukuran label + jarak antar label. Mengubah ukuran
+  // label menjaga pitch tetap, jadi jarak yang menyesuaikan — seperti di Word.
+  const round3 = (n: number) => Math.round(n * 1000) / 1000;
+  const pitchX = round3(spec.labelWidth + spec.gapX);
+  const pitchY = round3(spec.labelHeight + spec.gapY);
+  const pageSizeKey = matchPageSize(spec);
+
+  function changePageSize(key: string) {
+    if (key === "custom") return;
+    const size = PAGE_SIZES.find((p) => p.key === key);
+    if (!size) return;
+    // Pertahankan orientasi alami lembar (landscape → sisi panjang jadi lebar).
+    const landscape = isLandscape(spec);
+    updateSpec({
+      pageWidth: landscape ? size.height : size.width,
+      pageHeight: landscape ? size.width : size.height,
+    });
   }
 
   function updateContent(patch: Partial<LabelContentOptions>) {
@@ -418,21 +518,6 @@ export default function LabelBarcodeModule() {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-zinc-100 p-4 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 md:p-6">
-      <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-        <div>
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-            Alat Kasir
-          </p>
-          <h2 className="text-2xl font-semibold tracking-tight">
-            Label Barcode
-          </h2>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            Cetak label barcode / QR untuk ditempel di produk, supaya kasir
-            tinggal scan.
-          </p>
-        </div>
-      </div>
-
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
         {/* ═════════ KIRI: pengaturan ═════════ */}
         <div className="flex flex-col gap-4">
@@ -491,84 +576,126 @@ export default function LabelBarcodeModule() {
             >
               {showDetail
                 ? "Sembunyikan detail ukuran"
-                : "Atur detail ukuran & margin"}
+                : "Atur ukuran label (seperti Word)"}
             </button>
 
             {showDetail && (
               <div className="mt-3 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-xs font-semibold">
+                    Detail label{" "}
+                    <span className="font-normal text-zinc-500 dark:text-zinc-400">
+                      (sama seperti Word: Surat Menyurat → Label → Opsi)
+                    </span>
+                  </p>
+                  <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                    Satuan
+                    <select
+                      value={unit}
+                      onChange={(event) => setUnit(event.target.value as LabelUnit)}
+                      className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs dark:border-zinc-800 dark:bg-zinc-950"
+                    >
+                      <option value="cm">cm</option>
+                      <option value="mm">mm</option>
+                      <option value="in">inci</option>
+                    </select>
+                  </label>
+                </div>
+
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <NumberField
+                    <UnitField
+                      label="Margin atas"
+                      unit={unit}
+                      valueMm={spec.marginTop}
+                      onChangeMm={(v) => updateSpec({ marginTop: v })}
+                    />
+                    <UnitField
+                      label="Margin samping"
+                      unit={unit}
+                      valueMm={spec.marginLeft}
+                      onChangeMm={(v) => updateSpec({ marginLeft: v })}
+                    />
+                    <UnitField
+                      label="Tinggi label"
+                      unit={unit}
+                      valueMm={spec.labelHeight}
+                      onChangeMm={(v) =>
+                        updateSpec({ labelHeight: v, gapY: round3(pitchY - v) })
+                      }
+                    />
+                    <UnitField
+                      label="Lebar label"
+                      unit={unit}
+                      valueMm={spec.labelWidth}
+                      onChangeMm={(v) =>
+                        updateSpec({ labelWidth: v, gapX: round3(pitchX - v) })
+                      }
+                    />
+                    <UnitField
+                      label="Pitch vertikal"
+                      unit={unit}
+                      valueMm={pitchY}
+                      onChangeMm={(v) => updateSpec({ gapY: round3(v - spec.labelHeight) })}
+                    />
+                    <UnitField
+                      label="Pitch horizontal"
+                      unit={unit}
+                      valueMm={pitchX}
+                      onChangeMm={(v) => updateSpec({ gapX: round3(v - spec.labelWidth) })}
+                    />
+                    <NumberField
+                      label="Jumlah ke samping (kolom)"
+                      value={spec.cols}
+                      min={1}
+                      onChange={(v) => updateSpec({ cols: Math.floor(v) })}
+                    />
+                    <NumberField
+                      label="Jumlah ke bawah (baris)"
+                      value={spec.rows}
+                      min={1}
+                      onChange={(v) => updateSpec({ rows: Math.floor(v) })}
+                    />
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <label className="block">
+                    <span className="mb-1 block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+                      Ukuran kertas
+                    </span>
+                    <select
+                      value={pageSizeKey}
+                      onChange={(event) => changePageSize(event.target.value)}
+                      className={inputClass}
+                    >
+                      {PAGE_SIZES.map((size) => (
+                        <option key={size.key} value={size.key}>
+                          {size.name}
+                        </option>
+                      ))}
+                      <option value="custom">Kustom</option>
+                    </select>
+                  </label>
+                  <UnitField
                     label="Lebar kertas"
-                    suffix="mm"
-                    value={spec.pageWidth}
-                    onChange={(v) => updateSpec({ pageWidth: v })}
+                    unit={unit}
+                    valueMm={spec.pageWidth}
+                    onChangeMm={(v) => updateSpec({ pageWidth: v })}
                   />
-                  <NumberField
+                  <UnitField
                     label="Tinggi kertas"
-                    suffix="mm"
-                    value={spec.pageHeight}
-                    onChange={(v) => updateSpec({ pageHeight: v })}
-                  />
-                  <NumberField
-                    label="Kolom"
-                    value={spec.cols}
-                    min={1}
-                    onChange={(v) => updateSpec({ cols: Math.floor(v) })}
-                  />
-                  <NumberField
-                    label="Baris"
-                    value={spec.rows}
-                    min={1}
-                    onChange={(v) => updateSpec({ rows: Math.floor(v) })}
-                  />
-                  <NumberField
-                    label="Lebar label"
-                    suffix="mm"
-                    step={0.5}
-                    value={spec.labelWidth}
-                    onChange={(v) => updateSpec({ labelWidth: v })}
-                  />
-                  <NumberField
-                    label="Tinggi label"
-                    suffix="mm"
-                    step={0.5}
-                    value={spec.labelHeight}
-                    onChange={(v) => updateSpec({ labelHeight: v })}
-                  />
-                  <NumberField
-                    label="Jarak antar kolom"
-                    suffix="mm"
-                    step={0.5}
-                    value={spec.gapX}
-                    onChange={(v) => updateSpec({ gapX: v })}
-                  />
-                  <NumberField
-                    label="Jarak antar baris"
-                    suffix="mm"
-                    step={0.5}
-                    value={spec.gapY}
-                    onChange={(v) => updateSpec({ gapY: v })}
-                  />
-                  <NumberField
-                    label="Margin kiri"
-                    suffix="mm"
-                    step={0.5}
-                    value={spec.marginLeft}
-                    onChange={(v) => updateSpec({ marginLeft: v })}
-                  />
-                  <NumberField
-                    label="Margin atas"
-                    suffix="mm"
-                    step={0.5}
-                    value={spec.marginTop}
-                    onChange={(v) => updateSpec({ marginTop: v })}
+                    unit={unit}
+                    valueMm={spec.pageHeight}
+                    onChangeMm={(v) => updateSpec({ pageHeight: v })}
                   />
                 </div>
+
                 <p className="mt-3 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
-                  Ukuran label sesuai spesifikasi penjual, tetapi margin tiap
-                  merek/batch bisa berbeda sedikit. Cetak dulu di kertas HVS
-                  dengan <b>Cetak uji (garis tepi)</b>, tempelkan ke lembar
-                  stiker lalu cocokkan — geser Margin kiri/atas bila perlu.
+                  <b>Pitch</b> = jarak dari tepi satu label ke tepi label
+                  berikutnya (ukuran label + celah antar label), persis seperti
+                  di Word. Ketik koma atau titik untuk desimal; tombol panah
+                  atas/bawah menambah/mengurangi. Cetak dulu di kertas HVS dengan{" "}
+                  <b>Cetak uji (garis tepi)</b>, tempelkan ke lembar stiker lalu
+                  cocokkan margin &amp; pitch bila perlu.
                 </p>
               </div>
             )}
