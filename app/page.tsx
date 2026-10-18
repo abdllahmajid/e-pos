@@ -97,6 +97,15 @@ const PelangganModule = dynamic(
   },
 );
 
+// ── TAMBAHAN (menu Label Barcode) ── Cetak label barcode/QR produk (pilih
+// ukuran label stiker, produk & jumlah, dengan preview per lembar).
+const LabelBarcodeModule = dynamic(
+  () => import("./components/label/LabelBarcodeModule"),
+  {
+    ssr: false,
+  },
+);
+
 export default function LCOPOS() {
   // ── KOREKSI (setelah login diarahkan ke Dashboard) ── Sebelumnya default
   // "kasir", jadi kasir/admin yang baru login langsung masuk layar POS.
@@ -186,6 +195,7 @@ export default function LCOPOS() {
           {activeMenu === "riwayat" && <TransactionHistoryModule />}
           {activeMenu === "pelanggan" && <PelangganModule />}
           {activeMenu === "stok" && <StokModule />}
+          {activeMenu === "label-barcode" && <LabelBarcodeModule />}
           {activeMenu === "kas" && <KasModule />}
           {activeMenu === "promo" && <PromoModule />}
           {activeMenu === "laporan" && <LaporanModule />}

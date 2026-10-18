@@ -22,6 +22,7 @@ import {
   Users,
   Wallet,
   Boxes,
+  Tags,
   Monitor,
   TrendingUp,
   Trash2,
@@ -122,6 +123,16 @@ export const MENU_GROUPS: SidebarMenuGroup[] = [
       },
       // roles: kosong (semua role) — PRD §5 baris `kas_shift` — Kasir "✔ (sendiri)".
       { key: "kas", label: "Kas & Shift", icon: Wallet },
+      // ── TAMBAHAN (menu Label Barcode) ── Cetak label barcode/QR produk ke
+      // kertas label stiker (Tom & Jerry 103 dst.). Memakai permission
+      // "produk" yang sudah ada (tidak perlu migration baru) — siapa pun
+      // yang boleh membuka menu Produk dengan izin itu boleh mencetak label.
+      {
+        key: "label-barcode",
+        label: "Label Barcode",
+        icon: Tags,
+        permissions: ["produk"],
+      },
       // ── TAMBAHAN (Layar Promosi) ── Pengelola gambar/video yang diputar di
       // TV toko lewat halaman publik `/tv`. Fitur di LUAR penomoran T-xx PRD
       // (lihat PROGRESS.md sesi #20). admin+supervisor — sama dengan

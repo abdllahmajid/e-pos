@@ -1013,7 +1013,13 @@ export default function KasirModule({
   const handleBarcodeScanned = useCallback(
     (rawCode: string) => {
       const code = rawCode.trim();
-      const product = products.find((p) => (p.barcode ?? "").trim() === code);
+      // ── TAMBAHAN (menu Label Barcode) ── Label hasil cetak memakai barcode
+      // produk, atau SKU kalau barcode-nya kosong — jadi scan dicocokkan ke
+      // barcode DULU, baru SKU (persis, case-insensitive).
+      const lowerCode = code.toLowerCase();
+      const product =
+        products.find((p) => (p.barcode ?? "").trim() === code) ??
+        products.find((p) => p.sku.trim().toLowerCase() === lowerCode);
 
       if (!product) {
         setScanFeedback({
