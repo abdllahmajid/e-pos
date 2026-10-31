@@ -65,13 +65,15 @@ export interface MinimalBluetoothDevice {
   name?: string;
   gatt?: MinimalBluetoothRemoteGATTServer;
   addEventListener(
-    type: "gattserverdisconnected",
+    type: "gattserverdisconnected" | "advertisementreceived",
     listener: () => void,
   ): void;
   removeEventListener(
-    type: "gattserverdisconnected",
+    type: "gattserverdisconnected" | "advertisementreceived",
     listener: () => void,
   ): void;
+  // Dipakai untuk menyambung ulang tanpa dialog setelah halaman di-refresh.
+  watchAdvertisements?(options?: { signal?: AbortSignal }): Promise<void>;
 }
 
 interface MinimalBluetooth {
@@ -203,16 +205,16 @@ export function buildTestPrintBytes(
   text(`${storeName || "Langitan.co"}\n`);
   raw(ESC, 0x21, 0x00); // font normal
   text("*** TES PRINT ***\n");
-  text("--------------------------------\n");
+  text("-".repeat(RECEIPT_WIDTH) + "\n");
   raw(ESC, 0x61, 0x00); // rata kiri
   text(`Printer   : ${printerName}\n`);
   text(`Waktu     : ${new Date().toLocaleString("id-ID")}\n`);
-  text("--------------------------------\n");
+  text("-".repeat(RECEIPT_WIDTH) + "\n");
   raw(ESC, 0x61, 0x01);
   text("Kalau teks ini tercetak rapi,\n");
   text("printer sudah terhubung dengan\n");
   text("benar dan siap dipakai.\n");
-  text("\n\n\n");
+  raw(ESC, 0x4a, FEED_BEFORE_CUT_DOTS); // ruang kosong sebelum potong
   raw(GS, 0x56, 0x42, 0x00); // potong kertas parsial (didukung kebanyakan printer mini)
   return new Uint8Array(bytes);
 }
@@ -227,11 +229,67 @@ export function buildTestPrintBytes(
 // characteristic (Bluetooth) / endpoint OUT (USB) — tidak pernah menyentuh
 // window.print(), jadi tidak pernah ada dialog apa pun.
 //
-// Lebar kertas diasumsikan 32 karakter (standar printer thermal 58mm font
-// default). Kalau toko pakai printer 80mm, lebar ini bisa dijadikan
-// parameter nanti — sengaja belum, supaya tidak menambah kompleksitas
-// sebelum benar-benar dibutuhkan.
-const RECEIPT_WIDTH = 32;
+// ── PERBAIKAN (printer 80mm) ── Lebar baris teks dalam karakter font default
+// (Font A, 12 titik/karakter): kertas 80mm (576 titik) = 48 karakter, kertas
+// 58mm (384 titik) = 32 karakter. Printer iWare XS-80BT / RPP02N_BLE memakai
+// kertas 80mm (79,5 mm, 576 titik/baris), jadi 48. Kalau suatu saat dipakai
+// printer 58mm, cukup ubah angka ini kembali ke 32.
+// Catatan: teks berukuran besar (ESC ! 0x30 = 2x lebar) hanya muat setengahnya
+// (24 karakter) — semua judul besar di bawah masih jauh di bawah batas itu.
+const RECEIPT_WIDTH = 48;
+
+/** Pecah teks per kata supaya tidak terpotong di tengah kata. */
+function wrapText(value: string, width = RECEIPT_WIDTH): string[] {
+  const out: string[] = [];
+  let current = "";
+  for (const word of value.split(/\s+/).filter(Boolean)) {
+    if (word.length > width) {
+      if (current) out.push(current);
+      current = "";
+      for (let i = 0; i < word.length; i += width) out.push(word.slice(i, i + width));
+      continue;
+    }
+    if (!current) current = word;
+    else if (current.length + 1 + word.length <= width) current += " " + word;
+    else {
+      out.push(current);
+      current = word;
+    }
+  }
+  if (current) out.push(current);
+  return out;
+}
+
+/**
+ * Pecah teks per kata, lalu SEIMBANGKAN panjang tiap baris supaya tidak ada
+ * baris "yatim" (mis. satu kata pendek sendirian di baris kedua). Jumlah baris
+ * sama dengan wrapText() biasa — hanya pembagiannya yang lebih rata.
+ */
+function wrapBalanced(value: string, width = RECEIPT_WIDTH): string[] {
+  const lines = wrapText(value, width);
+  if (lines.length < 2) return lines;
+  const words = value.split(/\s+/).filter(Boolean);
+  const total = words.join(" ").length;
+  const longest = Math.max(...words.map((w) => w.length));
+  for (let w = Math.max(Math.ceil(total / lines.length), longest); w < width; w++) {
+    const trial = wrapText(value, w);
+    if (trial.length === lines.length) return trial;
+  }
+  return lines;
+}
+
+/** "Label : nilai" — nilai panjang turun ke baris berikutnya, sejajar dengan nilai di atasnya. */
+function labelLines(label: string, value: string): string[] {
+  const parts = wrapText(value, RECEIPT_WIDTH - label.length);
+  if (parts.length === 0) return [label.trimEnd()];
+  return parts.map((part, i) => (i === 0 ? label : " ".repeat(label.length)) + part);
+}
+
+// ── PERBAIKAN (ruang kosong sebelum potong) ── Jarak kosong di bawah isi
+// struk sebelum pisau auto-cut memotong, dalam TITIK (8 titik = 1 mm; 160 =
+// 20 mm). Sebelumnya hanya 3x LF (± 11 mm) sehingga QR mepet area potong.
+// Kalau terasa kebanyakan/kurang, ubah angka ini (maks 255 per perintah).
+const FEED_BEFORE_CUT_DOTS = 160;
 
 /** Ratakan `left` di kiri dan `right` di kanan dalam `width` karakter (mis. "Total" ...... "15.000"). */
 function padLine(left: string, right: string, width = RECEIPT_WIDTH): string {
@@ -290,12 +348,12 @@ function buildShiftOpenBytes(
     line(data.storeName || "Langitan.co");
     raw(ESC, 0x45, 0x00);
   }
-  if (data.storeAddress) line(data.storeAddress);
+  if (data.storeAddress) for (const l of wrapBalanced(data.storeAddress)) line(l);
   if (data.storePhone) line(data.storePhone);
 
   raw(ESC, 0x61, 0x00); // rata kiri
   divider();
-  line(`Kasir     : ${cashierName}`);
+  for (const l of labelLines("Kasir     : ", cashierName)) line(l);
   line(`Waktu     : ${dateStr}`);
   line("Status    : SESI DIBUKA");
   divider();
@@ -317,13 +375,13 @@ function buildShiftOpenBytes(
   line();
   line();
   line();
-  line(`(${cashierName})`.slice(0, RECEIPT_WIDTH));
+  for (const l of wrapBalanced(`(${cashierName})`)) line(l);
   solidDivider();
   raw(ESC, 0x45, 0x01);
   line("* BUKAN BUKTI PENJUALAN *");
   raw(ESC, 0x45, 0x00);
 
-  raw(0x0a, 0x0a, 0x0a); // feed sebelum potong
+  raw(ESC, 0x4a, FEED_BEFORE_CUT_DOTS); // ESC J n: feed n titik (ruang kosong) sebelum potong
   raw(GS, 0x56, 0x42, 0x00); // potong kertas parsial
   return new Uint8Array(bytes);
 }
@@ -374,20 +432,20 @@ export function buildReceiptBytes(
     line(data.storeName || "Langitan.co");
     raw(ESC, 0x21, 0x00); // font normal
   }
-  if (data.storeAddress) line(data.storeAddress);
+  if (data.storeAddress) for (const l of wrapBalanced(data.storeAddress)) line(l);
   if (data.storePhone) line(data.storePhone);
 
   raw(ESC, 0x61, 0x00); // rata kiri
   divider();
-  line(`No. Struk : ${data.receiptNo}`);
+  for (const l of labelLines("No. Struk : ", data.receiptNo)) line(l);
   line(`Waktu     : ${dateStr}`);
-  line(`Kasir     : ${data.cashierName ?? "-"}`);
-  if (data.customerName) line(`Pelanggan : ${data.customerName}`);
+  for (const l of labelLines("Kasir     : ", data.cashierName ?? "-")) line(l);
+  if (data.customerName) for (const l of labelLines("Pelanggan : ", data.customerName)) line(l);
   line(`Metode    : ${formatMethod(data.method)}`);
   divider();
 
   for (const item of data.items) {
-    line(item.name);
+    for (const l of wrapText(item.name)) line(l);
     const qtyPrice = `${item.qty}x ${formatMoney(item.price)}`;
     const subtotal = formatMoney(item.subtotal ?? item.qty * item.price);
     line(padLine(qtyPrice, subtotal));
@@ -405,7 +463,7 @@ export function buildReceiptBytes(
   divider();
 
   raw(ESC, 0x61, 0x01); // tengah
-  line(data.footerText || "Terima kasih atas kunjungan Anda");
+  for (const l of wrapBalanced(data.footerText || "Terima kasih atas kunjungan Anda")) line(l);
   line();
 
   // Barcode nomor struk pakai perintah barcode NATIVE printer (GS k, CODE128
@@ -429,13 +487,11 @@ export function buildReceiptBytes(
     raw(ESC, 0x61, 0x01); // tengah
     line();
     const promoText = data.promoText || DEFAULT_PROMO_TEXT;
-    for (let i = 0; i < promoText.length; i += RECEIPT_WIDTH) {
-      line(promoText.slice(i, i + RECEIPT_WIDTH));
-    }
+    for (const promoLine of wrapBalanced(promoText)) line(promoLine);
     for (let i = 0; i < qr.raster.length; i++) bytes.push(qr.raster[i]);
   }
 
-  raw(0x0a, 0x0a, 0x0a); // feed sebelum potong
+  raw(ESC, 0x4a, FEED_BEFORE_CUT_DOTS); // ESC J n: feed n titik (ruang kosong) sebelum potong
   raw(GS, 0x56, 0x42, 0x00); // potong kertas parsial
   return new Uint8Array(bytes);
 }
@@ -522,15 +578,115 @@ export async function connectBluetoothPrinter(
   );
 }
 
+// ── PERBAIKAN (koneksi bertahan setelah refresh) ── Refresh halaman SELALU
+// memutus koneksi GATT (browser menutupnya saat halaman dibuang), dan handle
+// device di memori ikut hilang. Izin ke printer-nya sendiri TETAP tersimpan,
+// jadi printer bisa diambil lagi lewat navigator.bluetooth.getDevices() lalu
+// disambung TANPA dialog dan tanpa klik. Tapi gatt.connect() langsung sering
+// gagal ("no longer in range") karena browser belum "melihat" printer di
+// halaman yang baru dibuka. Pola resmi Chrome: pantau iklan Bluetooth printer
+// (watchAdvertisements), tunggu sampai iklannya terdengar, baru connect.
+function waitForBluetoothAdvertisement(
+  device: MinimalBluetoothDevice,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!device.watchAdvertisements) {
+      reject(new Error("Browser ini tidak bisa memantau iklan Bluetooth."));
+      return;
+    }
+    const controller = new AbortController();
+    let finished = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const finish = (error?: Error) => {
+      if (finished) return;
+      finished = true;
+      if (timer) clearTimeout(timer);
+      device.removeEventListener("advertisementreceived", onAdvertisement);
+      controller.abort();
+      if (error) reject(error);
+      else resolve();
+    };
+    const onAdvertisement = () => finish();
+
+    timer = setTimeout(
+      () =>
+        finish(
+          new Error(
+            "Printer tidak ditemukan — pastikan menyala dan dalam jangkauan.",
+          ),
+        ),
+      timeoutMs,
+    );
+    device.addEventListener("advertisementreceived", onAdvertisement);
+    device
+      .watchAdvertisements({ signal: controller.signal })
+      .catch((err) =>
+        finish(err instanceof Error ? err : new Error(String(err))),
+      );
+  });
+}
+
+/**
+ * Sambung ulang ke printer yang SUDAH pernah diizinkan, tanpa dialog.
+ * Coba langsung dulu (cepat kalau printer baru saja terdengar); kalau gagal,
+ * tunggu iklan Bluetooth printer (maks `timeoutMs`) lalu coba sekali lagi.
+ */
+export async function reconnectBluetoothPrinter(
+  device: MinimalBluetoothDevice,
+  timeoutMs = 8000,
+): Promise<MinimalBluetoothRemoteGATTCharacteristic> {
+  try {
+    return await connectBluetoothPrinter(device);
+  } catch (firstError) {
+    const message =
+      firstError instanceof Error ? firstError.message : String(firstError);
+    // Printer ketemu tapi service-nya asing: menunggu iklan tidak menolong.
+    if (message.includes("Service printer tidak dikenali")) throw firstError;
+    if (!device.watchAdvertisements) throw firstError;
+    await waitForBluetoothAdvertisement(device, timeoutMs);
+    return connectBluetoothPrinter(device);
+  }
+}
+
 // ── PERUBAHAN (printer BLE merek lain, mis. iWare RPP02N) ── Printer BLE
-// murah sering punya MTU kecil (20 byte per tulis) dan TIDAK punya buffer besar
-// untuk data yang datang beruntun. Potongan besar tanpa jeda membuat printer
-// hanya menerima beberapa byte pertama (kertas bergerak sedikit) lalu macet.
-// Karena itu data dikirim potongan kecil dengan jeda antar-potongan. Kalau
-// cetak sudah stabil dan terasa lambat, naikkan BLE_CHUNK_SIZE (mis. 100) atau
-// kecilkan BLE_CHUNK_DELAY_MS satu per satu sambil dites.
-const BLE_CHUNK_SIZE = 20;
-const BLE_CHUNK_DELAY_MS = 8;
+// murah sering punya MTU kecil (20 byte per tulis). Potongan yang lebih besar
+// dari MTU-3 bisa DIPOTONG DIAM-DIAM oleh stack Bluetooth (printer menerima
+// sebagian byte lalu macet menunggu sisanya) — itu sebabnya default-nya 20.
+//
+// ── PERBAIKAN (cetak nyendat di header/QR) ── Penyebab nyendat: bitmap logo +
+// QR (ribuan byte) tiba lebih lambat daripada kecepatan cetak kepala thermal,
+// jadi printer cetak sedikit -> kehabisan data -> berhenti -> lanjut lagi.
+// Penyelesaiannya ada dua: (1) kurangi byte bitmap (lihat receiptQr.ts &
+// receiptBrand.ts) dan (2) percepat aliran data. Untuk (2), ukuran potongan
+// & jeda sekarang BISA DISETEL tanpa ubah kode, karena MTU tiap printer/HP/
+// browser berbeda dan tidak bisa dibaca dari Web Bluetooth. Setel lewat
+// Console browser (F12) di halaman kasir, lalu coba cetak:
+//   localStorage.setItem("epos_ble_chunk", "100")  // 20 (aman) -> 60 -> 100 -> 182
+//   localStorage.setItem("epos_ble_delay", "5")    // ms antar potongan, 0-100
+// Naikkan chunk SATU TINGKAT per tes. Kalau kertas jalan sedikit lalu berhenti,
+// atau muncul karakter acak, berarti terlalu besar: kembalikan ke tingkat
+// sebelumnya. Reset: localStorage.removeItem("epos_ble_chunk").
+const BLE_DEFAULT_CHUNK_SIZE = 20;
+const BLE_DEFAULT_CHUNK_DELAY_MS = 5;
+
+function readBleTuning(): { chunkSize: number; delayMs: number } {
+  let chunkSize = BLE_DEFAULT_CHUNK_SIZE;
+  let delayMs = BLE_DEFAULT_CHUNK_DELAY_MS;
+  try {
+    const c = Number(localStorage.getItem("epos_ble_chunk"));
+    const d = localStorage.getItem("epos_ble_delay");
+    if (Number.isFinite(c) && c >= 20 && c <= 512) chunkSize = Math.floor(c);
+    if (d !== null && d !== "" && Number.isFinite(Number(d))) {
+      const n = Number(d);
+      if (n >= 0 && n <= 100) delayMs = n;
+    }
+  } catch {
+    // localStorage tidak tersedia -> pakai default aman.
+  }
+  return { chunkSize, delayMs };
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -541,6 +697,8 @@ export async function writeToBluetoothPrinter(
   characteristic: MinimalBluetoothRemoteGATTCharacteristic,
   bytes: Uint8Array,
 ): Promise<void> {
+  const { chunkSize, delayMs } = readBleTuning();
+
   // Kalau characteristic hanya mendukung tulis DENGAN respons, pakai itu —
   // tiap tulis ditunggu konfirmasinya, jadi aliran data terkontrol sendiri.
   const useWithResponse =
@@ -548,13 +706,13 @@ export async function writeToBluetoothPrinter(
     characteristic.properties?.writeWithoutResponse !== true &&
     typeof characteristic.writeValue === "function";
 
-  for (let offset = 0; offset < bytes.length; offset += BLE_CHUNK_SIZE) {
-    const chunk = bytes.slice(offset, offset + BLE_CHUNK_SIZE);
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.slice(offset, offset + chunkSize);
     if (useWithResponse) {
       await characteristic.writeValue!(chunk);
     } else {
       await characteristic.writeValueWithoutResponse(chunk);
-      await sleep(BLE_CHUNK_DELAY_MS);
+      if (delayMs > 0) await sleep(delayMs);
     }
   }
 }

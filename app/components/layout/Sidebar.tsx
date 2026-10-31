@@ -44,6 +44,7 @@ import { useAuth, hasPermission, type AuthUser } from "@/hooks/useAuth";
 // saja, tanpa perlu izin admin. Lihat catatan lengkap di
 // hooks/useThemePreference.ts.
 import { useThemePreference } from "@/hooks/useThemePreference";
+import { clearStoredMenu } from "@/lib/pos/activeMenu";
 
 export interface SidebarMenuItem {
   key: string;
@@ -380,6 +381,8 @@ export default function Sidebar({
     setSignOutError("");
     try {
       await signOut();
+      // Hapus menu terakhir yang disimpan, supaya login berikutnya mulai dari Dashboard.
+      clearStoredMenu();
       window.location.assign("/login");
     } catch {
       setSignOutError("Gagal keluar. Periksa koneksi lalu coba lagi.");

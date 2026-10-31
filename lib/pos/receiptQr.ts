@@ -28,11 +28,22 @@ export interface ReceiptQr {
   raster: Uint8Array;
 }
 
+const qrCache = new Map<string, ReceiptQr>();
+
 export const DEFAULT_PROMO_TEXT = "Scan untuk ikuti kami";
 
 const PAPER_DOTS = 384; // 58mm @ 203dpi, kelipatan 8. Di 80mm tetap di tengah.
 const BAND_HEIGHT = 24;
-const QUIET_MODULES = 3; // area putih di sekeliling QR (dalam satuan modul)
+const QUIET_MODULES = 2; // area putih di sekeliling QR (modul). 2 sudah cukup untuk scan di kertas putih.
+
+// ── PERBAIKAN (cetak nyendat di QR) ── QR dulu dikirim 384 titik penuh
+// (±11,6 KB lewat Bluetooth 20 byte/tulis = berdetik-detik, printer cetak-
+// berhenti-cetak). Sekarang bitmap dikirim SETENGAH resolusi (192 titik) dan
+// printer yang memperbesar 2x lewat mode GS v 0 m=3 (2x lebar & 2x tinggi):
+// hasil cetak SAMA BESAR & tetap tajam (tiap modul QR memang kotak utuh),
+// tetapi data tinggal ±1/4. Kalau ada printer yang mengabaikan mode ini (QR
+// tercetak setengah ukuran), ubah jadi `false` — kembali ke cara lama.
+const QR_PRINTER_DOUBLE = true;
 const TARGET_DOTS = 232; // lebar QR yang dituju (~29mm), cukup besar untuk discan
 const MIN_MODULE_DOTS = 3; // di bawah ini QR sulit discan di thermal
 const PREVIEW_SCALE = 3;
@@ -79,6 +90,9 @@ export async function loadReceiptQr(
   const url = normalizePromoUrl(rawUrl);
   if (!url) return null;
 
+  const cachedQr = qrCache.get(url);
+  if (cachedQr) return cachedQr;
+
   try {
     // Koreksi error "M": cukup kuat untuk kertas thermal, tapi tidak membuat
     // QR jauh lebih padat daripada "L".
@@ -86,30 +100,40 @@ export async function loadReceiptQr(
     const count = qr.modules.size;
     const cells = qr.modules.data; // Uint8Array, 1 = kotak hitam
 
+    // scale = berapa kali printer memperbesar bitmap yang kita kirim.
+    const scale = QR_PRINTER_DOUBLE ? 2 : 1;
+    const sendWidth = PAPER_DOTS / scale; // lebar bitmap yang DIKIRIM (titik)
     const totalModules = count + QUIET_MODULES * 2;
-    const moduleDots = Math.floor(TARGET_DOTS / totalModules);
+    // Ukuran satu modul dalam titik KIRIM; ukuran cetaknya = kirim * scale
+    // (selalu bilangan bulat, jadi tepi tetap tegas).
+    const sendModuleDots = Math.floor(TARGET_DOTS / (scale * totalModules));
+    const moduleDots = sendModuleDots * scale; // ukuran modul di kertas
     // Terlalu padat: modul < 3 titik, atau QR tidak muat di lebar kertas.
     if (moduleDots < MIN_MODULE_DOTS || totalModules * moduleDots > PAPER_DOTS) {
       console.warn("[receiptQr] link terlalu panjang, QR tidak dicetak");
       return null;
     }
 
-    const qrDots = totalModules * moduleDots;
-    const padTop = 6;
-    const contentHeight = padTop + qrDots + 6;
-    const height = Math.ceil(contentHeight / BAND_HEIGHT) * BAND_HEIGHT;
+    const qrDots = totalModules * moduleDots; // ukuran QR di kertas
+    const sendQrDots = totalModules * sendModuleDots;
+    const padTop = 6; // titik di kertas (jalur browser)
+    const sendPad = padTop / scale; // titik kirim (jalur printer)
+    const sendHeight =
+      Math.ceil((sendPad + sendQrDots + sendPad) / BAND_HEIGHT) * BAND_HEIGHT;
+    const height = sendHeight * scale; // tinggi di kertas (untuk preview)
     const left = Math.floor((PAPER_DOTS - qrDots) / 2);
+    const sendLeft = Math.floor((sendWidth - sendQrDots) / 2);
 
     // ── Jalur printer: langsung dari matriks modul, tanpa canvas ──
-    const bytesPerRow = PAPER_DOTS / 8;
-    const packed = new Uint8Array(bytesPerRow * height);
+    const bytesPerRow = sendWidth / 8;
+    const packed = new Uint8Array(bytesPerRow * sendHeight);
     for (let row = 0; row < count; row++) {
       for (let col = 0; col < count; col++) {
         if (!cells[row * count + col]) continue;
-        const x0 = left + (QUIET_MODULES + col) * moduleDots;
-        const y0 = padTop + (QUIET_MODULES + row) * moduleDots;
-        for (let dy = 0; dy < moduleDots; dy++) {
-          for (let dx = 0; dx < moduleDots; dx++) {
+        const x0 = sendLeft + (QUIET_MODULES + col) * sendModuleDots;
+        const y0 = sendPad + (QUIET_MODULES + row) * sendModuleDots;
+        for (let dy = 0; dy < sendModuleDots; dy++) {
+          for (let dx = 0; dx < sendModuleDots; dx++) {
             const x = x0 + dx;
             packed[(y0 + dy) * bytesPerRow + (x >> 3)] |= 0x80 >> (x & 7);
           }
@@ -117,10 +141,12 @@ export async function loadReceiptQr(
       }
     }
 
+    // GS v 0 m xL xH yL yH d... — m=0 normal, m=3 diperbesar 2x lebar & tinggi.
+    const mode = QR_PRINTER_DOUBLE ? 0x03 : 0x00;
     const commands: number[] = [];
-    for (let y = 0; y < height; y += BAND_HEIGHT) {
+    for (let y = 0; y < sendHeight; y += BAND_HEIGHT) {
       commands.push(
-        0x1d, 0x76, 0x30, 0x00,
+        0x1d, 0x76, 0x30, mode,
         bytesPerRow & 0xff, (bytesPerRow >> 8) & 0xff,
         BAND_HEIGHT & 0xff, (BAND_HEIGHT >> 8) & 0xff,
       );
@@ -151,12 +177,17 @@ export async function loadReceiptQr(
       }
     }
 
-    return {
+    const result: ReceiptQr = {
       dataUrl: canvas.toDataURL("image/png"),
       width: PAPER_DOTS,
       height,
       raster: new Uint8Array(commands),
     };
+    // PERBAIKAN: simpan hasilnya — link yang sama tidak perlu dibuat ulang
+    // (sebelumnya tiap cetak membuat kanvas PNG 1152 px lagi). Ganti link di
+    // Pengaturan = key beda = otomatis dibuat baru.
+    qrCache.set(url, result);
+    return result;
   } catch (err) {
     console.warn("[receiptQr] gagal membuat QR struk:", err);
     return null;

@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import Sidebar from "./components/layout/Sidebar";
 // ── TAMBAHAN (header/topbar) ── Lihat catatan header lengkap di file ini.
 import Header from "./components/layout/Header";
+// ── TAMBAHAN (refresh tetap di halaman terakhir) ── Lihat lib/pos/activeMenu.ts.
+import { readStoredMenu, saveActiveMenu } from "@/lib/pos/activeMenu";
 
 // Dynamic Imports
 const KasirModule = dynamic(() => import("./components/kasir/KasirModule"), {
@@ -118,6 +120,25 @@ export default function LCOPOS() {
   // jadi aman untuk semua role (admin/supervisor/kasir/qc).
   const [activeMenu, setActiveMenu] = useState("dashboard");
 
+  // ── PERBAIKAN (refresh tetap di halaman terakhir) ── Sebelumnya activeMenu
+  // hanya hidup di memori, jadi tiap refresh selalu balik ke "dashboard".
+  // Sekarang menu terakhir disimpan di sessionStorage (per tab) dan dipulihkan
+  // sekali setelah halaman termuat. Dibaca di effect (bukan di useState
+  // awal) supaya HTML dari server & render pertama di browser tetap sama
+  // (tidak ada hydration mismatch). `isMenuRestored` menahan render modul
+  // sampai menu terpulihkan, supaya Dashboard tidak sempat berkedip dulu.
+  const [isMenuRestored, setIsMenuRestored] = useState(false);
+
+  useEffect(() => {
+    const stored = readStoredMenu();
+    if (stored) setActiveMenu(stored);
+    setIsMenuRestored(true);
+  }, []);
+
+  useEffect(() => {
+    if (isMenuRestored) saveActiveMenu(activeMenu);
+  }, [activeMenu, isMenuRestored]);
+
   // ── PERUBAHAN ── `goToShiftMenu` (pindah ke menu Kas & Shift) dihapus:
   // buka/tutup shift sekarang sepenuhnya di layar Kasir. Gantinya: keluar dari
   // Kasir balik ke Dashboard (batal buka kasir / selesai tutup sesi).
@@ -179,29 +200,37 @@ export default function LCOPOS() {
         )}
 
         <div className="min-h-0 flex-1">
-          {activeMenu === "dashboard" && (
+          {isMenuRestored && activeMenu === "dashboard" && (
             <DashboardModule
               onNavigate={setActiveMenu}
               onOpenKasir={openKasir}
             />
           )}
-          {activeMenu === "kasir" && (
+          {isMenuRestored && activeMenu === "kasir" && (
             <KasirModule
               onExitKasir={exitKasir}
               onOpenMenu={() => setIsKasirSidebarOpen(true)}
             />
           )}
-          {activeMenu === "produk" && <ProdukModule />}
-          {activeMenu === "riwayat" && <TransactionHistoryModule />}
-          {activeMenu === "pelanggan" && <PelangganModule />}
-          {activeMenu === "stok" && <StokModule />}
-          {activeMenu === "label-barcode" && <LabelBarcodeModule />}
-          {activeMenu === "kas" && <KasModule />}
-          {activeMenu === "promo" && <PromoModule />}
-          {activeMenu === "laporan" && <LaporanModule />}
-          {activeMenu === "sampah" && <SampahModule />}
-          {activeMenu === "log-aktivitas" && <LogAktivitasModule />}
-          {activeMenu === "pengaturan" && <PengaturanModule />}
+          {isMenuRestored && activeMenu === "produk" && <ProdukModule />}
+          {isMenuRestored && activeMenu === "riwayat" && (
+            <TransactionHistoryModule />
+          )}
+          {isMenuRestored && activeMenu === "pelanggan" && <PelangganModule />}
+          {isMenuRestored && activeMenu === "stok" && <StokModule />}
+          {isMenuRestored && activeMenu === "label-barcode" && (
+            <LabelBarcodeModule />
+          )}
+          {isMenuRestored && activeMenu === "kas" && <KasModule />}
+          {isMenuRestored && activeMenu === "promo" && <PromoModule />}
+          {isMenuRestored && activeMenu === "laporan" && <LaporanModule />}
+          {isMenuRestored && activeMenu === "sampah" && <SampahModule />}
+          {isMenuRestored && activeMenu === "log-aktivitas" && (
+            <LogAktivitasModule />
+          )}
+          {isMenuRestored && activeMenu === "pengaturan" && (
+            <PengaturanModule />
+          )}
         </div>
       </main>
     </div>

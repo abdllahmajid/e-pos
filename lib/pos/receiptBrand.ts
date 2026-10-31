@@ -46,8 +46,10 @@ const PAPER_DOTS = 384; // kelipatan 8 (1 byte = 8 titik)
 const PREVIEW_SCALE = 3; // preview HTML digambar 3x (1152 px) supaya halus
 const BAND_HEIGHT = 24; // pita kecil = aman untuk buffer printer murah/BLE
 const LOGO_SRC = "/StrukIcon.png";
-const LOGO_MAX_WIDTH = 200;
-const LOGO_MAX_HEIGHT = 75;
+// PERBAIKAN (cetak nyendat): ikon dikecilkan 75 -> 56 titik. Bitmap header
+// ikut menyusut ~17% (±1 KB lebih sedikit dikirim lewat Bluetooth yang pelan).
+const LOGO_MAX_WIDTH = 150;
+const LOGO_MAX_HEIGHT = 56;
 const MAIN_SIZE = 35; // "Langitan.co"
 const SUFFIX_SIZE = 35; // " Store"
 const MAIN_WEIGHT = 800; // bagian awal: tebal

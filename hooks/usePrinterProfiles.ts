@@ -32,12 +32,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   buildReceiptBytes,
   buildTestPrintBytes,
-  connectBluetoothPrinter,
   disconnectBluetoothPrinter,
   getAuthorizedUsbDevices,
   getPairedBluetoothDevices,
   isWebBluetoothSupported,
   isWebUsbSupported,
+  reconnectBluetoothPrinter,
   requestBluetoothPrinter,
   requestUsbPrinter,
   writeToBluetoothPrinter,
@@ -170,6 +170,136 @@ type DeviceRegistryEntry =
 const sharedDeviceRegistry = new Map<string, DeviceRegistryEntry>();
 const sharedScannedBluetooth = new Map<string, MinimalBluetoothDevice>();
 
+// ── PERBAIKAN (koneksi bertahan setelah refresh) ── Seluruh logika
+// "sambung & jaga koneksi Bluetooth" ada di level MODUL (bukan di dalam hook),
+// karena hook ini dipasang di banyak komponen sekaligus dan tiap komponen
+// bisa dibuang kapan saja. Komponen cukup berlangganan status lewat
+// `statusListeners` supaya tampilan ikut berubah.
+//
+// Alur setelah refresh: profil printer (termasuk bluetoothId) sudah tersimpan
+// di localStorage -> begitu halaman termuat, autoConnectBluetooth() mengambil
+// device dari getDevices() (izin lama tetap berlaku) lalu menyambungnya tanpa
+// dialog (lihat reconnectBluetoothPrinter). Kalau printer putus di tengah
+// jalan (mati/keluar jangkauan), dicoba disambung ulang beberapa kali.
+type BluetoothEntry = Extract<DeviceRegistryEntry, { type: "bluetooth" }>;
+type StatusListener = (id: string, status: PrinterStatus) => void;
+
+const statusListeners = new Set<StatusListener>();
+function emitStatus(id: string, status: PrinterStatus) {
+  statusListeners.forEach((listener) => listener(id, status));
+}
+
+const disconnectHandlerKeys = new Set<string>(); // "profileId:deviceId"
+const inflightBluetooth = new Map<string, Promise<BluetoothEntry>>();
+const reconnectAttempts = new Map<string, number>();
+const lastAutoConnectAt = new Map<string, number>();
+const suppressReconnect = new Set<string>(); // profil yang sengaja diputus/dihapus
+
+const MAX_AUTO_RECONNECT_ATTEMPTS = 3;
+const BACKGROUND_RECONNECT_WAIT_MS = 10000; // lama menunggu iklan printer (tanpa kasir menunggu)
+const FOREGROUND_RECONNECT_WAIT_MS = 5000; // saat kasir sedang menekan cetak
+const AUTO_CONNECT_COOLDOWN_MS = 15000; // jangan mencoba lagi terlalu rapat saat tab bolak-balik
+
+/** Cari objek device Bluetooth untuk sebuah profil: yang sedang tersambung, baru dipindai, atau yang pernah diizinkan. */
+async function resolveBluetoothDeviceFor(
+  profile: PrinterProfile,
+): Promise<MinimalBluetoothDevice> {
+  const cached = sharedDeviceRegistry.get(profile.id);
+  if (cached?.type === "bluetooth") return cached.device;
+
+  const scanned = profile.bluetoothId
+    ? sharedScannedBluetooth.get(profile.bluetoothId)
+    : undefined;
+  if (scanned) return scanned;
+
+  const paired = await getPairedBluetoothDevices();
+  const found = paired.find((d) => d.id === profile.bluetoothId);
+  if (!found) {
+    throw new Error(
+      "Printer tidak ditemukan — pastikan sudah pernah dipasangkan lewat 'Cari Printer' dan browser mengizinkan akses ulang.",
+    );
+  }
+  return found;
+}
+
+function scheduleBluetoothReconnect(profileId: string, device: MinimalBluetoothDevice) {
+  const attempt = reconnectAttempts.get(profileId) ?? 0;
+  if (attempt >= MAX_AUTO_RECONNECT_ATTEMPTS) return;
+  reconnectAttempts.set(profileId, attempt + 1);
+
+  setTimeout(() => {
+    if (suppressReconnect.has(profileId)) return;
+    // Profil sudah dihapus dari daftar -> berhenti.
+    if (!loadFromStorage().some((p) => p.id === profileId)) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    openBluetoothEntry(profileId, device, BACKGROUND_RECONNECT_WAIT_MS).catch(() =>
+      scheduleBluetoothReconnect(profileId, device),
+    );
+  }, 2000 * (attempt + 1));
+}
+
+function attachBluetoothDisconnectHandler(profileId: string, device: MinimalBluetoothDevice) {
+  const key = `${profileId}:${device.id}`;
+  if (disconnectHandlerKeys.has(key)) return;
+  disconnectHandlerKeys.add(key);
+  device.addEventListener("gattserverdisconnected", () => {
+    emitStatus(profileId, "disconnected");
+    if (!suppressReconnect.has(profileId)) scheduleBluetoothReconnect(profileId, device);
+  });
+}
+
+/**
+ * Pastikan `device` tersambung & characteristic tulisnya siap. Banyak pemanggil
+ * sekaligus (auto-connect + tombol cetak) berbagi SATU proses lewat
+ * `inflightBluetooth`, jadi tidak pernah ada dua gatt.connect() bertabrakan.
+ */
+function openBluetoothEntry(
+  profileId: string,
+  device: MinimalBluetoothDevice,
+  waitMs: number,
+): Promise<BluetoothEntry> {
+  const existing = sharedDeviceRegistry.get(profileId);
+  if (existing?.type === "bluetooth" && existing.device === device && device.gatt?.connected) {
+    return Promise.resolve(existing);
+  }
+  const pending = inflightBluetooth.get(profileId);
+  if (pending) return pending;
+
+  const promise = (async (): Promise<BluetoothEntry> => {
+    const characteristic = await reconnectBluetoothPrinter(device, waitMs);
+    const entry: BluetoothEntry = { type: "bluetooth", device, characteristic };
+    sharedDeviceRegistry.set(profileId, entry);
+    attachBluetoothDisconnectHandler(profileId, device);
+    reconnectAttempts.set(profileId, 0);
+    emitStatus(profileId, "connected");
+    return entry;
+  })().finally(() => {
+    inflightBluetooth.delete(profileId);
+  });
+  inflightBluetooth.set(profileId, promise);
+  return promise;
+}
+
+/** Sambung diam-diam (tanpa dialog, tanpa error ke layar). Dipakai saat halaman dimuat & tab dibuka kembali. */
+async function autoConnectBluetooth(profile: PrinterProfile): Promise<void> {
+  const existing = sharedDeviceRegistry.get(profile.id);
+  if (existing?.type === "bluetooth" && existing.device.gatt?.connected) {
+    emitStatus(profile.id, "connected");
+    return;
+  }
+  const last = lastAutoConnectAt.get(profile.id) ?? 0;
+  if (Date.now() - last < AUTO_CONNECT_COOLDOWN_MS) return;
+  lastAutoConnectAt.set(profile.id, Date.now());
+
+  suppressReconnect.delete(profile.id);
+  try {
+    const device = await resolveBluetoothDeviceFor(profile);
+    await openBluetoothEntry(profile.id, device, BACKGROUND_RECONNECT_WAIT_MS);
+  } catch {
+    emitStatus(profile.id, "disconnected");
+  }
+}
+
 interface UsePrinterProfilesResult {
   profiles: PrinterProfile[];
   statuses: Record<string, PrinterStatus>;
@@ -231,7 +361,7 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
   // perangkat fisik yang sama tiap kali getDevices() dipanggil — dedupe di
   // sini supaya event listener disconnect tidak menumpuk tiap kali kasir
   // menekan "Tes Koneksi" berkali-kali pada printer yang sama.
-  const disconnectListenerAttachedRef = useRef<Set<string>>(new Set());
+  // (listener disconnect kini ada di level modul — lihat attachBluetoothDisconnectHandler)
 
   // Muat dari localStorage sekali di awal (client-only, lihat pola sama di
   // useThemePreference.ts — default aman dulu, baru dikoreksi di effect).
@@ -240,6 +370,34 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
     setProfiles(loaded);
     setIsLoaded(true);
   }, []);
+
+  // Berlangganan perubahan status dari logika koneksi level modul.
+  useEffect(() => {
+    const listener: StatusListener = (id, status) =>
+      setStatuses((prev) => (prev[id] === status ? prev : { ...prev, [id]: status }));
+    statusListeners.add(listener);
+    return () => {
+      statusListeners.delete(listener);
+    };
+  }, []);
+
+  // ── PERBAIKAN (koneksi bertahan setelah refresh) ── Begitu daftar printer
+  // termuat, sambungkan semua printer Bluetooth yang tersimpan — tanpa dialog.
+  // Dicoba lagi tiap tab kembali dibuka (mis. kasir pindah aplikasi lalu balik).
+  useEffect(() => {
+    if (!isLoaded || !isWebBluetoothSupported()) return;
+    const connectAll = () => {
+      for (const profile of profilesRef.current) {
+        if (profile.connectionType === "bluetooth") void autoConnectBluetooth(profile);
+      }
+    };
+    connectAll();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") connectAll();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [isLoaded]);
 
   const persist = useCallback((next: PrinterProfile[]) => {
     setProfiles(next);
@@ -295,24 +453,8 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
   }, [isLoaded]);
 
   const resolveBluetoothDevice = useCallback(
-    async (profile: PrinterProfile): Promise<MinimalBluetoothDevice> => {
-      const cached = deviceRegistryRef.current.get(profile.id);
-      if (cached?.type === "bluetooth") return cached.device;
-
-      const scanned = profile.bluetoothId
-        ? scannedBluetoothRef.current.get(profile.bluetoothId)
-        : undefined;
-      if (scanned) return scanned;
-
-      const paired = await getPairedBluetoothDevices();
-      const found = paired.find((d) => d.id === profile.bluetoothId);
-      if (!found) {
-        throw new Error(
-          "Printer tidak ditemukan — pastikan sudah pernah dipasangkan lewat 'Cari Printer' dan browser mengizinkan akses ulang.",
-        );
-      }
-      return found;
-    },
+    (profile: PrinterProfile): Promise<MinimalBluetoothDevice> =>
+      resolveBluetoothDeviceFor(profile),
     [],
   );
 
@@ -448,19 +590,9 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
         }
 
         if (profile.connectionType === "bluetooth") {
+          suppressReconnect.delete(id);
           const device = await resolveBluetoothDevice(profile);
-          const characteristic = await connectBluetoothPrinter(device);
-          deviceRegistryRef.current.set(id, {
-            type: "bluetooth",
-            device,
-            characteristic,
-          });
-          if (!disconnectListenerAttachedRef.current.has(id)) {
-            device.addEventListener("gattserverdisconnected", () => {
-              setStatuses((prev) => ({ ...prev, [id]: "disconnected" }));
-            });
-            disconnectListenerAttachedRef.current.add(id);
-          }
+          await openBluetoothEntry(id, device, FOREGROUND_RECONNECT_WAIT_MS);
         } else {
           const device = await resolveUsbDevice(profile);
           if (!device.opened) await device.open();
@@ -495,13 +627,9 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
         const bytes = buildTestPrintBytes(storeName, profile.name);
 
         if (profile.connectionType === "bluetooth") {
-          let entry = deviceRegistryRef.current.get(id);
-          if (!entry || entry.type !== "bluetooth" || !entry.device.gatt?.connected) {
-            const device = await resolveBluetoothDevice(profile);
-            const characteristic = await connectBluetoothPrinter(device);
-            entry = { type: "bluetooth", device, characteristic };
-            deviceRegistryRef.current.set(id, entry);
-          }
+          suppressReconnect.delete(id);
+          const device = await resolveBluetoothDevice(profile);
+          const entry = await openBluetoothEntry(id, device, FOREGROUND_RECONNECT_WAIT_MS);
           await writeToBluetoothPrinter(entry.characteristic, bytes);
         } else {
           let entry = deviceRegistryRef.current.get(id);
@@ -575,13 +703,13 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
         const bytes = buildReceiptBytes(data, brand, qr);
 
         if (profile.connectionType === "bluetooth") {
-          let entry = deviceRegistryRef.current.get(profile.id);
-          if (!entry || entry.type !== "bluetooth" || !entry.device.gatt?.connected) {
-            const device = await resolveBluetoothDevice(profile);
-            const characteristic = await connectBluetoothPrinter(device);
-            entry = { type: "bluetooth", device, characteristic };
-            deviceRegistryRef.current.set(profile.id, entry);
-          }
+          suppressReconnect.delete(profile.id);
+          const device = await resolveBluetoothDevice(profile);
+          const entry = await openBluetoothEntry(
+            profile.id,
+            device,
+            FOREGROUND_RECONNECT_WAIT_MS,
+          );
           await writeToBluetoothPrinter(entry.characteristic, bytes);
         } else {
           let entry = deviceRegistryRef.current.get(profile.id);
@@ -640,6 +768,8 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
 
       const target = profilesRef.current.find((p) => p.id === id);
       const entry = deviceRegistryRef.current.get(id);
+      // Hapus sengaja -> jangan coba disambung ulang otomatis.
+      suppressReconnect.add(id);
       if (entry?.type === "bluetooth") {
         disconnectBluetoothPrinter(entry.device);
       }

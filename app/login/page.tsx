@@ -11,6 +11,7 @@ import {
   EyeOff,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { clearStoredMenu } from "@/lib/pos/activeMenu";
 
 // ── PERBAIKAN (tampilan login) ── Desain ulang total dari versi sebelumnya:
 // 1. Bug kontras: banyak elemen (judul, label, input) sebelumnya pakai
@@ -49,6 +50,8 @@ export default function LoginPage() {
       return;
     }
 
+    // Login baru selalu mulai dari Dashboard — buang menu terakhir sesi sebelumnya.
+    clearStoredMenu();
     router.push("/");
   }
 
