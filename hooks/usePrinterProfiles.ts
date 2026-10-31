@@ -160,6 +160,16 @@ type DeviceRegistryEntry =
     }
   | { type: "usb"; device: MinimalUsbDevice };
 
+// ── PERUBAHAN (koneksi printer bertahan antar menu) ── Hook ini dipanggil di
+// banyak komponen (PengaturanPrinterTab, KasirModule, TransactionDetailModal)
+// dan tiap komponen dibuang saat pindah menu. Kalau handle device disimpan di
+// useRef biasa, setiap pindah menu semuanya hilang & printer terlihat
+// "terputus", padahal koneksi Bluetooth-nya sendiri masih hidup. Karena itu
+// handle disimpan di level MODUL (satu salinan per halaman) dan hook cuma
+// menunjuk ke sana lewat useRef(sharedObjek).
+const sharedDeviceRegistry = new Map<string, DeviceRegistryEntry>();
+const sharedScannedBluetooth = new Map<string, MinimalBluetoothDevice>();
+
 interface UsePrinterProfilesResult {
   profiles: PrinterProfile[];
   statuses: Record<string, PrinterStatus>;
@@ -207,7 +217,16 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
     profilesRef.current = profiles;
   }, [profiles]);
 
-  const deviceRegistryRef = useRef<Map<string, DeviceRegistryEntry>>(new Map());
+  const deviceRegistryRef = useRef<Map<string, DeviceRegistryEntry>>(
+    sharedDeviceRegistry,
+  );
+  // Perangkat Bluetooth yang BARU SAJA dipilih lewat "Cari Printer" di sesi
+  // halaman ini. Disimpan karena navigator.bluetooth.getDevices() belum tentu
+  // tersedia/aktif di semua versi Chrome — tanpa ini, printer yang baru
+  // dipilih langsung dianggap "tidak ditemukan" saat tes koneksi.
+  const scannedBluetoothRef = useRef<Map<string, MinimalBluetoothDevice>>(
+    sharedScannedBluetooth,
+  );
   // Web Bluetooth mengembalikan instance BluetoothDevice yang SAMA untuk
   // perangkat fisik yang sama tiap kali getDevices() dipanggil — dedupe di
   // sini supaya event listener disconnect tidak menumpuk tiap kali kasir
@@ -226,6 +245,26 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
     setProfiles(next);
     saveToStorage(next);
   }, []);
+
+  // Saat komponen ini baru dipasang (mis. kembali ke menu Printer), ambil
+  // status koneksi Bluetooth dari handle yang masih hidup di level modul.
+  useEffect(() => {
+    if (!isLoaded) return;
+    setStatuses((prev) => {
+      const next = { ...prev };
+      for (const profile of profilesRef.current) {
+        if (profile.connectionType !== "bluetooth") continue;
+        const entry = deviceRegistryRef.current.get(profile.id);
+        if (entry?.type === "bluetooth") {
+          next[profile.id] = entry.device.gatt?.connected
+            ? "connected"
+            : "disconnected";
+        }
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded]);
 
   // Best-effort: begitu daftar termuat, cek printer USB mana yang memang
   // sedang tercolok (getAuthorizedUsbDevices menyaring otomatis — perangkat
@@ -259,6 +298,11 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
     async (profile: PrinterProfile): Promise<MinimalBluetoothDevice> => {
       const cached = deviceRegistryRef.current.get(profile.id);
       if (cached?.type === "bluetooth") return cached.device;
+
+      const scanned = profile.bluetoothId
+        ? scannedBluetoothRef.current.get(profile.bluetoothId)
+        : undefined;
+      if (scanned) return scanned;
 
       const paired = await getPairedBluetoothDevices();
       const found = paired.find((d) => d.id === profile.bluetoothId);
@@ -315,6 +359,7 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
     setIsScanning(true);
     try {
       const device = await requestBluetoothPrinter();
+      scannedBluetoothRef.current.set(device.id, device);
       const existing = profilesRef.current.find(
         (p) => p.connectionType === "bluetooth" && p.bluetoothId === device.id,
       );
@@ -451,7 +496,7 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
 
         if (profile.connectionType === "bluetooth") {
           let entry = deviceRegistryRef.current.get(id);
-          if (!entry || entry.type !== "bluetooth") {
+          if (!entry || entry.type !== "bluetooth" || !entry.device.gatt?.connected) {
             const device = await resolveBluetoothDevice(profile);
             const characteristic = await connectBluetoothPrinter(device);
             entry = { type: "bluetooth", device, characteristic };
@@ -531,7 +576,7 @@ export function usePrinterProfiles(): UsePrinterProfilesResult {
 
         if (profile.connectionType === "bluetooth") {
           let entry = deviceRegistryRef.current.get(profile.id);
-          if (!entry || entry.type !== "bluetooth") {
+          if (!entry || entry.type !== "bluetooth" || !entry.device.gatt?.connected) {
             const device = await resolveBluetoothDevice(profile);
             const characteristic = await connectBluetoothPrinter(device);
             entry = { type: "bluetooth", device, characteristic };

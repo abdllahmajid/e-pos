@@ -33,13 +33,21 @@
 // ── Tipe minimal Web Bluetooth ──────────────────────────────────────────
 
 export interface MinimalBluetoothRemoteGATTCharacteristic {
+  uuid?: string;
+  properties?: {
+    write?: boolean;
+    writeWithoutResponse?: boolean;
+  };
   writeValueWithoutResponse(value: BufferSource): Promise<void>;
+  writeValue?(value: BufferSource): Promise<void>;
 }
 
 interface MinimalBluetoothRemoteGATTService {
+  uuid?: string;
   getCharacteristic(
     characteristic: string,
   ): Promise<MinimalBluetoothRemoteGATTCharacteristic>;
+  getCharacteristics?(): Promise<MinimalBluetoothRemoteGATTCharacteristic[]>;
 }
 
 interface MinimalBluetoothRemoteGATTServer {
@@ -49,6 +57,7 @@ interface MinimalBluetoothRemoteGATTServer {
   getPrimaryService(
     service: string,
   ): Promise<MinimalBluetoothRemoteGATTService>;
+  getPrimaryServices?(): Promise<MinimalBluetoothRemoteGATTService[]>;
 }
 
 export interface MinimalBluetoothDevice {
@@ -152,6 +161,24 @@ export function isWebUsbSupported(): boolean {
 export const GENERIC_BLE_PRINTER_SERVICE = "000018f0-0000-1000-8000-00805f9b34fb";
 export const GENERIC_BLE_PRINTER_CHARACTERISTIC =
   "00002af1-0000-1000-8000-00805f9b34fb";
+
+// ── PERUBAHAN (printer BLE merek lain, mis. iWare) ── Tidak semua printer
+// BLE memakai pasangan 18f0/2af1. Web Bluetooth HANYA mengizinkan akses ke
+// service yang didaftarkan di optionalServices saat requestDevice(), jadi
+// semua service yang umum dipakai printer thermal didaftarkan di sini, lalu
+// connectBluetoothPrinter() mencari characteristic yang bisa ditulis.
+export const BLE_PRINTER_SERVICE_CANDIDATES = [
+  GENERIC_BLE_PRINTER_SERVICE, // 18f0 (generik)
+  "49535343-fe7d-4ae5-8fa9-9fafd205e455", // ISSC / Microchip transparent UART
+  "e7810a71-73ae-499d-8c15-faa9aef0c3f2", // varian printer thermal lain
+  "0000ff00-0000-1000-8000-00805f9b34fb",
+  "0000ffe0-0000-1000-8000-00805f9b34fb", // HM-10 style serial
+  "0000fee7-0000-1000-8000-00805f9b34fb",
+  "6e400001-b5a8-f393-e0a9-e50e24dcca9e", // Nordic UART
+  "0000ae00-0000-1000-8000-00805f9b34fb",
+  "0000a002-0000-1000-8000-00805f9b34fb",
+  "0000fff0-0000-1000-8000-00805f9b34fb",
+];
 
 // ── Builder perintah ESC/POS untuk tes print ─────────────────────────────
 // Sengaja terpisah dari template struk (printLogic.ts) — tes print di sini
@@ -429,7 +456,7 @@ export async function requestBluetoothPrinter(): Promise<MinimalBluetoothDevice>
   // kelihatan sama sekali di dialog pilih perangkat.
   return bluetooth.requestDevice({
     acceptAllDevices: true,
-    optionalServices: [GENERIC_BLE_PRINTER_SERVICE],
+    optionalServices: BLE_PRINTER_SERVICE_CANDIDATES,
   });
 }
 
@@ -458,20 +485,77 @@ export async function connectBluetoothPrinter(
     throw new Error("Perangkat ini bukan printer BLE yang didukung (tidak ada GATT).");
   }
   const server = await device.gatt.connect();
-  const service = await server.getPrimaryService(GENERIC_BLE_PRINTER_SERVICE);
-  return service.getCharacteristic(GENERIC_BLE_PRINTER_CHARACTERISTIC);
+
+  // 1) Jalur cepat: pasangan generik yang sudah dikenal.
+  try {
+    const service = await server.getPrimaryService(GENERIC_BLE_PRINTER_SERVICE);
+    return await service.getCharacteristic(GENERIC_BLE_PRINTER_CHARACTERISTIC);
+  } catch {
+    // lanjut ke pencarian otomatis di bawah
+  }
+
+  // 2) Cari service kandidat lain, ambil characteristic pertama yang bisa ditulis.
+  for (const serviceUuid of BLE_PRINTER_SERVICE_CANDIDATES) {
+    try {
+      const service = await server.getPrimaryService(serviceUuid);
+      const characteristics = (await service.getCharacteristics?.()) ?? [];
+      const writable = characteristics.find(
+        (c) => c.properties?.write || c.properties?.writeWithoutResponse,
+      );
+      if (writable) return writable;
+    } catch {
+      // service ini tidak ada di printer — coba kandidat berikutnya
+    }
+  }
+
+  // 3) Tidak ada yang cocok — sebutkan service yang SEBENARNYA ada di printer
+  // supaya UUID-nya bisa ditambahkan ke BLE_PRINTER_SERVICE_CANDIDATES.
+  let found = "tidak terbaca";
+  try {
+    const all = (await server.getPrimaryServices?.()) ?? [];
+    if (all.length) found = all.map((x) => x.uuid).join(", ");
+  } catch {
+    // Browser menolak karena service tidak didaftarkan di optionalServices.
+  }
+  throw new Error(
+    `Service printer tidak dikenali. Service yang terlihat: ${found}`,
+  );
 }
 
-/** Kirim byte ke printer BLE, dipecah per potongan kecil (aman untuk stack BLE lama yang MTU-nya kecil). */
+// ── PERUBAHAN (printer BLE merek lain, mis. iWare RPP02N) ── Printer BLE
+// murah sering punya MTU kecil (20 byte per tulis) dan TIDAK punya buffer besar
+// untuk data yang datang beruntun. Potongan besar tanpa jeda membuat printer
+// hanya menerima beberapa byte pertama (kertas bergerak sedikit) lalu macet.
+// Karena itu data dikirim potongan kecil dengan jeda antar-potongan. Kalau
+// cetak sudah stabil dan terasa lambat, naikkan BLE_CHUNK_SIZE (mis. 100) atau
+// kecilkan BLE_CHUNK_DELAY_MS satu per satu sambil dites.
+const BLE_CHUNK_SIZE = 20;
+const BLE_CHUNK_DELAY_MS = 8;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Kirim byte ke printer BLE: potongan kecil + jeda, supaya buffer printer tidak meluap. */
 export async function writeToBluetoothPrinter(
   characteristic: MinimalBluetoothRemoteGATTCharacteristic,
   bytes: Uint8Array,
 ): Promise<void> {
-  const CHUNK_SIZE = 180;
-  for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
-    await characteristic.writeValueWithoutResponse(
-      bytes.slice(offset, offset + CHUNK_SIZE),
-    );
+  // Kalau characteristic hanya mendukung tulis DENGAN respons, pakai itu —
+  // tiap tulis ditunggu konfirmasinya, jadi aliran data terkontrol sendiri.
+  const useWithResponse =
+    characteristic.properties?.write === true &&
+    characteristic.properties?.writeWithoutResponse !== true &&
+    typeof characteristic.writeValue === "function";
+
+  for (let offset = 0; offset < bytes.length; offset += BLE_CHUNK_SIZE) {
+    const chunk = bytes.slice(offset, offset + BLE_CHUNK_SIZE);
+    if (useWithResponse) {
+      await characteristic.writeValue!(chunk);
+    } else {
+      await characteristic.writeValueWithoutResponse(chunk);
+      await sleep(BLE_CHUNK_DELAY_MS);
+    }
   }
 }
 
@@ -531,7 +615,7 @@ export async function writeToUsbPrinter(
 
   await device.claimInterface(iface.interfaceNumber);
   try {
-    await device.transferOut(outEndpoint.endpointNumber, bytes);
+    await device.transferOut(outEndpoint.endpointNumber, new Uint8Array(bytes));
   } finally {
     await device.releaseInterface(iface.interfaceNumber);
   }
