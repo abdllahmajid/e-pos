@@ -18,6 +18,7 @@ import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   ClipboardCheck,
+  FileSpreadsheet,
   History,
   Inbox,
   Loader2,
@@ -28,6 +29,7 @@ import {
 } from "lucide-react";
 import type { ProductWithCategory } from "@/hooks/useProducts";
 import StokPagination from "./StokPagination";
+import { exportStockToExcel } from "./stokExport";
 import {
   STOCK_STATUS_LABEL,
   formatNumber,
@@ -278,6 +280,17 @@ export default function StokSaatIniTab({
               </option>
             ))}
           </select>
+
+          <button
+            type="button"
+            onClick={() => exportStockToExcel(filtered)}
+            disabled={filtered.length === 0}
+            title="Ekspor daftar yang sedang tampil (sesuai filter & urutan) ke Excel"
+            className="flex items-center justify-center gap-2 rounded-md border border-zinc-300 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+          >
+            <FileSpreadsheet className="h-4 w-4" />
+            Ekspor Excel
+          </button>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">

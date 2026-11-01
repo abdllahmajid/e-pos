@@ -29,7 +29,10 @@ export type StockMovementType =
   | "return"
   | "void"
   | "opname"
-  | "adjustment";
+  | "adjustment"
+  // ── TAMBAHAN (migration 042) ── barang masuk & stok awal produk baru.
+  | "stock_in"
+  | "initial";
 
 /** Jenis mutasi yang bisa dibuat manual dari UI (sisanya otomatis dari RPC transaksi). */
 export type ManualMovementType = Extract<
@@ -44,6 +47,8 @@ export const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
   void: "Void Transaksi",
   opname: "Opname",
   adjustment: "Penyesuaian",
+  stock_in: "Barang Masuk",
+  initial: "Stok Awal",
 };
 
 // Satu baris kartu stok (view `stock_ledger`, migration 037).
@@ -88,6 +93,8 @@ export const STOCK_PAGE_SIZE = 50;
 interface UseStockOptions {
   /** Batasi ke satu produk (kartu stok per produk). Kosong = semua produk. */
   productId?: string | null;
+  /** Batasi ke mutasi yang dibuat satu user (kolom created_by). Kosong = semua user. */
+  userId?: string | null;
   /** Filter jenis mutasi. Kosong/undefined = semua jenis. */
   types?: StockMovementType[];
   /** Tanggal awal (YYYY-MM-DD, zona waktu perangkat), inklusif. Kosong = tanpa batas. */
@@ -160,9 +167,68 @@ function describeLoadError(err: { message?: string; code?: string }): string {
   return message || "Gagal memuat riwayat mutasi stok.";
 }
 
+// Kolom view `stock_ledger` yang dibaca — satu sumber untuk tampilan per halaman
+// dan untuk ekspor.
+const LEDGER_COLUMNS =
+  "id, product_id, type, qty_delta, reference_id, reason, created_by, created_at, product_name, product_sku, product_unit, stock_after";
+
+type RawLedgerRow = Omit<StockMovement, "created_by_name" | "stock_before">;
+
+/**
+ * Ubah baris mentah view `stock_ledger` jadi StockMovement: hitung stok
+ * sebelum, dan isi nama pembuat lewat SATU query ke `profiles` (lihat catatan di
+ * header file soal kenapa tidak pakai embed).
+ */
+async function toMovements(rows: RawLedgerRow[]): Promise<StockMovement[]> {
+  const creatorIds = Array.from(
+    new Set(rows.map((row) => row.created_by).filter((id): id is string => !!id)),
+  );
+
+  const nameById = new Map<string, string>();
+
+  if (creatorIds.length > 0) {
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id, full_name")
+      .in("id", creatorIds);
+
+    for (const profile of profiles ?? []) {
+      if (profile.full_name) nameById.set(profile.id, profile.full_name);
+    }
+  }
+
+  return rows.map((row) => {
+    const qtyDelta = Number(row.qty_delta ?? 0);
+    const stockAfter =
+      row.stock_after === null || row.stock_after === undefined
+        ? null
+        : Number(row.stock_after);
+
+    return {
+      id: row.id,
+      product_id: row.product_id,
+      type: row.type,
+      qty_delta: qtyDelta,
+      reference_id: row.reference_id,
+      reason: row.reason,
+      created_by: row.created_by,
+      created_at: row.created_at,
+      product_name: row.product_name ?? null,
+      product_sku: row.product_sku ?? null,
+      product_unit: row.product_unit ?? null,
+      stock_after: stockAfter,
+      stock_before: stockAfter === null ? null : stockAfter - qtyDelta,
+      created_by_name: row.created_by
+        ? (nameById.get(row.created_by) ?? null)
+        : null,
+    };
+  });
+}
+
 export function useStock(options: UseStockOptions = {}): UseStockResult {
   const {
     productId = null,
+    userId = null,
     types,
     dateFrom = "",
     dateTo = "",
@@ -198,15 +264,13 @@ export function useStock(options: UseStockOptions = {}): UseStockResult {
 
       let query = supabase
         .from("stock_ledger")
-        .select(
-          "id, product_id, type, qty_delta, reference_id, reason, created_by, created_at, product_name, product_sku, product_unit, stock_after",
-          { count: "exact" },
-        )
+        .select(LEDGER_COLUMNS, { count: "exact" })
         .order("created_at", { ascending: false })
         .order("id", { ascending: false })
         .range(rangeStart, rangeStart + pageSize - 1);
 
       if (productId) query = query.eq("product_id", productId);
+      if (userId) query = query.eq("created_by", userId);
       if (typesKey) query = query.in("type", typesKey.split(","));
       if (fromIso) query = query.gte("created_at", fromIso);
       if (toIso) query = query.lt("created_at", toIso);
@@ -233,62 +297,12 @@ export function useStock(options: UseStockOptions = {}): UseStockResult {
         return;
       }
 
-      type RawRow = Omit<
-        StockMovement,
-        "created_by_name" | "stock_before"
-      >;
-
-      const rows = (data ?? []) as unknown as RawRow[];
-
-      // Lookup nama pembuat mutasi sekali untuk semua baris (lihat catatan di
-      // header file soal kenapa tidak pakai embed).
-      const creatorIds = Array.from(
-        new Set(rows.map((row) => row.created_by).filter((id): id is string => !!id)),
-      );
-
-      const nameById = new Map<string, string>();
-
-      if (creatorIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from("profiles")
-          .select("id, full_name")
-          .in("id", creatorIds);
-
-        for (const profile of profiles ?? []) {
-          if (profile.full_name) nameById.set(profile.id, profile.full_name);
-        }
-      }
+      const rows = (data ?? []) as unknown as RawLedgerRow[];
+      const mapped = await toMovements(rows);
 
       if (isCancelled) return;
 
-      setMovements(
-        rows.map((row) => {
-          const qtyDelta = Number(row.qty_delta ?? 0);
-          const stockAfter =
-            row.stock_after === null || row.stock_after === undefined
-              ? null
-              : Number(row.stock_after);
-
-          return {
-            id: row.id,
-            product_id: row.product_id,
-            type: row.type,
-            qty_delta: qtyDelta,
-            reference_id: row.reference_id,
-            reason: row.reason,
-            created_by: row.created_by,
-            created_at: row.created_at,
-            product_name: row.product_name ?? null,
-            product_sku: row.product_sku ?? null,
-            product_unit: row.product_unit ?? null,
-            stock_after: stockAfter,
-            stock_before: stockAfter === null ? null : stockAfter - qtyDelta,
-            created_by_name: row.created_by
-              ? (nameById.get(row.created_by) ?? null)
-              : null,
-          };
-        }),
-      );
+      setMovements(mapped);
       setTotalCount(count ?? rows.length);
       setIsLoading(false);
     }
@@ -298,7 +312,7 @@ export function useStock(options: UseStockOptions = {}): UseStockResult {
     return () => {
       isCancelled = true;
     };
-  }, [productId, typesKey, dateFrom, dateTo, page, pageSize, reloadToken]);
+  }, [productId, userId, typesKey, dateFrom, dateTo, page, pageSize, reloadToken]);
 
   // ---------------- Ringkasan (seluruh baris sesuai filter) ----------------
   // Sengaja tidak bergantung pada `page`: total tidak berubah saat pindah halaman.
@@ -313,6 +327,9 @@ export function useStock(options: UseStockOptions = {}): UseStockResult {
           p_to: startOfNextDayIso(dateTo),
           p_product_id: productId,
           p_types: typesKey ? typesKey.split(",") : null,
+          // Hanya dikirim saat filter user aktif: selama filter itu tidak dipakai,
+          // ringkasan tetap jalan walau migration 043 belum dijalankan.
+          ...(userId ? { p_user_id: userId } : {}),
         },
       );
 
@@ -336,7 +353,7 @@ export function useStock(options: UseStockOptions = {}): UseStockResult {
     return () => {
       isCancelled = true;
     };
-  }, [productId, typesKey, dateFrom, dateTo, reloadToken]);
+  }, [productId, userId, typesKey, dateFrom, dateTo, reloadToken]);
 
   const adjustStock = useCallback(
     async ({
@@ -411,4 +428,136 @@ export function useStock(options: UseStockOptions = {}): UseStockResult {
     refetch,
     adjustStock,
   };
+}
+
+// =====================================================================
+// Ekspor semua baris sesuai filter (bukan hanya halaman yang tampil)
+// =====================================================================
+
+/** Batas baris per ekspor — menjaga browser tetap responsif dan file Excel wajar. */
+export const STOCK_EXPORT_MAX_ROWS = 20000;
+
+const EXPORT_PAGE = 1000;
+
+export interface StockExportFilters {
+  productId?: string | null;
+  userId?: string | null;
+  types?: StockMovementType[];
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+export interface StockExportResult {
+  rows: StockMovement[];
+  /** True kalau data lebih banyak dari STOCK_EXPORT_MAX_ROWS dan sisanya tidak ikut. */
+  truncated: boolean;
+}
+
+/**
+ * Ambil SEMUA mutasi yang cocok dengan filter (bertahap 1000 baris per
+ * permintaan, urutan sama dengan tampilan: terbaru dulu) untuk diekspor.
+ * Melempar Error dengan pesan yang bisa ditampilkan ke user.
+ */
+export async function fetchMovementsForExport(
+  filters: StockExportFilters,
+  maxRows: number = STOCK_EXPORT_MAX_ROWS,
+): Promise<StockExportResult> {
+  const fromIso = startOfDayIso(filters.dateFrom);
+  const toIso = startOfNextDayIso(filters.dateTo);
+  const types = filters.types ?? [];
+
+  const collected: RawLedgerRow[] = [];
+  let from = 0;
+
+  // `<=` (bukan `<`): sengaja mengambil sampai MELEBIHI batas satu baris, supaya
+  // tahu pasti apakah masih ada data tersisa. Tanpa ini, data yang pas sebesar
+  // batas akan salah ditandai "terpotong".
+  while (collected.length <= maxRows) {
+    let query = supabase
+      .from("stock_ledger")
+      .select(LEDGER_COLUMNS)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, from + EXPORT_PAGE - 1);
+
+    if (filters.productId) query = query.eq("product_id", filters.productId);
+    if (filters.userId) query = query.eq("created_by", filters.userId);
+    if (types.length > 0) query = query.in("type", types);
+    if (fromIso) query = query.gte("created_at", fromIso);
+    if (toIso) query = query.lt("created_at", toIso);
+
+    const { data, error: fetchError } = await query;
+
+    if (fetchError) {
+      throw new Error(describeLoadError(fetchError));
+    }
+
+    const page = (data ?? []) as unknown as RawLedgerRow[];
+    collected.push(...page);
+
+    if (page.length < EXPORT_PAGE) break;
+    from += EXPORT_PAGE;
+  }
+
+  const truncated = collected.length > maxRows;
+  const limited = collected.slice(0, maxRows);
+
+  return { rows: await toMovements(limited), truncated };
+}
+
+// =====================================================================
+// Daftar user yang pernah membuat mutasi (untuk filter "Oleh")
+// =====================================================================
+
+export interface StockActor {
+  id: string;
+  name: string;
+  movementCount: number;
+}
+
+/**
+ * User yang pernah membuat mutasi stok, dari RPC `stock_movement_actors`
+ * (migration 043). Kalau RPC belum ada / gagal, daftar kosong dan layar
+ * menyembunyikan filter user — bukan error yang mengganggu.
+ */
+export function useStockActors(): { actors: StockActor[]; isLoading: boolean } {
+  const [actors, setActors] = useState<StockActor[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function load() {
+      const { data, error: rpcError } = await supabase.rpc(
+        "stock_movement_actors",
+      );
+
+      if (isCancelled) return;
+
+      if (rpcError || !Array.isArray(data)) {
+        setActors([]);
+        setIsLoading(false);
+        return;
+      }
+
+      setActors(
+        (data as { user_id: string; full_name: string | null; movement_count: number }[]).map(
+          (row) => ({
+            id: row.user_id,
+            name: row.full_name ?? "Tanpa nama",
+            movementCount: Number(row.movement_count),
+          }),
+        ),
+      );
+      setIsLoading(false);
+    }
+
+    load();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  return { actors, isLoading };
 }

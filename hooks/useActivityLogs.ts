@@ -43,13 +43,17 @@ export type ActivityLogAction =
   // ── TAMBAHAN (migration 041) ── sesi opname stok (entity "stock_opname")
   | "opname_start"
   | "opname_finalize"
-  | "opname_cancel";
+  | "opname_cancel"
+  // ── TAMBAHAN (migration 042) ── barang masuk (entity "stock_receipt")
+  | "stock_receive"
+  | "stock_receive_void";
 
 export type ActivityLogEntity =
   | "transaction"
   | "product"
   | "shift"
-  | "stock_opname";
+  | "stock_opname"
+  | "stock_receipt";
 
 /** Label Indonesia per action — dipakai tabel Log Aktivitas & filter dropdown. */
 export const ACTIVITY_ACTION_LABEL: Record<ActivityLogAction, string> = {
@@ -67,6 +71,8 @@ export const ACTIVITY_ACTION_LABEL: Record<ActivityLogAction, string> = {
   opname_start: "Mulai Sesi Opname",
   opname_finalize: "Selesaikan Sesi Opname",
   opname_cancel: "Batalkan Sesi Opname",
+  stock_receive: "Barang Masuk",
+  stock_receive_void: "Batalkan Barang Masuk",
 };
 
 /** Warna chip ringkas: merah untuk aksi "menghilangkan", hijau untuk "mengembalikan", abu untuk netral. */
@@ -82,7 +88,8 @@ export function activityActionTone(
     action === "transaction_delete" ||
     action === "void_transaction" ||
     action === "cash_void" ||
-    action === "opname_cancel"
+    action === "opname_cancel" ||
+    action === "stock_receive_void"
   ) {
     return "destructive";
   }

@@ -3,6 +3,7 @@
 //   - OpnameStartModal    : mulai sesi baru (nama, cakupan, catatan).
 //   - OpnameFinalizeModal : tinjau selisih lalu terapkan ke stok.
 //   - OpnameCancelModal   : batalkan sesi (alasan wajib).
+//   - OpnamePrintModal    : pilihan cetak lembar hitung (Fase 3).
 // Gaya mengikuti AdjustStockModal supaya tampilan modal di menu Stok seragam.
 
 "use client";
@@ -17,7 +18,11 @@ import {
 } from "lucide-react";
 import type { Category } from "@/lib/pos/types";
 import type { ProductWithCategory } from "@/hooks/useProducts";
-import type { FinalizeOpnameResult, OpnameItem } from "@/hooks/useOpname";
+import type {
+  FinalizeOpnameResult,
+  OpnameItem,
+  OpnameSession,
+} from "@/hooks/useOpname";
 import {
   deltaColorClass,
   formatDelta,
@@ -25,6 +30,7 @@ import {
   formatRupiah,
 } from "./stokUtils";
 import { itemDiff, type OpnameStats } from "./opnameUtils";
+import { printCountSheet } from "./stokPrint";
 
 const overlayClass =
   "fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4";
@@ -535,6 +541,118 @@ export function OpnameCancelModal({
             ) : (
               "Batalkan Sesi"
             )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// Cetak lembar hitung
+// =====================================================================
+
+export function OpnamePrintModal({
+  session,
+  items,
+  onClose,
+}: {
+  session: OpnameSession;
+  items: OpnameItem[];
+  onClose: () => void;
+}) {
+  const [showSystemQty, setShowSystemQty] = useState(false);
+  const [onlyUncounted, setOnlyUncounted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const uncountedCount = items.filter((item) => item.counted_qty === null).length;
+  const printCount = onlyUncounted ? uncountedCount : items.length;
+
+  const handlePrint = () => {
+    setError(null);
+
+    const printed = printCountSheet(session, items, {
+      showSystemQty,
+      onlyUncounted,
+    });
+
+    if (!printed) {
+      setError("Tidak ada produk yang perlu dicetak.");
+      return;
+    }
+
+    onClose();
+  };
+
+  return (
+    <div className={overlayClass}>
+      <div className={dialogClass}>
+        <ModalHeader title="Cetak Lembar Hitung" onClose={onClose} />
+
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          Lembar berisi daftar produk dengan kolom kosong untuk menulis hasil
+          hitung di rak. Isi hasilnya ke layar ini setelah selesai menghitung.
+        </p>
+
+        <div className="mt-4 space-y-3">
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={showSystemQty}
+              onChange={(e) => setShowSystemQty(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-lco-green"
+            />
+            <span>
+              Cetak kolom Stok Sistem
+              <span className="block text-xs text-zinc-400">
+                Bawaan dimatikan (hitung buta): penghitung yang tahu angka
+                sistem cenderung menyamakan hasilnya.
+              </span>
+            </span>
+          </label>
+
+          <label
+            className={`flex items-start gap-2 text-sm ${
+              uncountedCount === items.length ? "opacity-50" : ""
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={onlyUncounted}
+              onChange={(e) => setOnlyUncounted(e.target.checked)}
+              disabled={uncountedCount === items.length}
+              className="mt-0.5 h-4 w-4 accent-lco-green"
+            />
+            <span>
+              Hanya produk yang belum dihitung
+              <span className="block text-xs text-zinc-400">
+                Berguna kalau opname dilanjutkan di hari lain.
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <p className="mt-4 text-xs text-zinc-500">
+          {formatNumber(printCount)} produk akan dicetak.
+        </p>
+
+        {error && <ErrorBox message={error} />}
+
+        <div className="mt-5 flex gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full rounded-md border border-zinc-300 px-4 py-2.5 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+          >
+            Batal
+          </button>
+          <button
+            type="button"
+            onClick={handlePrint}
+            disabled={printCount === 0}
+            className={primaryButtonClass}
+          >
+            Cetak
           </button>
         </div>
       </div>

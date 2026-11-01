@@ -21,6 +21,20 @@ export function formatRupiah(value: number): string {
   return rupiahFormatter.format(value);
 }
 
+/**
+ * Format kolom `date` polos ("YYYY-MM-DD"). Komponen tanggal diparse manual:
+ * `new Date("2026-11-01")` dibaca sebagai UTC tengah malam dan bisa mundur satu
+ * hari saat ditampilkan di WIB.
+ */
+export function formatDateOnly(value: string | null): string {
+  if (!value) return "-";
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return "-";
+  return new Intl.DateTimeFormat("id-ID", { dateStyle: "medium" }).format(
+    new Date(year, month - 1, day),
+  );
+}
+
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("id-ID", {
     day: "2-digit",
@@ -50,7 +64,10 @@ export function movementTypeColorClass(type: StockMovementType): string {
       return "text-zinc-700 dark:text-zinc-300";
     case "return":
     case "void":
+    case "stock_in":
       return "text-lco-green dark:text-lco-teal";
+    case "initial":
+      return "text-zinc-500 dark:text-zinc-400";
     case "opname":
       return "text-sky-700 dark:text-sky-400";
     case "adjustment":

@@ -6,6 +6,8 @@
 // - Paging, bukan lagi "150 baris terakhir".
 // - Kartu Stok Masuk / Stok Keluar / Jumlah Mutasi dihitung di database untuk
 //   SEMUA baris yang cocok dengan filter, bukan dijumlah dari baris yang tampil.
+// - Filter "Oleh" (user pembuat mutasi) dan tombol Ekspor Excel (semua baris
+//   sesuai filter, bukan hanya halaman yang tampil) — migration 043.
 //
 // Komponen ini murni tampilan: state filter & halaman dipegang StokModule supaya
 // tidak hilang saat pindah tab.
@@ -17,6 +19,7 @@ import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
+  FileSpreadsheet,
   Inbox,
   ListChecks,
   Loader2,
@@ -25,14 +28,19 @@ import {
 } from "lucide-react";
 import {
   MOVEMENT_TYPE_LABEL,
+  STOCK_EXPORT_MAX_ROWS,
+  fetchMovementsForExport,
+  type StockActor,
   type StockMovement,
   type StockMovementType,
   type StockSummary,
 } from "@/hooks/useStock";
 import type { ProductWithCategory } from "@/hooks/useProducts";
 import StokPagination from "./StokPagination";
+import { exportMovementsToExcel } from "./stokExport";
 import {
   deltaColorClass,
+  formatDateOnly,
   formatDateTime,
   formatDelta,
   formatNumber,
@@ -46,6 +54,8 @@ export interface RiwayatFilters {
   dateFrom: string;
   dateTo: string;
   productId: string | null;
+  /** User pembuat mutasi (created_by). Null = semua user. */
+  userId: string | null;
 }
 
 export const EMPTY_RIWAYAT_FILTERS: RiwayatFilters = {
@@ -53,6 +63,7 @@ export const EMPTY_RIWAYAT_FILTERS: RiwayatFilters = {
   dateFrom: "",
   dateTo: "",
   productId: null,
+  userId: null,
 };
 
 const FILTER_TYPES: StockMovementType[] = [
@@ -61,6 +72,8 @@ const FILTER_TYPES: StockMovementType[] = [
   "void",
   "opname",
   "adjustment",
+  "stock_in",
+  "initial",
 ];
 
 interface StokRiwayatTabProps {
@@ -77,6 +90,8 @@ interface StokRiwayatTabProps {
   onPageChange: (page: number) => void;
   /** Daftar produk untuk pemilih filter produk. */
   products: ProductWithCategory[];
+  /** User yang pernah membuat mutasi (pilihan filter Oleh). Kosong = filter disembunyikan. */
+  actors: StockActor[];
 }
 
 // --------------------------------------------------------
@@ -197,12 +212,91 @@ export default function StokRiwayatTab({
   pageSize,
   onPageChange,
   products,
+  actors,
 }: StokRiwayatTabProps) {
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportNote, setExportNote] = useState<{
+    type: "ok" | "error";
+    text: string;
+  } | null>(null);
+
   const hasFilter =
     filters.types.length > 0 ||
     filters.dateFrom !== "" ||
     filters.dateTo !== "" ||
-    filters.productId !== null;
+    filters.productId !== null ||
+    filters.userId !== null;
+
+  // Ekspor mengambil SEMUA baris sesuai filter (bertahap, ada batas), bukan hanya
+  // halaman yang tampil, lalu membangun file Excel di browser.
+  const handleExport = async () => {
+    setIsExporting(true);
+    setExportNote(null);
+
+    try {
+      const { rows, truncated } = await fetchMovementsForExport({
+        productId: filters.productId,
+        userId: filters.userId,
+        types: filters.types,
+        dateFrom: filters.dateFrom,
+        dateTo: filters.dateTo,
+      });
+
+      if (rows.length === 0) {
+        setExportNote({
+          type: "error",
+          text: "Tidak ada mutasi untuk diekspor dengan filter ini.",
+        });
+        return;
+      }
+
+      const productName = filters.productId
+        ? (products.find((product) => product.id === filters.productId)?.name ??
+          "Produk terpilih")
+        : "Semua produk";
+      const userName = filters.userId
+        ? (actors.find((actor) => actor.id === filters.userId)?.name ??
+          "User terpilih")
+        : "Semua user";
+
+      const dateLabel =
+        filters.dateFrom || filters.dateTo
+          ? `${filters.dateFrom ? formatDateOnly(filters.dateFrom) : "awal"} – ${
+              filters.dateTo ? formatDateOnly(filters.dateTo) : "sekarang"
+            }`
+          : "Semua tanggal";
+
+      exportMovementsToExcel(rows, {
+        filterLines: [
+          ["Rentang tanggal", dateLabel],
+          ["Produk", productName],
+          ["Oleh", userName],
+          [
+            "Jenis mutasi",
+            filters.types.length > 0
+              ? filters.types.map((type) => MOVEMENT_TYPE_LABEL[type]).join(", ")
+              : "Semua jenis",
+          ],
+        ],
+        truncated,
+        typeLabels: MOVEMENT_TYPE_LABEL,
+      });
+
+      setExportNote({
+        type: "ok",
+        text: truncated
+          ? `${formatNumber(rows.length)} mutasi terbaru diekspor (batas ${formatNumber(STOCK_EXPORT_MAX_ROWS)} baris). Persempit filter untuk sisanya.`
+          : `${formatNumber(rows.length)} mutasi diekspor.`,
+      });
+    } catch (err) {
+      setExportNote({
+        type: "error",
+        text: err instanceof Error ? err.message : "Gagal mengekspor riwayat mutasi.",
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const toggleType = (type: StockMovementType) => {
     const next = filters.types.includes(type)
@@ -288,7 +382,11 @@ export default function StokRiwayatTab({
 
       {/* ---------------- Filter ---------------- */}
       <div className={`${cardClass} mb-4`}>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div
+          className={`grid grid-cols-1 gap-3 ${
+            actors.length > 0 ? "md:grid-cols-4" : "md:grid-cols-3"
+          }`}
+        >
           <div>
             <label className="mb-1 block text-xs font-medium text-zinc-500">
               Dari tanggal
@@ -323,6 +421,27 @@ export default function StokRiwayatTab({
               onChange={(productId) => onFiltersChange({ productId })}
             />
           </div>
+          {actors.length > 0 && (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-zinc-500">
+                Oleh
+              </label>
+              <select
+                value={filters.userId ?? ""}
+                onChange={(e) =>
+                  onFiltersChange({ userId: e.target.value || null })
+                }
+                className={`${inputClass} w-full`}
+              >
+                <option value="">Semua user</option>
+                {actors.map((actor) => (
+                  <option key={actor.id} value={actor.id}>
+                    {actor.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
@@ -362,7 +481,34 @@ export default function StokRiwayatTab({
               Reset filter
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={isExporting}
+            title="Ekspor semua mutasi sesuai filter ke Excel"
+            className="ml-auto flex items-center gap-2 rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium transition-colors duration-150 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-900"
+          >
+            {isExporting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="h-3.5 w-3.5" />
+            )}
+            Ekspor Excel
+          </button>
         </div>
+
+        {exportNote && (
+          <p
+            className={`mt-2 text-xs ${
+              exportNote.type === "ok"
+                ? "text-lco-green dark:text-lco-teal"
+                : "text-lco-coral"
+            }`}
+          >
+            {exportNote.text}
+          </p>
+        )}
       </div>
 
       {/* ---------------- Tabel ---------------- */}

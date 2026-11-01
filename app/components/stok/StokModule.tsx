@@ -2,10 +2,11 @@
 
 // ── REVISI (Fase 1 perbaikan Stok & Opname) ── Modul Stok & Opname (PRD §17 T-05
 // + §4.3 "Mutasi stok"). Sebelumnya satu layar berisi riwayat mutasi saja; kini
-// jadi "shell" tipis dengan tiga tab (pola yang sama dengan PengaturanModule):
+// jadi "shell" tipis dengan empat tab (pola yang sama dengan PengaturanModule):
 //   1. Stok Saat Ini  — StokSaatIniTab.tsx   (stok, minimum, status, nilai persediaan)
-//   2. Sesi Opname    — OpnameTab.tsx        (daftar sesi + layar hitung)
-//   3. Riwayat Mutasi — StokRiwayatTab.tsx   (kartu stok: sebelum/sesudah, filter, paging)
+//   2. Barang Masuk   — BarangMasukTab.tsx   (penerimaan barang: supplier, nota, harga beli)
+//   3. Sesi Opname    — OpnameTab.tsx        (daftar sesi + layar hitung)
+//   4. Riwayat Mutasi — StokRiwayatTab.tsx   (kartu stok: sebelum/sesudah, filter, paging)
 // Modal Opname / Penyesuaian dipindah ke AdjustStockModal.tsx tanpa perubahan alur.
 //
 // State filter & halaman riwayat dipegang di sini (bukan di tab) supaya tidak
@@ -21,7 +22,9 @@
 // banyak produk, tinjau selisih, lalu terapkan sekaligus. Tombol "Penyesuaian
 // Cepat" di header tetap ada untuk koreksi satu produk tanpa sesi.
 //
-// Yang SENGAJA belum ada (Fase 3): menu barang masuk, cetak lembar hitung, ekspor.
+// Fase 3: tab "Barang Masuk" (BarangMasukTab.tsx), cetak lembar hitung &
+// ekspor Excel hasil opname (OpnameSessionDetail), ekspor daftar Stok Saat Ini,
+// dan stok awal produk baru yang kini tercatat otomatis sebagai mutasi.
 
 import { useCallback, useState } from "react";
 import {
@@ -29,10 +32,12 @@ import {
   ClipboardList,
   History,
   Package,
+  PackagePlus,
   ShieldAlert,
 } from "lucide-react";
 import {
   useStock,
+  useStockActors,
   STOCK_PAGE_SIZE,
   type AdjustStockResult,
   type ManualMovementType,
@@ -40,6 +45,7 @@ import {
 import { useProducts, type ProductWithCategory } from "@/hooks/useProducts";
 import { useAuth, hasPermission, hasPermissionAction } from "@/hooks/useAuth";
 import AdjustStockModal from "./AdjustStockModal";
+import BarangMasukTab from "./BarangMasukTab";
 import OpnameTab from "./OpnameTab";
 import StokSaatIniTab from "./StokSaatIniTab";
 import StokRiwayatTab, {
@@ -47,10 +53,11 @@ import StokRiwayatTab, {
   type RiwayatFilters,
 } from "./StokRiwayatTab";
 
-type StokTab = "saat_ini" | "opname" | "riwayat";
+type StokTab = "saat_ini" | "barang_masuk" | "opname" | "riwayat";
 
 const TABS: { key: StokTab; label: string; icon: typeof Package }[] = [
   { key: "saat_ini", label: "Stok Saat Ini", icon: Package },
+  { key: "barang_masuk", label: "Barang Masuk", icon: PackagePlus },
   { key: "opname", label: "Sesi Opname", icon: ClipboardList },
   { key: "riwayat", label: "Riwayat Mutasi", icon: History },
 ];
@@ -78,11 +85,15 @@ export default function StokModule() {
     adjustStock,
   } = useStock({
     productId: filters.productId,
+    userId: filters.userId,
     types: filters.types,
     dateFrom: filters.dateFrom,
     dateTo: filters.dateTo,
     page,
   });
+
+  // User yang pernah membuat mutasi — pilihan filter "Oleh" di tab Riwayat.
+  const { actors } = useStockActors();
 
   // includeInactive: produk nonaktif tetap punya stok fisik di rak dan tetap
   // perlu diopname — beda dengan layar Kasir yang hanya boleh menjual yang aktif.
@@ -131,8 +142,8 @@ export default function StokModule() {
     [adjustStock, refetchProducts],
   );
 
-  // Sesi opname selesai = stok banyak produk berubah sekaligus: segarkan daftar
-  // Stok Saat Ini dan kartu stok.
+  // Sesi opname selesai / barang masuk dicatat atau dibatalkan = stok banyak
+  // produk berubah sekaligus: segarkan daftar Stok Saat Ini dan kartu stok.
   const handleOpnameStockChanged = useCallback(() => {
     refetchProducts();
     refetchMovements();
@@ -212,6 +223,14 @@ export default function StokModule() {
         />
       )}
 
+      {activeTab === "barang_masuk" && (
+        <BarangMasukTab
+          products={products}
+          canEdit={canAdjustStock}
+          onStockChanged={handleOpnameStockChanged}
+        />
+      )}
+
       {activeTab === "opname" && (
         <OpnameTab
           products={products}
@@ -234,6 +253,7 @@ export default function StokModule() {
           pageSize={STOCK_PAGE_SIZE}
           onPageChange={setPage}
           products={products}
+          actors={actors}
         />
       )}
 

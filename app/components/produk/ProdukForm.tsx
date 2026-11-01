@@ -339,6 +339,13 @@ export default function ProdukForm({
                       placeholder="0"
                       className="w-full rounded-md border border-zinc-300 px-3 py-2.5 font-mono text-sm tabular-nums outline-none transition-colors duration-150 focus:border-lco-teal focus:ring-2 focus:ring-lco-teal disabled:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:disabled:bg-zinc-800"
                     />
+                    {!isEdit && (
+                      <p className="mt-1.5 text-xs text-zinc-400">
+                        Stok awal tercatat di riwayat mutasi sebagai Stok Awal.
+                        Untuk menambah stok berikutnya, pakai Barang Masuk di
+                        menu Stok &amp; Opname.
+                      </p>
+                    )}
                     {isEdit && (
                       <p className="mt-1.5 text-xs text-zinc-400">
                         Stok tidak bisa diubah dari sini. Ubah lewat menu Stok

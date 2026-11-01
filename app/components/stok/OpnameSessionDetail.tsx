@@ -18,8 +18,10 @@ import {
   ArrowLeft,
   Ban,
   CheckCircle2,
+  FileSpreadsheet,
   Inbox,
   Loader2,
+  Printer,
   ScanBarcode,
   Search,
   X,
@@ -29,7 +31,9 @@ import StokPagination from "./StokPagination";
 import {
   OpnameCancelModal,
   OpnameFinalizeModal,
+  OpnamePrintModal,
 } from "./OpnameModals";
+import { exportOpnameToExcel } from "./stokExport";
 import {
   OPNAME_STATUS_LABEL,
   computeOpnameStats,
@@ -90,6 +94,7 @@ export default function OpnameSessionDetail({
   const [scanFeedback, setScanFeedback] = useState<ScanFeedback | null>(null);
   const [showFinalize, setShowFinalize] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
+  const [showPrint, setShowPrint] = useState(false);
   const scanInputRef = useRef<HTMLInputElement>(null);
 
   const isDraft = session?.status === "draft";
@@ -314,6 +319,28 @@ export default function OpnameSessionDetail({
             )}
           </div>
 
+          <div className="flex flex-col gap-2 md:items-end">
+            <div className="flex flex-wrap gap-2">
+              {isDraft && (
+                <button
+                  type="button"
+                  onClick={() => setShowPrint(true)}
+                  className="flex items-center gap-2 rounded-md border border-zinc-300 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+                >
+                  <Printer className="h-4 w-4" />
+                  Cetak Lembar Hitung
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => exportOpnameToExcel(session, items)}
+                className="flex items-center gap-2 rounded-md border border-zinc-300 px-3.5 py-2 text-sm font-medium transition-colors duration-150 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+              >
+                <FileSpreadsheet className="h-4 w-4" />
+                Ekspor Excel
+              </button>
+            </div>
+
           {canCount && (
             <div className="flex gap-2">
               <button
@@ -335,6 +362,7 @@ export default function OpnameSessionDetail({
               </button>
             </div>
           )}
+          </div>
         </div>
 
         <div className="mt-4">
@@ -645,6 +673,14 @@ export default function OpnameSessionDetail({
             onStockChanged();
             onSessionChanged();
           }}
+        />
+      )}
+
+      {showPrint && (
+        <OpnamePrintModal
+          session={session}
+          items={items}
+          onClose={() => setShowPrint(false)}
         />
       )}
 
