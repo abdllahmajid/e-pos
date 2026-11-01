@@ -50,11 +50,13 @@ const ENTITY_FILTER_OPTIONS: {
   { value: "transaction", label: "Transaksi" },
   { value: "product", label: "Produk" },
   { value: "shift", label: "Shift & Kas" },
+  { value: "stock_opname", label: "Sesi Opname" },
 ];
 
 function entityLabel(entity: string): string {
   if (entity === "transaction") return "Transaksi";
   if (entity === "shift") return "Shift & Kas";
+  if (entity === "stock_opname") return "Sesi Opname";
   return "Produk";
 }
 

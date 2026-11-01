@@ -2413,3 +2413,46 @@ di SQL Editor Supabase (idempotent, aman diulang). Setelah itu, update juga
   Tambah. Role custom harus diatur manual di Pengaturan > Role.
 - `LOYALTY_POINT_VALUE = 100` diduplikasi di `PelangganModule.tsx` (konstanta
   di KasirModule tidak di-export) — ubah keduanya bersamaan.
+
+
+---
+
+## Sesi: Izin per user (migration 038) — konsep sama dengan aplikasi Monitoring Konveksi
+
+**Wajib dijalankan dulu:** `supabase/migrations/038_per_user_permissions.sql`
+(prasyarat: migration 028–037, termasuk 035/036 milik fitur Pelanggan).
+
+**Perubahan konsep:** hak akses pindah dari role dinamis (tabel `roles`/
+`role_permissions`, level, lintas_kasir) ke **per user**:
+`profiles.permissions` (jsonb, per modul & aksi) + `profiles.roles` (text[],
+label jabatan, boleh lebih dari satu). Hanya `super_admin` yang berarti khusus
+(semua akses). Tab **Role dihapus**; tab Pengaturan Admin jadi tab **Pengguna**
+(daftar user -> detail dengan matriks hak akses + "Tambah Akses Modul").
+
+**Aturan (cermin Konveksi):** Super Admin bebas. User lain tidak bisa mengubah
+role/izin/status akunnya sendiri, tidak bisa MENAMBAH izin yang tidak ia
+punya, tidak bisa menyentuh akun Super Admin. Super Admin terakhir tidak bisa
+diturunkan/dinonaktifkan. Ditegakkan di API (`/api/admin/create-user`,
+`/api/admin/update-user`) DAN trigger `enforce_profiles_role_change`.
+
+**Tidak berubah:** `has_permission()` / `has_permission_action()` (signature
+sama, ±139 policy & RPC tidak disentuh); `hasPermission`/`hasPermissionAction`
+di frontend; undangan user lewat email; reset password; aktif/nonaktif
+(user tidak pernah dihapus permanen).
+
+**Backfill data lama:** izin tiap user = salinan izin role-nya; role sistem
+"Admin" -> `super_admin`; Supervisor/Kasir/QC -> label yang sama; role custom ->
+label terdekat; `lintas_kasir` -> izin `kasir.lintas_kasir`. Tabel lama sengaja
+tidak dihapus (pembersihan opsional ada di akhir file migration).
+
+**Tambah User (revisi):** sama dengan Konveksi — admin mengisi nama, email,
+**password (min. 8)**, dan role langsung; akun aktif tanpa email undangan.
+Password diganti admin lewat "Ubah Profil" (kosong = tidak berubah); email
+login tidak bisa diubah; tombol kirim reset password dihapus. Migration 038
+juga mengisi `profiles.email` yang kosong dari `auth.users`.
+
+**File baru:** `lib/pos/{roles,permissionModules,permissionRules}.ts`,
+`lib/supabase/adminApi.ts`, `app/api/admin/update-user/route.ts`,
+`app/components/pengaturan/PermissionMatrix.tsx`.
+**File dihapus:** `PengaturanRoleTab.tsx`, `hooks/useRoles.ts`,
+`lib/pos/permissionMenuMeta.ts`.

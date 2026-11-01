@@ -2,9 +2,10 @@
 
 // ── REVISI (Fase 1 perbaikan Stok & Opname) ── Modul Stok & Opname (PRD §17 T-05
 // + §4.3 "Mutasi stok"). Sebelumnya satu layar berisi riwayat mutasi saja; kini
-// jadi "shell" tipis dengan dua tab (pola yang sama dengan PengaturanModule):
+// jadi "shell" tipis dengan tiga tab (pola yang sama dengan PengaturanModule):
 //   1. Stok Saat Ini  — StokSaatIniTab.tsx   (stok, minimum, status, nilai persediaan)
-//   2. Riwayat Mutasi — StokRiwayatTab.tsx   (kartu stok: sebelum/sesudah, filter, paging)
+//   2. Sesi Opname    — OpnameTab.tsx        (daftar sesi + layar hitung)
+//   3. Riwayat Mutasi — StokRiwayatTab.tsx   (kartu stok: sebelum/sesudah, filter, paging)
 // Modal Opname / Penyesuaian dipindah ke AdjustStockModal.tsx tanpa perubahan alur.
 //
 // State filter & halaman riwayat dipegang di sini (bukan di tab) supaya tidak
@@ -16,13 +17,20 @@
 //     (migration 031). Yang benar-benar mengikat tetap RLS + cek izin di RPC
 //     `adjust_stock`, bukan layar blokir di bawah.
 //
-// Yang SENGAJA belum ada (Fase 2/3):
-// - Opname berbentuk sesi (hitung banyak produk, tinjau selisih, finalisasi).
-//   Opname di sini masih per produk dan langsung mengubah stok saat disimpan.
-// - Menu barang masuk, cetak lembar hitung, ekspor.
+// Fase 2: tab "Sesi Opname" (OpnameTab.tsx) — opname berbentuk sesi: hitung/scan
+// banyak produk, tinjau selisih, lalu terapkan sekaligus. Tombol "Penyesuaian
+// Cepat" di header tetap ada untuk koreksi satu produk tanpa sesi.
+//
+// Yang SENGAJA belum ada (Fase 3): menu barang masuk, cetak lembar hitung, ekspor.
 
 import { useCallback, useState } from "react";
-import { ClipboardCheck, History, Package, ShieldAlert } from "lucide-react";
+import {
+  ClipboardCheck,
+  ClipboardList,
+  History,
+  Package,
+  ShieldAlert,
+} from "lucide-react";
 import {
   useStock,
   STOCK_PAGE_SIZE,
@@ -32,16 +40,18 @@ import {
 import { useProducts, type ProductWithCategory } from "@/hooks/useProducts";
 import { useAuth, hasPermission, hasPermissionAction } from "@/hooks/useAuth";
 import AdjustStockModal from "./AdjustStockModal";
+import OpnameTab from "./OpnameTab";
 import StokSaatIniTab from "./StokSaatIniTab";
 import StokRiwayatTab, {
   EMPTY_RIWAYAT_FILTERS,
   type RiwayatFilters,
 } from "./StokRiwayatTab";
 
-type StokTab = "saat_ini" | "riwayat";
+type StokTab = "saat_ini" | "opname" | "riwayat";
 
 const TABS: { key: StokTab; label: string; icon: typeof Package }[] = [
   { key: "saat_ini", label: "Stok Saat Ini", icon: Package },
+  { key: "opname", label: "Sesi Opname", icon: ClipboardList },
   { key: "riwayat", label: "Riwayat Mutasi", icon: History },
 ];
 
@@ -64,6 +74,7 @@ export default function StokModule() {
     summary,
     isLoading: isMovementsLoading,
     error: movementsError,
+    refetch: refetchMovements,
     adjustStock,
   } = useStock({
     productId: filters.productId,
@@ -120,6 +131,13 @@ export default function StokModule() {
     [adjustStock, refetchProducts],
   );
 
+  // Sesi opname selesai = stok banyak produk berubah sekaligus: segarkan daftar
+  // Stok Saat Ini dan kartu stok.
+  const handleOpnameStockChanged = useCallback(() => {
+    refetchProducts();
+    refetchMovements();
+  }, [refetchProducts, refetchMovements]);
+
   // ---------------- Layar blokir untuk role tanpa akses ----------------
   if (!isAuthLoading && !canViewStock) {
     return (
@@ -159,7 +177,7 @@ export default function StokModule() {
             className="flex items-center justify-center gap-2 rounded-md bg-lco-green px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-lco-green-hover"
           >
             <ClipboardCheck className="h-4 w-4" />
-            Opname / Penyesuaian
+            Penyesuaian Cepat
           </button>
         )}
       </div>
@@ -191,6 +209,14 @@ export default function StokModule() {
           canAdjust={canAdjustStock}
           onOpname={(product) => setModal({ isOpen: true, product })}
           onViewHistory={openHistoryForProduct}
+        />
+      )}
+
+      {activeTab === "opname" && (
+        <OpnameTab
+          products={products}
+          canEdit={canAdjustStock}
+          onStockChanged={handleOpnameStockChanged}
         />
       )}
 

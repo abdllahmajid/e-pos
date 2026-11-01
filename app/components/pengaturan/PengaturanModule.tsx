@@ -8,9 +8,8 @@
 // - "Pengaturan Admin" — daftar user dari `profiles`, ubah role, aktifkan/
 //                        nonaktifkan, reset password, lewat
 //                        PengaturanAdminTab.tsx.
-// - "Role"             — ── TAMBAHAN (migration 028) ── CRUD role dinamis +
-//                        checklist permission per role, lewat
-//                        PengaturanRoleTab.tsx.
+// - (migration 038) Tab "Role" DIHAPUS. "Pengaturan Admin" kini berisi daftar
+//                        user + hak akses per user (PengaturanAdminTab.tsx).
 //
 // Sub-tab dipisah jadi komponen sendiri (bukan ditulis inline di sini) supaya
 // file ini tetap jadi "shell" tipis (gate akses + tab switcher), sama seperti
@@ -47,7 +46,6 @@
 
 import { useEffect, useState } from "react";
 import {
-  KeyRound,
   Loader2,
   Printer,
   ShieldAlert,
@@ -57,10 +55,9 @@ import {
 import { hasPermission, useAuth } from "@/hooks/useAuth";
 import PengaturanTokoTab from "./PengaturanTokoTab";
 import PengaturanAdminTab from "./PengaturanAdminTab";
-import PengaturanRoleTab from "./PengaturanRoleTab";
 import PengaturanPrinterTab from "./PengaturanPrinterTab";
 
-type PengaturanTab = "toko" | "admin" | "role" | "printer";
+type PengaturanTab = "toko" | "admin" | "printer";
 
 // ── REVISI (migration 028) ── Tiap tab sekarang bawa permission_key
 // sendiri (katalog `permissions`, migration 028) — dipakai `visibleTabs`
@@ -77,14 +74,15 @@ const TABS: {
     icon: Store,
     permission: "pengaturan_toko",
   },
+  // ── REVISI (migration 038) ── Tab "Pengaturan Admin" + tab "Role" digabung
+  // jadi satu tab "Pengguna": daftar user + hak akses PER USER (bukan lagi per
+  // role). Permission key tetap `pengaturan_admin`.
   {
     key: "admin",
-    label: "Pengaturan Admin",
+    label: "Pengguna",
     icon: Users,
     permission: "pengaturan_admin",
   },
-  // ── TAMBAHAN (migration 028) ──
-  { key: "role", label: "Role", icon: KeyRound, permission: "pengaturan_role" },
 ];
 
 // ── TAMBAHAN (Setting Printer) ── SENGAJA di luar array TABS di atas —
@@ -156,7 +154,7 @@ export default function PengaturanModule() {
         </div>
         <h3 className="text-sm font-semibold">Akses Ditolak</h3>
         <p className="mt-1 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-          Role Anda tidak punya akses ke satu pun menu Pengaturan. Hubungi admin
+          Akun Anda tidak punya akses ke satu pun menu Pengaturan. Hubungi admin
           kalau ini seharusnya tidak terjadi.
         </p>
       </div>
@@ -170,8 +168,8 @@ export default function PengaturanModule() {
           Pengaturan
         </h2>
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          Pengaturan toko/struk, kelola user, kelola role, dan kelola printer —
-          PRD §17 T-10, migration 028.
+          Pengaturan toko/struk, kelola user & hak akses, dan kelola printer —
+          PRD §17 T-10, migration 038.
         </p>
       </div>
 
@@ -204,8 +202,6 @@ export default function PengaturanModule() {
           Konsisten dengan pola tab lain di project ini. */}
       {activeTab === "toko" && <PengaturanTokoTab />}
       {activeTab === "admin" && <PengaturanAdminTab />}
-      {/* ── TAMBAHAN (migration 028) ── */}
-      {activeTab === "role" && <PengaturanRoleTab />}
       {/* ── TAMBAHAN (Setting Printer) ── */}
       {activeTab === "printer" && <PengaturanPrinterTab />}
     </div>

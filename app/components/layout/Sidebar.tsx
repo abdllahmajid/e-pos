@@ -215,17 +215,17 @@ export const MENU_GROUPS: SidebarMenuGroup[] = [
     // "supervisor"]` (keputusan sadar pemilik project, lihat header
     // `018_pengaturan_supervisor_access.sql`). Sejak migration 028 role
     // sudah dinamis, jadi gate ini digeneralisasi ke permission: menu
-    // tampil kalau user punya SALAH SATU dari 3 permission tab Pengaturan
-    // (Toko/Admin/Role) — sama persis dengan gate `canAccessSettings` di
-    // PengaturanModule.tsx ("minimal satu dari tiga"), supaya role custom
-    // yang cuma dikasih satu tab pun tetap melihat menunya.
+    // tampil kalau user punya SALAH SATU dari 2 permission tab Pengaturan
+    // (Toko/Admin; tab Role dihapus di migration 038) — sama persis dengan
+    // gate `canAccessSettings` di PengaturanModule.tsx, supaya user yang
+    // cuma dikasih satu tab pun tetap melihat menunya.
     label: "Administrasi",
     items: [
       {
         key: "pengaturan",
         label: "Pengaturan",
         icon: Settings,
-        permissions: ["pengaturan_toko", "pengaturan_admin", "pengaturan_role"],
+        permissions: ["pengaturan_toko", "pengaturan_admin"],
       },
     ],
   },
@@ -553,12 +553,9 @@ export default function Sidebar({
                   {user.full_name || user.email || "Pengguna"}
                 </p>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                  {/* ── REVISI (migration 028/030) ── `ROLE_LABELS[user.role]`
-                      (lookup ke 4 nama role tetap) dihapus — role sekarang
-                      data bebas, namanya sudah human-readable apa adanya
-                      dari tabel `roles` (mis. "Admin", "Kasir Cabang"),
-                      tidak perlu translasi lagi. */}
-                  {user.role_name}
+                  {/* ── REVISI (migration 038) ── Role kini cuma label (boleh
+                      lebih dari satu), disusun di useAuth.ts jadi `role_label`. */}
+                  {user.role_label}
                 </p>
               </div>
             )}

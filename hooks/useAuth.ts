@@ -3,41 +3,29 @@
 import { useEffect, useState } from "react";
 // ⚠️ GANTI path ini setelah kamu ketemu lokasi asli file Supabase client di project kamu.
 import { createClient } from "@/lib/supabase/client";
+import { MODULE_KEYS, resolvePermissions } from "@/lib/pos/permissionModules";
+import { getUserRoles, roleLabel } from "@/lib/pos/roles";
 
 // ── KOREKSI (bug: "selalu rendering" / risiko rate limit auth) ── Dipindah
 // ke scope MODUL (dipanggil sekali saat file ini pertama kali diimpor),
-// bukan di dalam badan `useAuth()` seperti sebelumnya (artinya dulu
-// terpanggil ulang di SETIAP render tiap komponen yang pakai hook ini).
-// Sekarang `createClient()` sendiri sudah singleton (lihat catatan di
-// lib/supabase/client.ts), jadi baris ini aman dipindah — tidak lagi
-// membuat instance GoTrueClient baru sama sekali, cuma mengambil referensi
-// ke instance singleton yang sama dipakai semua hook lain di app ini.
+// bukan di dalam badan `useAuth()`. `createClient()` sudah singleton (lihat
+// catatan di lib/supabase/client.ts), jadi baris ini cuma mengambil referensi
+// ke instance yang sama dipakai semua hook lain di app ini.
 const supabase = createClient();
 
-// ── REVISI (migration 028_dynamic_roles.sql, "sistem role dinamis") ──
-// Enum Postgres `user_role` (admin/supervisor/kasir/qc hardcode) SUDAH
-// DIHAPUS TOTAL di database, diganti tabel `roles`/`permissions`/
-// `role_permissions` — role sekarang bebas dibuat pemilik project lewat tab
-// "Role" di Pengaturan (menyusul, belum ada UI-nya), bukan lagi 4 pilihan
-// tetap. Konsekuensinya:
-// - Tipe `UserRole` DIHAPUS (tidak ada lagi daftar nama role yang pasti/
-//   diketahui saat compile time — role sekarang data, bukan tipe).
-// - `AuthUser.role` (string tunggal) DIHAPUS, diganti `role_id`/`role_name`/
-//   `role_level`/`lintas_kasir` + `permissions` (daftar permission_key yang
-//   allowed=true untuk role user ini, sumbernya tabel role_permissions).
-// - Semua pengecekan akses yang TADINYA `user?.role === "admin" ||
-//   user?.role === "supervisor"` di 7 file modul (StokModule, ProdukModule,
-//   PromoModule, LaporanModule, SampahModule, LogAktivitasModule,
-//   TransactionDetailModal) HARUS diganti `hasPermission(user, "kunci_nya")`
-//   — belum dikerjakan di langkah ini, menyusul langkah terpisah supaya
-//   tetap satu file per langkah.
-// ── TAMBAHAN (migration 031, "permission granular per aksi") ── Sebelumnya
-// tiap baris role_permissions cuma punya 1 flag `allowed` (all-or-nothing per
-// menu). Sekarang dipecah 4 aksi (lihat migration 031 & PengaturanRoleTab.tsx):
-// Lihat/Tambah/Ubah/Hapus per menu. `PermissionActions` merepresentasikan
-// baris itu di sisi client — `view` SELALU jadi prasyarat (kalau false, 3
-// lainnya pasti false juga, ditegakkan constraint DB
-// `role_permissions_view_required`, bukan cuma konvensi frontend).
+// ── REVISI (migration 038, "izin per user") ──
+// Sistem role dinamis (migration 028/031: tabel roles/role_permissions, level,
+// lintas_kasir) DIGANTI izin per user, sama dengan aplikasi Monitoring Konveksi:
+//   - Izin disimpan di `profiles.permissions` (jsonb) — per modul & aksi.
+//   - `profiles.roles` (text[]) hanya LABEL jabatan (boleh lebih dari satu),
+//     kecuali `super_admin` yang selalu punya semua akses.
+// Konsekuensi di file ini:
+//   - `AuthUser.role_id/role_name/role_level/lintas_kasir` DIHAPUS. Gantinya
+//     `roles`, `role_label`, `isSuperAdmin`. (lintas_kasir kini izin
+//     `permissionActions.kasir.lintas_kasir`, hanya dipakai di database.)
+//   - `hasPermission(user, key)` & `hasPermissionAction(user, key, aksi)` TETAP
+//     dengan signature yang sama, jadi semua modul pemanggil tidak perlu diubah.
+//     Super Admin selalu true (cermin has_permission di database).
 export interface PermissionActions {
   view: boolean;
   create: boolean;
@@ -49,58 +37,47 @@ export interface AuthUser {
   id: string;
   email: string | null;
   full_name: string | null;
-  role_id: string;
-  role_name: string;
-  role_level: number;
-  lintas_kasir: boolean;
+  /** Label jabatan (boleh lebih dari satu): super_admin, admin, supervisor, kasir, qc. */
+  roles: string[];
+  /** Label siap tampil, mis. "Admin, Supervisor". */
+  role_label: string;
+  /** Super Admin: semua akses, tidak bergantung pada tabel izin. */
+  isSuperAdmin: boolean;
   /**
-   * ── PERTAHANKAN (migration 031) ── Daftar permission_key yang can_view=true
-   * untuk role user ini — SAMA PERSIS artinya dengan `permissions` sebelum
-   * migration 031 (dulu sumbernya `allowed=true`, sekarang `can_view=true`),
-   * supaya semua caller lama `hasPermission(user, key)` (gate Sidebar, gate
-   * modul per-halaman) tetap jalan tanpa perlu diubah satu per satu.
+   * Daftar permission_key yang boleh di-Lihat — dipertahankan supaya caller
+   * lama `hasPermission(user, key)` (gate Sidebar, gate modul) tetap jalan.
    */
   permissions: string[];
   /**
-   * ── TAMBAHAN (migration 031) ── Detail 4 aksi per permission_key, dipakai
-   * caller yang butuh granularitas lebih dari sekadar "boleh buka menu ini
-   * atau tidak" (mis. tombol Tambah/Ubah/Hapus produk, opname stok, retur
-   * vs void). Key yang TIDAK ADA di map ini berarti keempat aksinya false
-   * (tidak ada baris role_permissions untuk kombinasi itu — lihat migration
-   * 031, "tidak ada baris = ditolak semua aksi").
+   * Detail 4 aksi per permission_key (key yang tidak ada = semua aksi false).
+   * Dipakai caller yang butuh granularitas (tombol Tambah/Ubah/Hapus).
    */
   permissionActions: Record<string, PermissionActions>;
   is_active: boolean;
 }
 
-// ── TAMBAHAN ── Helper murni (bukan hook) supaya bisa dipanggil dari mana
-// saja tanpa import tambahan — pola pemakaian: `hasPermission(user, "stok")`.
-// Sengaja bukan method di dalam AuthUser (AuthUser cuma data hasil query,
-// bukan class) dan bukan dikembalikan sebagai closure dari useAuth() (kalau
-// closure, tiap komponen yang destructure `{ hasPermission }` dari hook lain
-// harus ikut re-render tiap useAuth() re-render — fungsi murni begini lebih
-// ringan, sama sekali tidak butuh hook context).
-//
-// ── PERTAHANKAN (migration 031) ── Tetap berarti "boleh Lihat menu ini",
-// TIDAK berubah walau model permission di belakangnya sekarang granular —
-// pemakai lama (Sidebar, gate top-level tiap modul) tidak perlu disentuh.
+// Helper murni (bukan hook) supaya bisa dipanggil dari mana saja — pola
+// pemakaian: `hasPermission(user, "stok")`. Fail-closed: user null / key tak
+// dikenal selalu false (kecuali Super Admin).
 export function hasPermission(
   user: AuthUser | null,
   permissionKey: string
 ): boolean {
-  return user?.permissions.includes(permissionKey) ?? false;
+  if (!user) return false;
+  return user.isSuperAdmin || user.permissions.includes(permissionKey);
 }
 
-// ── TAMBAHAN (migration 031) ── Cek aksi granular spesifik (bukan cuma
-// Lihat) — dipakai buat menampilkan/menyembunyikan tombol Tambah/Ubah/Hapus
-// per menu sesuai checklist role (lihat PengaturanRoleTab.tsx). Fail-closed:
-// key yang tidak dikenal / user null selalu balik false.
+// Cek aksi granular spesifik (bukan cuma Lihat) — tombol Tambah/Ubah/Hapus per
+// menu sesuai hak akses user. Aksi lain hanya berlaku bila Lihat juga aktif
+// (ditegakkan resolve di loadProfile & has_permission_action di database).
 export function hasPermissionAction(
   user: AuthUser | null,
   permissionKey: string,
   action: keyof PermissionActions
 ): boolean {
-  return user?.permissionActions[permissionKey]?.[action] ?? false;
+  if (!user) return false;
+  if (user.isSuperAdmin) return true;
+  return user.permissionActions[permissionKey]?.[action] ?? false;
 }
 
 interface UseAuthResult {
@@ -117,25 +94,12 @@ export function useAuth(): UseAuthResult {
   const [error, setError] = useState<string | null>(null);
 
   async function loadProfile(authUserId: string, email: string | null) {
-    // ── REVISI (migration 028) ── Satu query nested (bukan lagi
-    // `.select("full_name, role, is_active")` polos) buat sekalian tarik
-    // nama/level/lintas_kasir role-nya DAN daftar permission_key yang
-    // allowed=true — supaya AuthUser lengkap dalam satu round-trip, tidak
-    // perlu query kedua di setiap komponen yang butuh cek permission.
-    // `roles!inner` (bukan left join) aman karena profiles.role_id NOT NULL
-    // dengan FK ke roles, tidak mungkin ada baris profiles tanpa role.
-    // ── REVISI (migration 031) ── `role_permissions ( permission_key, allowed )`
-    // jadi `role_permissions ( permission_key, can_view, can_create, can_edit,
-    // can_delete )` — kolom `allowed` tunggal sudah di-drop dari skema.
+    // ── REVISI (migration 038) ── Satu query ke `profiles` saja (tidak ada
+    // join ke roles/role_permissions lagi): label role + izin per user ada di
+    // baris profil itu sendiri.
     const { data, error: profileError } = await supabase
       .from("profiles")
-      .select(
-        `full_name, is_active, role_id,
-         roles!inner (
-           name, level, lintas_kasir,
-           role_permissions ( permission_key, can_view, can_create, can_edit, can_delete )
-         )`
-      )
+      .select("full_name, is_active, roles, permissions")
       .eq("id", authUserId)
       .single();
 
@@ -147,51 +111,32 @@ export function useAuth(): UseAuthResult {
       return;
     }
 
-    // Supabase-js mengetik hasil join sebagai objek tunggal untuk relasi
-    // many-to-one (`roles!inner`), tapi tipe generatednya kadang lebih aman
-    // dianggap array — `Array.isArray` di sini jaga-jaga dua kemungkinan
-    // bentuk itu tanpa perlu import Database types generated (belum ada di
-    // project ini, lihat catatan lib/supabase/client.ts).
-    const roleRow = Array.isArray(data.roles) ? data.roles[0] : data.roles;
-    type RolePermissionRow = {
-      permission_key: string;
-      can_view: boolean;
-      can_create: boolean;
-      can_edit: boolean;
-      can_delete: boolean;
-    };
-    const rpRows: RolePermissionRow[] = roleRow?.role_permissions ?? [];
+    const roles = getUserRoles({ roles: data.roles });
+    const isSuperAdmin = roles.includes("super_admin");
+    const resolved = resolvePermissions(data.permissions);
 
-    // Sama seperti sebelum migration 031: cuma baris can_view=true yang
-    // berarti "boleh Lihat menu ini" — dipertahankan buat caller lama
-    // `hasPermission(user, key)`.
-    const permissions = rpRows
-      .filter((rp) => rp.can_view)
-      .map((rp) => rp.permission_key);
-
-    // ── TAMBAHAN (migration 031) ── Map lengkap 4 aksi per permission_key,
-    // dipakai `hasPermissionAction`. Key yang tidak ada baris-nya otomatis
-    // tidak masuk map ini -> hasPermissionAction balik false (fail-closed),
-    // konsisten dengan "tidak ada baris = ditolak semua aksi" di migration 031.
+    // Cuma modul dengan view=true yang berarti "boleh Lihat menu ini"; aksi
+    // lain tidak berarti apa-apa tanpa view (cermin has_permission_action).
     const permissionActions: Record<string, PermissionActions> = {};
-    for (const rp of rpRows) {
-      permissionActions[rp.permission_key] = {
-        view: rp.can_view,
-        create: rp.can_create,
-        edit: rp.can_edit,
-        delete: rp.can_delete,
+    for (const key of MODULE_KEYS) {
+      const m = resolved[key];
+      permissionActions[key] = {
+        view: m.view === true,
+        create: m.view === true && m.create === true,
+        edit: m.view === true && m.edit === true,
+        delete: m.view === true && m.delete === true,
       };
     }
+    const permissions = MODULE_KEYS.filter((key) => permissionActions[key].view);
 
     setUser({
       id: authUserId,
       email,
       full_name: data.full_name,
-      role_id: data.role_id,
-      role_name: roleRow?.name ?? "",
-      role_level: roleRow?.level ?? 99,
-      lintas_kasir: roleRow?.lintas_kasir ?? false,
-      permissions,
+      roles,
+      role_label: roles.map(roleLabel).join(", "),
+      isSuperAdmin,
+      permissions: isSuperAdmin ? [...MODULE_KEYS] : permissions,
       permissionActions,
       is_active: data.is_active,
     });
