@@ -98,7 +98,9 @@ export default function ProdukForm({
     setForm((current) => ({
       ...current,
       type,
-      stock: type === "JASA" ? "0" : current.stock,
+      // Mode edit: stok bukan milik form ini (read-only), jadi jangan dikosongkan
+      // saat tipe berpindah — angka stok asli harus tetap terlihat.
+      stock: type === "JASA" && !isEdit ? "0" : current.stock,
       min_stock: type === "JASA" ? "0" : current.min_stock,
     }));
   }
@@ -333,14 +335,14 @@ export default function ProdukForm({
                       min="0"
                       value={form.stock}
                       onChange={(e) => updateField("stock", e.target.value)}
-                      disabled={saving}
+                      disabled={saving || isEdit}
                       placeholder="0"
                       className="w-full rounded-md border border-zinc-300 px-3 py-2.5 font-mono text-sm tabular-nums outline-none transition-colors duration-150 focus:border-lco-teal focus:ring-2 focus:ring-lco-teal disabled:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:disabled:bg-zinc-800"
                     />
                     {isEdit && (
                       <p className="mt-1.5 text-xs text-zinc-400">
-                        Mengubah stok di sini langsung menimpa angka stok saat
-                        ini — tidak tercatat sebagai mutasi/opname.
+                        Stok tidak bisa diubah dari sini. Ubah lewat menu Stok
+                        &amp; Opname supaya tercatat di riwayat mutasi.
                       </p>
                     )}
                   </div>

@@ -1,23 +1,21 @@
 // hooks/useStock.ts
-// ── TAMBAHAN ── Hook domain Stok & Opname (PRD §17 T-05): baca riwayat mutasi stok
-// dari tabel `stock_movements` (migration 009) + aksi opname/penyesuaian manual.
-// Konsumen pertama: app/components/stok/StokModule.tsx.
+// ── REVISI (Fase 1 perbaikan Stok & Opname) ── Hook domain Stok & Opname:
+// baca kartu stok dari view `stock_ledger` (migration 037) + total masuk/keluar
+// dari RPC `stock_movement_summary` + aksi opname/penyesuaian manual.
 //
-// Pembagian tanggung jawab (pola sama dengan useShifts.ts):
-// - Baca: SELECT langsung dari client. Dijaga RLS `stock_movements_select_supervisor`
-//   (migration 009) — kasir memang tidak boleh lihat modul ini sama sekali (PRD §5),
-//   jadi kalau kasir nekat memanggil hook ini, hasilnya array kosong, bukan bocor.
-// - Tulis: WAJIB lewat RPC `adjust_stock` (migration 009). Tidak ada policy INSERT
-//   untuk `stock_movements` dan tidak boleh ada UPDATE `products.stock` langsung dari
-//   client — kalau stok diubah dari client, jejak auditnya bisa tidak ikut tertulis
-//   dan invariant "setiap perubahan stok ada mutasinya" bocor (Aturan Main #5 PRD).
+// Perubahan dari versi sebelumnya:
+// - Baca dari view `stock_ledger` (bukan tabel `stock_movements` + embed produk).
+//   View itu sudah membawa nama/SKU/satuan produk dan `stock_after` (saldo stok
+//   sesudah mutasi), jadi tidak perlu embed PostgREST lagi.
+// - Filter tanggal + produk + jenis, dan paging (bukan lagi "150 baris terakhir").
+// - `summary` (stok masuk / keluar / jumlah mutasi) dihitung di database untuk
+//   SELURUH baris yang cocok dengan filter, bukan dijumlah dari baris yang tampil.
 //
-// Catatan join `created_by`: SENGAJA tidak pakai embed PostgREST
-// (`creator:profiles(full_name)`). Alasannya, di database yang dibuat lewat
-// `scripts/setup-database.sql` kolom itu FK ke `profiles`, sementara versi tabel di
-// migration 004 FK-nya ke `auth.users` — embed akan patah di salah satu jalur. Jadi
-// nama user diambil lewat satu query terpisah ke `profiles` lalu digabung di sini
-// (jumlah user sedikit, cukup murah, dan tidak bergantung pada bentuk FK).
+// Yang TIDAK berubah:
+// - Tulis tetap WAJIB lewat RPC `adjust_stock` (migration 009/031). Tidak ada
+//   UPDATE `products.stock` langsung dari client.
+// - Nama pembuat mutasi tetap diambil lewat satu query terpisah ke `profiles`
+//   (bukan embed), karena bentuk FK `created_by` tidak seragam antar database.
 
 "use client";
 
@@ -48,7 +46,7 @@ export const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
   adjustment: "Penyesuaian",
 };
 
-// Baris asli tabel `stock_movements` (migration 009) + hasil join ringan.
+// Satu baris kartu stok (view `stock_ledger`, migration 037).
 export interface StockMovement {
   id: string;
   product_id: string | null;
@@ -58,11 +56,22 @@ export interface StockMovement {
   reason: string | null;
   created_by: string | null;
   created_at: string;
-  /** Diambil dari embed `products` — null kalau produknya sudah dihapus permanen. */
+  /** Null kalau produknya sudah dihapus permanen. */
   product_name: string | null;
   product_sku: string | null;
-  /** Nama user pembuat mutasi, hasil lookup manual ke `profiles` (lihat catatan atas). */
+  product_unit: string | null;
+  /** Saldo stok SESUDAH mutasi ini. Null kalau produk sudah dihapus permanen. */
+  stock_after: number | null;
+  /** Saldo stok SEBELUM mutasi ini (= stock_after - qty_delta). */
+  stock_before: number | null;
+  /** Nama user pembuat mutasi, hasil lookup manual ke `profiles`. */
   created_by_name: string | null;
+}
+
+export interface StockSummary {
+  masuk: number;
+  keluar: number;
+  jumlah: number;
 }
 
 export interface AdjustStockResult {
@@ -74,17 +83,29 @@ export interface AdjustStockResult {
   new_stock: number;
 }
 
+export const STOCK_PAGE_SIZE = 50;
+
 interface UseStockOptions {
   /** Batasi ke satu produk (kartu stok per produk). Kosong = semua produk. */
   productId?: string | null;
   /** Filter jenis mutasi. Kosong/undefined = semua jenis. */
   types?: StockMovementType[];
-  /** Batas jumlah baris riwayat yang diambil. Default 100. */
-  limit?: number;
+  /** Tanggal awal (YYYY-MM-DD, zona waktu perangkat), inklusif. Kosong = tanpa batas. */
+  dateFrom?: string;
+  /** Tanggal akhir (YYYY-MM-DD, zona waktu perangkat), inklusif. Kosong = tanpa batas. */
+  dateTo?: string;
+  /** Halaman, mulai dari 0. */
+  page?: number;
+  /** Jumlah baris per halaman. Default 50. */
+  pageSize?: number;
 }
 
 interface UseStockResult {
   movements: StockMovement[];
+  /** Jumlah SELURUH baris yang cocok dengan filter (bukan cuma halaman ini). */
+  totalCount: number;
+  /** Total masuk/keluar/jumlah untuk filter yang sama. Null selagi memuat / gagal. */
+  summary: StockSummary | null;
   isLoading: boolean;
   error: string | null;
   refetch: () => void;
@@ -107,8 +128,47 @@ interface UseStockResult {
   }) => Promise<AdjustStockResult>;
 }
 
+/** Awal hari (zona waktu perangkat) dari string YYYY-MM-DD, dalam ISO UTC. */
+function startOfDayIso(dateStr: string | undefined): string | null {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  const date = new Date(`${dateStr}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/** Awal HARI BERIKUTNYA — dipakai sebagai batas atas eksklusif untuk "sampai tanggal". */
+function startOfNextDayIso(dateStr: string | undefined): string | null {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  const date = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setDate(date.getDate() + 1);
+  return date.toISOString();
+}
+
+const MIGRATION_HINT =
+  "Kartu stok belum siap di database. Jalankan migration 037_stock_ledger.sql di Supabase SQL Editor, lalu muat ulang halaman.";
+
+function describeLoadError(err: { message?: string; code?: string }): string {
+  const message = err.message ?? "";
+  if (
+    err.code === "42P01" ||
+    err.code === "PGRST205" ||
+    err.code === "PGRST202" ||
+    /stock_ledger|stock_movement_summary/.test(message)
+  ) {
+    return MIGRATION_HINT;
+  }
+  return message || "Gagal memuat riwayat mutasi stok.";
+}
+
 export function useStock(options: UseStockOptions = {}): UseStockResult {
-  const { productId = null, types, limit = 100 } = options;
+  const {
+    productId = null,
+    types,
+    dateFrom = "",
+    dateTo = "",
+    page = 0,
+    pageSize = STOCK_PAGE_SIZE,
+  } = options;
 
   // types adalah array — kalau dipakai langsung sebagai dependency useEffect,
   // pemanggil yang menulis literal `["opname"]` inline akan memicu fetch ulang
@@ -116,12 +176,15 @@ export function useStock(options: UseStockOptions = {}): UseStockResult {
   const typesKey = types && types.length > 0 ? types.slice().sort().join(",") : "";
 
   const [movements, setMovements] = useState<StockMovement[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [summary, setSummary] = useState<StockSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
   const refetch = useCallback(() => setReloadToken((t) => t + 1), []);
 
+  // ---------------- Baris kartu stok (per halaman) ----------------
   useEffect(() => {
     let isCancelled = false;
 
@@ -129,41 +192,51 @@ export function useStock(options: UseStockOptions = {}): UseStockResult {
       setIsLoading(true);
       setError(null);
 
+      const fromIso = startOfDayIso(dateFrom);
+      const toIso = startOfNextDayIso(dateTo);
+      const rangeStart = page * pageSize;
+
       let query = supabase
-        .from("stock_movements")
+        .from("stock_ledger")
         .select(
-          "id, product_id, type, qty_delta, reference_id, reason, created_by, created_at, product:products(name, sku)",
+          "id, product_id, type, qty_delta, reference_id, reason, created_by, created_at, product_name, product_sku, product_unit, stock_after",
+          { count: "exact" },
         )
         .order("created_at", { ascending: false })
-        .limit(limit);
+        .order("id", { ascending: false })
+        .range(rangeStart, rangeStart + pageSize - 1);
 
-      if (productId) {
-        query = query.eq("product_id", productId);
-      }
+      if (productId) query = query.eq("product_id", productId);
+      if (typesKey) query = query.in("type", typesKey.split(","));
+      if (fromIso) query = query.gte("created_at", fromIso);
+      if (toIso) query = query.lt("created_at", toIso);
 
-      if (typesKey) {
-        query = query.in("type", typesKey.split(","));
-      }
-
-      const { data, error: fetchError } = await query;
+      const { data, error: fetchError, count } = await query;
 
       if (isCancelled) return;
 
       if (fetchError) {
-        setError(fetchError.message || "Gagal memuat riwayat mutasi stok.");
+        // Halaman di luar jumlah data (mis. data berkurang sesudah filter
+        // berubah) bukan error sungguhan — tampilkan kosong, pemanggil yang
+        // mengembalikan ke halaman pertama.
+        if (fetchError.code === "PGRST103") {
+          setMovements([]);
+          setTotalCount(0);
+          setIsLoading(false);
+          return;
+        }
+
+        setError(describeLoadError(fetchError));
         setMovements([]);
+        setTotalCount(0);
         setIsLoading(false);
         return;
       }
 
       type RawRow = Omit<
         StockMovement,
-        "product_name" | "product_sku" | "created_by_name"
-      > & {
-        // PostgREST mengembalikan relasi to-one bisa sebagai objek atau array,
-        // tergantung cara FK terbaca — ditangani dua-duanya supaya aman.
-        product: { name: string; sku: string | null } | { name: string; sku: string | null }[] | null;
-      };
+        "created_by_name" | "stock_before"
+      >;
 
       const rows = (data ?? []) as unknown as RawRow[];
 
@@ -190,25 +263,33 @@ export function useStock(options: UseStockOptions = {}): UseStockResult {
 
       setMovements(
         rows.map((row) => {
-          const product = Array.isArray(row.product) ? row.product[0] : row.product;
+          const qtyDelta = Number(row.qty_delta ?? 0);
+          const stockAfter =
+            row.stock_after === null || row.stock_after === undefined
+              ? null
+              : Number(row.stock_after);
 
           return {
             id: row.id,
             product_id: row.product_id,
             type: row.type,
-            qty_delta: Number(row.qty_delta ?? 0),
+            qty_delta: qtyDelta,
             reference_id: row.reference_id,
             reason: row.reason,
             created_by: row.created_by,
             created_at: row.created_at,
-            product_name: product?.name ?? null,
-            product_sku: product?.sku ?? null,
+            product_name: row.product_name ?? null,
+            product_sku: row.product_sku ?? null,
+            product_unit: row.product_unit ?? null,
+            stock_after: stockAfter,
+            stock_before: stockAfter === null ? null : stockAfter - qtyDelta,
             created_by_name: row.created_by
               ? (nameById.get(row.created_by) ?? null)
               : null,
           };
         }),
       );
+      setTotalCount(count ?? rows.length);
       setIsLoading(false);
     }
 
@@ -217,7 +298,45 @@ export function useStock(options: UseStockOptions = {}): UseStockResult {
     return () => {
       isCancelled = true;
     };
-  }, [productId, typesKey, limit, reloadToken]);
+  }, [productId, typesKey, dateFrom, dateTo, page, pageSize, reloadToken]);
+
+  // ---------------- Ringkasan (seluruh baris sesuai filter) ----------------
+  // Sengaja tidak bergantung pada `page`: total tidak berubah saat pindah halaman.
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadSummary() {
+      const { data, error: rpcError } = await supabase.rpc(
+        "stock_movement_summary",
+        {
+          p_from: startOfDayIso(dateFrom),
+          p_to: startOfNextDayIso(dateTo),
+          p_product_id: productId,
+          p_types: typesKey ? typesKey.split(",") : null,
+        },
+      );
+
+      if (isCancelled) return;
+
+      if (rpcError || !data) {
+        // Kegagalan ringkasan tidak menimpa error utama — kartu cukup tampil "-".
+        setSummary(null);
+        return;
+      }
+
+      setSummary({
+        masuk: Number(data.masuk ?? 0),
+        keluar: Number(data.keluar ?? 0),
+        jumlah: Number(data.jumlah ?? 0),
+      });
+    }
+
+    loadSummary();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [productId, typesKey, dateFrom, dateTo, reloadToken]);
 
   const adjustStock = useCallback(
     async ({
@@ -283,5 +402,13 @@ export function useStock(options: UseStockOptions = {}): UseStockResult {
     [refetch],
   );
 
-  return { movements, isLoading, error, refetch, adjustStock };
+  return {
+    movements,
+    totalCount,
+    summary,
+    isLoading,
+    error,
+    refetch,
+    adjustStock,
+  };
 }

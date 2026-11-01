@@ -125,7 +125,15 @@ export async function createProduct(
   };
 }
 
-export type UpdateProductInput = CreateProductInput & { id: string };
+// ── PERBAIKAN (Stok & Opname) ── Edit Produk TIDAK lagi mengubah stok.
+// Sebelumnya `stock` ikut di-UPDATE langsung ke tabel products tanpa mutasi,
+// sehingga perubahan stok tidak punya jejak di riwayat/kartu stok dan saldo
+// sebelum/sesudah di kartu stok jadi bergeser. Stok sekarang HANYA berubah lewat
+// RPC (penjualan/retur/void/opname/penyesuaian), jadi tipe input update
+// sengaja tidak punya field `stock`.
+export type UpdateProductInput = Omit<CreateProductInput, "stock"> & {
+  id: string;
+};
 
 export type UpdateProductResult =
   | {
@@ -176,13 +184,6 @@ export async function updateProduct(
     };
   }
 
-  if (input.stock < 0) {
-    return {
-      success: false,
-      error: "Stok tidak boleh negatif.",
-    };
-  }
-
   if (input.min_stock < 0) {
     return {
       success: false,
@@ -191,6 +192,31 @@ export async function updateProduct(
   }
 
   const isService = input.type === "JASA";
+
+  // Produk jasa tidak punya stok. Kalau produk fisik yang masih punya stok
+  // diubah jadi jasa, stoknya akan "hilang" tanpa mutasi — tolak, minta
+  // dikosongkan dulu lewat Opname supaya ada jejaknya.
+  if (isService) {
+    const { data: current, error: currentError } = await supabase
+      .from("products")
+      .select("stock")
+      .eq("id", input.id)
+      .single();
+
+    if (currentError) {
+      return {
+        success: false,
+        error: currentError.message,
+      };
+    }
+
+    if ((current?.stock ?? 0) > 0) {
+      return {
+        success: false,
+        error: `Produk ini masih punya stok ${current.stock}. Kosongkan stoknya lewat Opname di menu Stok & Opname dulu sebelum mengubah tipe menjadi Jasa.`,
+      };
+    }
+  }
 
   const { data, error } = await supabase
     .from("products")
@@ -204,7 +230,7 @@ export async function updateProduct(
       unit: unit || null,
       sell_price: input.sell_price,
       cost_price: input.cost_price > 0 ? input.cost_price : null,
-      stock: isService ? 0 : input.stock,
+      // `stock` SENGAJA tidak ikut di-update (lihat catatan UpdateProductInput).
       min_stock: isService ? 0 : input.min_stock,
       photo_url: photoUrl || null,
       is_active: input.is_active,
