@@ -52,6 +52,7 @@ const ENTITY_FILTER_OPTIONS: {
   { value: "shift", label: "Shift & Kas" },
   { value: "stock_opname", label: "Sesi Opname" },
   { value: "stock_receipt", label: "Barang Masuk" },
+  { value: "gift", label: "Hadiah & Oleh-oleh" },
 ];
 
 function entityLabel(entity: string): string {
@@ -59,6 +60,7 @@ function entityLabel(entity: string): string {
   if (entity === "shift") return "Shift & Kas";
   if (entity === "stock_opname") return "Sesi Opname";
   if (entity === "stock_receipt") return "Barang Masuk";
+  if (entity === "gift") return "Hadiah & Oleh-oleh";
   return "Produk";
 }
 

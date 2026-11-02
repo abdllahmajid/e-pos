@@ -9,6 +9,7 @@
 
 "use client";
 
+import MoneyInput from "@/app/components/ui/MoneyInput";
 import { useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -430,15 +431,11 @@ export default function ReceiptForm({
                         />
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <input
-                          type="number"
-                          inputMode="numeric"
-                          min={0}
-                          step={1}
+                        <MoneyInput
                           value={line.unitCost}
-                          onChange={(e) =>
+                          onValueChange={(raw) =>
                             updateLine(line.productId, {
-                              unitCost: e.target.value,
+                              unitCost: raw,
                             })
                           }
                           disabled={isSaving}

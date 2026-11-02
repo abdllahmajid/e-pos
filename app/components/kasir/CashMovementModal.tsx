@@ -12,6 +12,7 @@
 // spinner + "Menyimpan...". Setelah sukses: layar konfirmasi (bukan langsung
 // menutup) supaya kasir yakin catatannya tersimpan, dengan pilihan "Catat Lagi".
 
+import MoneyInput from "@/app/components/ui/MoneyInput";
 import { useMemo, useState } from "react";
 import {
   Banknote,
@@ -197,15 +198,12 @@ export function CashMovementModal({
             <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
               Nominal
             </label>
-            <input
-              type="text"
-              inputMode="numeric"
+            <MoneyInput
               placeholder="0"
               value={amountInput}
               disabled={isSubmitting}
-              onChange={(e) =>
-                setAmountInput(e.target.value.replace(/[^0-9]/g, "").slice(0, 10))
-              }
+              maxDigits={10}
+              onValueChange={setAmountInput}
               aria-label="Nominal"
               className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-right font-mono text-base tabular-nums transition-colors duration-150 focus:border-lco-teal focus:outline-none focus:ring-2 focus:ring-lco-teal disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950"
             />

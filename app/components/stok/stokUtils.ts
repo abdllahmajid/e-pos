@@ -71,6 +71,7 @@ export function movementTypeColorClass(type: StockMovementType): string {
     case "opname":
       return "text-sky-700 dark:text-sky-400";
     case "adjustment":
+    case "gift":
       return "text-lco-mustard";
   }
 }

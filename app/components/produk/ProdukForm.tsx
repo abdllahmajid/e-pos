@@ -11,6 +11,7 @@
 // ── TAMBAHAN ── mode "edit": terima initialValues dari produk yang sedang diedit,
 // judul & teks tombol menyesuaikan, sisanya (validasi, layout) sama persis dengan mode create.
 
+import MoneyInput from "@/app/components/ui/MoneyInput";
 import { FormEvent, useState } from "react";
 import { X, Loader2 } from "lucide-react";
 import { useCategories } from "@/hooks/useCategories";
@@ -29,6 +30,7 @@ export type ProductFormValues = {
   min_stock: string;
   photo_url: string;
   is_active: boolean;
+  is_extra_charge: boolean;
 };
 
 type ProdukFormProps = {
@@ -47,6 +49,7 @@ const PRODUCT_TYPES: ProductType[] = [
   "PERCETAKAN",
   "MERCHANDISE",
   "PARFUM",
+  "KEMASAN",
   "JASA",
 ];
 
@@ -63,6 +66,7 @@ const EMPTY_FORM: ProductFormValues = {
   min_stock: "0",
   photo_url: "",
   is_active: true,
+  is_extra_charge: false,
 };
 
 export default function ProdukForm({
@@ -298,11 +302,9 @@ export default function ProdukForm({
                 <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
                   Harga Jual
                 </label>
-                <input
-                  type="number"
-                  min="0"
+                <MoneyInput
                   value={form.sell_price}
-                  onChange={(e) => updateField("sell_price", e.target.value)}
+                  onValueChange={(raw) => updateField("sell_price", raw)}
                   disabled={saving}
                   placeholder="0"
                   className="w-full rounded-md border border-zinc-300 px-3 py-2.5 font-mono text-sm tabular-nums outline-none transition-colors duration-150 focus:border-lco-teal focus:ring-2 focus:ring-lco-teal disabled:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:disabled:bg-zinc-800"
@@ -313,11 +315,9 @@ export default function ProdukForm({
                 <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
                   Harga Modal
                 </label>
-                <input
-                  type="number"
-                  min="0"
+                <MoneyInput
                   value={form.cost_price}
-                  onChange={(e) => updateField("cost_price", e.target.value)}
+                  onValueChange={(raw) => updateField("cost_price", raw)}
                   disabled={saving}
                   placeholder="0"
                   className="w-full rounded-md border border-zinc-300 px-3 py-2.5 font-mono text-sm tabular-nums outline-none transition-colors duration-150 focus:border-lco-teal focus:ring-2 focus:ring-lco-teal disabled:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:disabled:bg-zinc-800"
@@ -371,6 +371,29 @@ export default function ProdukForm({
                 </>
               )}
             </div>
+
+            {form.type !== "JASA" && form.type !== "KEMASAN" && (
+              <label className="flex cursor-pointer items-center gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/40">
+                <input
+                  type="checkbox"
+                  checked={form.is_extra_charge}
+                  onChange={(e) =>
+                    updateField("is_extra_charge", e.target.checked)
+                  }
+                  disabled={saving}
+                  className="h-4 w-4 rounded border-zinc-300 text-lco-green focus:ring-lco-teal"
+                />
+                <div>
+                  <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+                    Tampilkan di Biaya Tambahan Kasir
+                  </p>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    Untuk kantong plastik, paper bag, packaging, dll. Stok
+                    tetap dihitung dan berkurang saat dijual.
+                  </p>
+                </div>
+              </label>
+            )}
 
             <label className="flex cursor-pointer items-center gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/40">
               <input

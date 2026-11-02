@@ -53,6 +53,7 @@ function formatProductType(type: ProductType) {
     PERCETAKAN: "Percetakan",
     MERCHANDISE: "Merchandise",
     PARFUM: "Parfum",
+    KEMASAN: "Kemasan",
     JASA: "Jasa",
   };
 
@@ -179,6 +180,13 @@ export default function ProdukModule() {
       min_stock: values.type === "JASA" ? 0 : parseNumber(values.min_stock),
       photo_url: values.photo_url,
       is_active: values.is_active,
+      // KEMASAN selalu tampil di Biaya Tambahan; JASA tampil otomatis (tanpa penanda).
+      is_extra_charge:
+        values.type === "KEMASAN"
+          ? true
+          : values.type === "JASA"
+            ? false
+            : values.is_extra_charge,
     };
 
     const result = editingProduct
@@ -611,6 +619,7 @@ export default function ProdukModule() {
                   min_stock: String(editingProduct.min_stock ?? 0),
                   photo_url: editingProduct.photo_url ?? "",
                   is_active: editingProduct.is_active,
+                  is_extra_charge: editingProduct.is_extra_charge ?? false,
                 }
               : undefined
           }

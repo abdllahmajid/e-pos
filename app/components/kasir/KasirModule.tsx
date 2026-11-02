@@ -1,5 +1,6 @@
 "use client";
 
+import MoneyInput from "@/app/components/ui/MoneyInput";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search,
@@ -361,7 +362,12 @@ export default function KasirModule({
   const [isBiayaTambahanModalOpen, setIsBiayaTambahanModalOpen] =
     useState(false);
   const serviceProducts = useMemo(
-    () => products.filter((p) => p.is_service),
+    // Migration 045: produk Jasa SELALU tampil; produk fisik (berstok) tampil
+    // kalau ditandai "Tampilkan di Biaya Tambahan" (kantong, paper bag, dst.).
+    () =>
+      products.filter(
+        (p) => p.is_service || p.is_extra_charge || p.type === "KEMASAN",
+      ),
     [products],
   );
 
@@ -1138,12 +1144,10 @@ export default function KasirModule({
               </label>
               <div className="flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950 focus-within:border-lco-teal focus-within:ring-2 focus-within:ring-lco-teal transition-colors duration-150">
                 <span className="text-sm text-zinc-400 font-mono">Rp</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
+                <MoneyInput
                   autoFocus
                   value={openingCashValue}
-                  onChange={(e) => setOpeningCashInput(e.target.value)}
+                  onValueChange={setOpeningCashInput}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !isStartingSession) {
                       void handleStartSession();
@@ -1976,9 +1980,11 @@ export default function KasirModule({
 
             {serviceProducts.length === 0 ? (
               <p className="rounded-md border border-dashed border-zinc-300 dark:border-zinc-700 px-3 py-4 text-center text-xs text-zinc-400">
-                Belum ada item Biaya Tambahan. Tambahkan produk baru di menu
-                Produk dan tandai tipenya sebagai <strong>Jasa</strong> (mis.
-                &quot;Kantong Kresek&quot;, &quot;Ongkos Kirim&quot;).
+                Belum ada item Biaya Tambahan. Di menu Produk, tandai tipenya
+                sebagai <strong>Jasa</strong> (tanpa stok, mis. &quot;Ongkos
+                Kirim&quot;) atau centang{" "}
+                <strong>Tampilkan di Biaya Tambahan Kasir</strong> untuk barang
+                berstok (mis. &quot;Paper Bag&quot;).
               </p>
             ) : (
               <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
@@ -1986,13 +1992,15 @@ export default function KasirModule({
                   const inCart = cart.find(
                     (item) => item.product.id === product.id,
                   );
+                  const soldOut = !product.is_service && product.stock <= 0;
                   return (
                     <button
                       key={product.id}
+                      disabled={soldOut}
                       onClick={() => {
                         setCart((prev) => addToCart(prev, product));
                       }}
-                      className="flex items-center justify-between rounded-md border border-zinc-200 dark:border-zinc-800 px-3 py-2.5 text-left hover:border-lco-mustard transition-colors duration-150"
+                      className="flex items-center justify-between rounded-md border border-zinc-200 dark:border-zinc-800 px-3 py-2.5 text-left hover:border-lco-mustard transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <span className="text-sm font-medium">
                         {product.name}
@@ -2002,8 +2010,15 @@ export default function KasirModule({
                           </span>
                         )}
                       </span>
-                      <span className="font-mono text-sm text-zinc-500">
+                      <span className="text-right font-mono text-sm text-zinc-500">
                         {formatRupiah(product.sell_price)}
+                        {!product.is_service && (
+                          <span
+                            className={`block text-[10px] ${soldOut ? "text-lco-coral" : "text-zinc-400"}`}
+                          >
+                            {soldOut ? "Stok habis" : `Stok: ${product.stock}`}
+                          </span>
+                        )}
                       </span>
                     </button>
                   );

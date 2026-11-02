@@ -25,6 +25,7 @@
 
 "use client";
 
+import MoneyInput from "@/app/components/ui/MoneyInput";
 import {
   useEffect,
   useMemo,
@@ -884,13 +885,11 @@ export default function KasirModulePC({
                 Diskon Faktur [F6 / Cmd+D]
               </label>
               <div className="flex gap-2">
-                <input
+                <MoneyInput
                   ref={discountInputRef}
-                  type="text"
-                  inputMode="numeric"
                   placeholder="0"
                   value={manualDiscountInput}
-                  onChange={(e) => onManualDiscountInputChange(e.target.value)}
+                  onValueChange={onManualDiscountInputChange}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();

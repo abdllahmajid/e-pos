@@ -74,6 +74,7 @@ const FILTER_TYPES: StockMovementType[] = [
   "adjustment",
   "stock_in",
   "initial",
+  "gift",
 ];
 
 interface StokRiwayatTabProps {

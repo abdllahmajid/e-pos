@@ -8,6 +8,8 @@ export type ProductType =
   | "PERCETAKAN"
   | "MERCHANDISE"
   | "PARFUM"
+  // ── TAMBAHAN (migration 046) ── kantong plastik, paper bag, packaging (berstok).
+  | "KEMASAN"
   | "JASA";
 
 // Baris asli tabel `products` — nama kolom & tipe wajib sama persis dengan SQL
@@ -18,6 +20,8 @@ export interface Product {
   name: string;
   type: ProductType;
   is_service: boolean;
+  /** Migration 045: tampil di modal Biaya Tambahan Kasir walau bukan Jasa (stok tetap dihitung). */
+  is_extra_charge?: boolean;
   category_id: string | null;
   unit: string | null;
   sell_price: number; // BIGINT rupiah, tanpa desimal

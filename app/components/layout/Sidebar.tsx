@@ -22,6 +22,7 @@ import {
   Users,
   Wallet,
   Boxes,
+  Gift,
   Tags,
   Monitor,
   TrendingUp,
@@ -121,6 +122,15 @@ export const MENU_GROUPS: SidebarMenuGroup[] = [
         label: "Stok & Opname",
         icon: Boxes,
         permissions: ["stok"],
+      },
+      // ── TAMBAHAN (migration 044) ── Hadiah & Oleh-oleh: produk toko yang
+      // diberikan ke tamu/Bapak Kiyai. Stok berkurang + tercatat sebagai
+      // beban hadiah (harga modal). Permission modul baru "hadiah".
+      {
+        key: "hadiah",
+        label: "Hadiah & Oleh-oleh",
+        icon: Gift,
+        permissions: ["hadiah"],
       },
       // roles: kosong (semua role) — PRD §5 baris `kas_shift` — Kasir "✔ (sendiri)".
       { key: "kas", label: "Kas & Shift", icon: Wallet },

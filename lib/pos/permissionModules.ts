@@ -22,6 +22,7 @@
 import {
   Boxes,
   ClipboardList,
+  Gift,
   KeyRound,
   Monitor,
   Package,
@@ -113,6 +114,16 @@ export const MODULE_DEFS: ModuleDef[] = [
     group: "Alat Kasir",
     icon: Boxes,
     columns: { edit: "Opname & penyesuaian stok manual" },
+  },
+  {
+    key: "hadiah",
+    label: "Hadiah & Oleh-oleh",
+    group: "Alat Kasir",
+    icon: Gift,
+    columns: {
+      create: "Catat hadiah/oleh-oleh (stok berkurang)",
+      delete: "Batalkan hadiah (stok dikembalikan)",
+    },
   },
   {
     key: "promo",

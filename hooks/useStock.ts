@@ -32,7 +32,9 @@ export type StockMovementType =
   | "adjustment"
   // ── TAMBAHAN (migration 042) ── barang masuk & stok awal produk baru.
   | "stock_in"
-  | "initial";
+  | "initial"
+  // ── TAMBAHAN (migration 044) ── hadiah/oleh-oleh keluar (atau pembatalannya).
+  | "gift";
 
 /** Jenis mutasi yang bisa dibuat manual dari UI (sisanya otomatis dari RPC transaksi). */
 export type ManualMovementType = Extract<
@@ -49,6 +51,7 @@ export const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
   adjustment: "Penyesuaian",
   stock_in: "Barang Masuk",
   initial: "Stok Awal",
+  gift: "Hadiah",
 };
 
 // Satu baris kartu stok (view `stock_ledger`, migration 037).

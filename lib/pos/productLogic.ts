@@ -16,6 +16,8 @@ export type CreateProductInput = {
   min_stock: number;
   photo_url: string;
   is_active: boolean;
+  /** Migration 045: tampilkan di Biaya Tambahan Kasir (stok tetap dihitung). */
+  is_extra_charge?: boolean;
 };
 
 export type CreateProductResult =
@@ -99,6 +101,7 @@ export async function createProduct(
       min_stock: isService ? 0 : input.min_stock,
       photo_url: photoUrl || null,
       is_active: input.is_active,
+      is_extra_charge: input.is_extra_charge ?? false,
     })
     .select("id")
     .single();
@@ -234,6 +237,7 @@ export async function updateProduct(
       min_stock: isService ? 0 : input.min_stock,
       photo_url: photoUrl || null,
       is_active: input.is_active,
+      is_extra_charge: input.is_extra_charge ?? false,
     })
     .eq("id", input.id)
     .select("id")

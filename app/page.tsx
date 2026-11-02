@@ -108,6 +108,12 @@ const LabelBarcodeModule = dynamic(
   },
 );
 
+// ── TAMBAHAN (migration 044) ── Modul Hadiah & Oleh-oleh: produk toko yang
+// diberikan ke tamu/Bapak Kiyai, tercatat sebagai beban hadiah (harga modal).
+const HadiahModule = dynamic(() => import("./components/hadiah/HadiahModule"), {
+  ssr: false,
+});
+
 export default function LCOPOS() {
   // ── KOREKSI (setelah login diarahkan ke Dashboard) ── Sebelumnya default
   // "kasir", jadi kasir/admin yang baru login langsung masuk layar POS.
@@ -218,6 +224,7 @@ export default function LCOPOS() {
           )}
           {isMenuRestored && activeMenu === "pelanggan" && <PelangganModule />}
           {isMenuRestored && activeMenu === "stok" && <StokModule />}
+          {isMenuRestored && activeMenu === "hadiah" && <HadiahModule />}
           {isMenuRestored && activeMenu === "label-barcode" && (
             <LabelBarcodeModule />
           )}

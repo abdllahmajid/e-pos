@@ -22,6 +22,7 @@
 // field yang berubah — bukan semua field sekaligus (mengurangi jumlah row
 // UPDATE & baris `updated_by`/`updated_at` yang tersentuh tanpa perlu).
 
+import MoneyInput from "@/app/components/ui/MoneyInput";
 import { useEffect, useState } from "react";
 import { AlertCircle, CheckCircle2, Loader2, Save } from "lucide-react";
 import { useSettings, type Settings } from "@/hooks/useSettings";
@@ -238,11 +239,9 @@ export default function PengaturanTokoTab() {
             <label className={labelClass}>
               Pembulatan Kembalian Tunai (Rp)
             </label>
-            <input
-              type="number"
-              min={1}
+            <MoneyInput
               value={form.rounding}
-              onChange={(e) => updateField("rounding", Number(e.target.value))}
+              onValueChange={(raw) => updateField("rounding", Number(raw))}
               disabled={isSaving}
               className={numberInputClass}
             />
@@ -252,12 +251,10 @@ export default function PengaturanTokoTab() {
           </div>
           <div>
             <label className={labelClass}>Modal Awal Kas Default (Rp)</label>
-            <input
-              type="number"
-              min={0}
+            <MoneyInput
               value={form.shiftDefaultCash}
-              onChange={(e) =>
-                updateField("shiftDefaultCash", Number(e.target.value))
+              onValueChange={(raw) =>
+                updateField("shiftDefaultCash", Number(raw))
               }
               disabled={isSaving}
               className={numberInputClass}

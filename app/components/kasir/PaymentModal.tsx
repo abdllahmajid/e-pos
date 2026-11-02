@@ -1,5 +1,6 @@
 "use client";
 
+import MoneyInput from "@/app/components/ui/MoneyInput";
 import { useState, useEffect, useRef } from "react";
 import {
   X,
@@ -1176,10 +1177,9 @@ export default function PaymentModal({
                       <span className="absolute left-4 top-1/2 -translate-y-1/2 font-mono text-zinc-400">
                         Rp
                       </span>
-                      <input
-                        type="number"
+                      <MoneyInput
                         value={paidAmount || ""}
-                        onChange={(e) => setPaidAmount(Number(e.target.value))}
+                        onValueChange={(raw) => setPaidAmount(Number(raw))}
                         disabled={lockInputs}
                         className="w-full pl-12 pr-4 py-3 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-lco-teal focus:border-lco-teal transition-colors duration-150 font-mono text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-100 disabled:opacity-60"
                         placeholder="0"
@@ -1396,12 +1396,11 @@ export default function PaymentModal({
                       <span className="absolute left-4 top-1/2 -translate-y-1/2 font-mono text-zinc-400">
                         Rp
                       </span>
-                      <input
-                        type="number"
+                      <MoneyInput
                         aria-label={`Nominal ${methodLabel(m)}`}
                         value={splitAmount[m] || ""}
-                        onChange={(e) =>
-                          setSplitAmountFor(m, Number(e.target.value))
+                        onValueChange={(raw) =>
+                          setSplitAmountFor(m, Number(raw))
                         }
                         disabled={lockInputs}
                         placeholder="0"
@@ -1422,14 +1421,11 @@ export default function PaymentModal({
                         <span className="absolute left-4 top-1/2 -translate-y-1/2 font-mono text-zinc-400">
                           Rp
                         </span>
-                        <input
-                          type="number"
+                        <MoneyInput
                           aria-label="Uang diterima tunai"
                           value={splitCashReceived || ""}
-                          onChange={(e) =>
-                            setSplitCashReceived(
-                              Math.max(0, Math.floor(Number(e.target.value))),
-                            )
+                          onValueChange={(raw) =>
+                            setSplitCashReceived(Number(raw))
                           }
                           disabled={lockInputs}
                           placeholder="0"

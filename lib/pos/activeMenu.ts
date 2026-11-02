@@ -21,6 +21,7 @@ export const VALID_MENU_KEYS = [
   "riwayat",
   "pelanggan",
   "stok",
+  "hadiah",
   "label-barcode",
   "kas",
   "promo",
